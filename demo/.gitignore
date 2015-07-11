@@ -1,6 +1,8 @@
 cache.dir/*
-chronorec.dir/*
+chrono.dir/*
 docstack.dir/*
 *.out
 *.png
+*.pck
+*.mp4
 

@@ -2,4 +2,5 @@ cache.dir/*
 chronorec.dir/*
 docstack.dir/*
 *.out
+*.png
 

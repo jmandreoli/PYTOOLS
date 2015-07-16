@@ -49,6 +49,8 @@ class InitialServer:
   def getproxy(cls,launchcmd,*a,**ka):
     """
 Launches a server, 
+    """
+#--------------------------------------------------------------------------------------------------
     subp = subprocess.Popen(launchcmd,stdin=subprocess.PIPE,stdout=subprocess.PIPE)
     try: pickle.dump(cls(HMAC_KEY,*a,**ka),subp.stdin)
     finally: subp.stdin.close()
@@ -58,11 +60,13 @@ Launches a server,
     return proxy
 #--------------------------------------------------------------------------------------------------
   def __init__(self,hmackey,factory,*a,**ka):
+#--------------------------------------------------------------------------------------------------
     self.hmackey = hmackey
     self.factory = resolve(factory)
     self.args = a,ka
 #--------------------------------------------------------------------------------------------------
   def __call__(self,daemon):
+#--------------------------------------------------------------------------------------------------
     global HMAC_KEY
     daemon._pyroHmacKey = HMAC_KEY = self.hmackey
     a,ka = self.args

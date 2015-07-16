@@ -4,64 +4,55 @@
 # Purpose:              Illustration of the cache module
 
 if __name__=='__main__':
-    import sys, multiprocessing
-    from time import sleep
-    from cache import simplefunc, longfunc, process, demo
+  import sys
+  from myutil.demo.cache import simplefunc, longfunc, process, ARG
+  if len(sys.argv) == 1:
+    import subprocess
     DEMOS = (
         (simplefunc,('simplefunc(1,2)','simplefunc(1,y=2,z=3)')),
         (process,('process(ARG(1,b=2),ARG(3)).v','process(ARG(1,2),ARG(4)).v')),
         (longfunc,('longfunc(42,6)',)),
     )
-    mp = multiprocessing.get_context('spawn') # not 'fork' because there are lots of threads around
+    def cmd(t,L): return (sys.executable,__file__,str(t))+L
     for f,L in DEMOS:
-        print('-------------------------\nClearing',f)
-        f.clear()
-        w1 = mp.Process(target=demo,args=(1,L,))
-        w2 = mp.Process(target=demo,args=(2,L,))
-        w1.start(); sleep(2); w2.start()
-        w1.join(); w2.join()
-        try: input('RET: continue; Ctrl-C: stop')
-        except: print(); break
-        print()
-    sys.exit(0)
+      print('-------------------------\nClearing',f)
+      f.clear()
+      for w in [subprocess.Popen(cmd(t,L)) for t in (0.,2.)]: w.wait()
+      try: input('RET: continue; Ctrl-C: stop')
+      except: print(); break
+  else:
+    import time, logging
+    logging.basicConfig(level=logging.INFO,format='[proc %(process)d @ %(asctime)s] %(message)s',datefmt='%H:%M:%S')
+    logger = logging.getLogger()
+    time.sleep(float(sys.argv[1]))
+    for x in sys.argv[2:]:
+      logger.info('Computing: %s',x)
+      logger.info('Result: %s = %s',x,eval(x))
+  sys.exit(0)
 
 #--------------------------------------------------------------------------------------------------
 
-from pathlib import Path; DIR = Path(__file__).parent/'cache.dir'
-from myutil.cache import lru_persistent_cache, lru_persistent_process_cache, ARG
+from pathlib import Path; DIR = Path(__file__).resolve().parent/'cache.dir'
+from ..cache import lru_persistent_cache, lru_persistent_process_cache, ARG
 
 @lru_persistent_cache(db=DIR,ignore=('z',))
 def simplefunc(x,y=3,z=8): return x,y
 
 @lru_persistent_cache(db=DIR,ignore=('delay',))
 def longfunc(x,delay=10):
-    from time import sleep
-    sleep(delay)
-    return x
+  from time import sleep
+  sleep(delay)
+  return x
 
 def stepA(state,a,b):
-    state.a = a
-    state.b = b
-    state.u = a+b
-    return state
+  state.a = a
+  state.b = b
+  state.u = a+b
+  return state
 
 def stepB(state,c):
-    state.v = c*state.u
-    return state
+  state.v = c*state.u
+  return state
 
 process = lru_persistent_process_cache((stepA,dict(db=DIR)),(stepB,dict(db=DIR)))
-
-def demo(r,L,q=None):
-    import logging, logging.handlers
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    if q is None:
-        h = logging.StreamHandler()
-        h.setFormatter(logging.Formatter('Process %(process)d: %(message)s'))
-    else:
-        h = logging.handlers.QueueHandler(q)
-    logger.addHandler(h)
-    for x in L:
-        logger.info('Computing [Run %s]: %s',r,x)
-        logger.info('Result [Run %s]: %s = %s',r,x,eval(x))
 

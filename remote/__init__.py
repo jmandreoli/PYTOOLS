@@ -1,2 +1,2 @@
-from .main import Client, clients, shclients, sshclients, Iterable, IterableProxy, set_hmackey
+from .main import clients, shclients, sshclients, Proxy
 

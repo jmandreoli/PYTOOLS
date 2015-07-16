@@ -101,13 +101,16 @@ equivalent to PySide or PyQt4 (depending on the value of *b*\ ).
     return PyQt4
   if b is None:
     try: mod = pyside()
-    except ImportError: mod = pyqt4()
+    except ImportError:
+      try: mod = pyqt4()
+      except ImportError:
+        raise ImportError('No QT binding found (PyQt4 or PySide)',name='pyqt')
   else:
     b = b.lower()
     if b=='pyside': mod = pyside()
     elif b=='pyqt4': mod = pyqt4()
     else: raise ValueError('QT binding must be \'pyside\' or \'pyqt4\'')
-  sys.modules[__name__+'.qtbinding'] = mod
+  sys.modules[__name__+'.pyqt'] = mod
   return mod
 
 #==================================================================================================
@@ -244,4 +247,44 @@ A simple utility to browse sliceable objects page per page.
   assert start>=1 and start<=P
   if P==1: display(D)
   else: interact((lambda page=start:display(D[(page-1)*pgsize:page*pgsize])),page=(1,P))
+
+#==================================================================================================
+def type_annotation_autocheck(f):
+#==================================================================================================
+  from functools import update_wrapper
+  check = type_annotation_checker(f)
+  def F(*a,**ka):
+    check(*a,**ka)
+    return f(*a,**ka)
+  return update_wrapper(F,f)
+
+#==================================================================================================
+def type_annotation_checker(f):
+#==================================================================================================
+  import inspect
+  def tester(c):
+    if isinstance(c,tuple):
+      if all(isinstance(cc,type) for cc in c):
+        t = lambda v,c=c: isinstance(v,c)
+        t.testname = '|'.join(str(cc) for cc in c)
+      else:
+        T = tuple(tester(cc) for cc in c)
+        t = lambda v,T=T: any(tt(v) for tt in T)
+        t.testname = '|'.join(tt.testname for tt in T)
+    elif isinstance(c,type):
+      t = lambda v,c=c: isinstance(v,c)
+      t.testname = str(c)
+    elif callable(c):
+      t = lambda v,c=c: c(v)
+      t.testname = c.__name__
+    else: raise TypeError('Expected type|callable|tuple thereof')
+    return t
+  sig = inspect.signature(f)
+  check = dict((k,tester(p.annotation)) for k,p in sig.parameters.items() if p.annotation is not p.empty)
+  def C(*a,**ka):
+    b = sig.bind(*a,**ka)
+    for k,v in b.arguments.items():
+      c = check.get(k)
+      if c is not None and not c(v): raise TypeError('Argument {} failed to match {}'.format(k,c.testname))
+  return C
 

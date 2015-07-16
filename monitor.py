@@ -7,22 +7,18 @@
 # *** Copyright (c) 2013 Xerox Corporation  ***
 # *** Xerox Research Centre Europe - Grenoble ***
 
-import threading
-from time import clock, time
+import logging
 from collections import namedtuple
-from functools import wraps, partial
 
 #==================================================================================================
 class Monitor:
   r"""
 Instances of this class provide generic loop monitoring functionality.
 
-:param coroutines: a tuple of generators, to be started concurrently with the loop to monitor
+:param coroutines: a tuple of generator functions, to be invoked concurrently with the loop to monitor
 :param cat: a tuple of labels (for printing purposes only)
 
 Monitors can be composed using the multiplication operator (their *coroutines* are concatenated).
-
-.. |monitor| replace:: This is passed through the :func:`monitor` decorator, so the first argument *env* should be ignored in invocations, and a *label* argument can be specified. This generator yields the iteration count (assigned to the attribute named by *label* if present).
 
 Methods:
   """
@@ -40,19 +36,19 @@ Methods:
     return 'Monitor<{}>'.format('*'.join(self.category))
 
 #--------------------------------------------------------------------------------------------------
-  def run(self,loop,env=None,detach=False,daemon=True,**ka):
+  def run(self,loop,env=None,detach=None,**ka):
     r"""
 Enumerates *loop* and monitors it.
 
 :param loop: an iterable yielding arbitrary objects
 :param env: an environment, i.e. an object which can be assigned arbitrary attributes
 :type env: typically :class:`State`\|\ :class:`NoneType`
-:param detach: whether to start the loop on a separate thread
-:type detatch: :class:`bool`
-:param daemon,ka: passed to the thread in detach-mode, otherwise ignored
-:return: the environment *env* at the end of the loop, or immediately if *detatch* is :const:`True`
+:param detach: if not None, time (in sec) after which the loop is started on a separate thread
+:type detach: :class:`float`\|\ :class:`NoneType`
+:param ka: passed to the thread in detach-mode, otherwise ignored (by default, key ``daemon`` in *ka* is set to :const:`True`)
+:return: the environment *env* at the end of the loop, or immediately if *detach* is not :const:`None`
 
-If *env* is :const:`None`, it is initialised to a new instance of :class:`State`. Its attribute :attr:`stop` is assigned :const:`None`. Its attribute :attr:`thread` is assigned :const:`None` if *detach* is :const:`False`, otherwise the thread object on which the loop is run. A list of coroutines is obtained by calling each element of :attr:`coroutines` with argument *env*, then *loop* is enumerated. At the end of each iteration, the following attributes are set in *env*.
+If *env* is :const:`None`, it is initialised to a new instance of :class:`State`. Its attribute :attr:`stop` is assigned :const:`None`. Its attribute :attr:`thread` is assigned :const:`None` if *detach* is :const:`None`, otherwise the thread object on which the loop is run. A list of coroutines is obtained by calling each element of :attr:`coroutines` with argument *env*, then *loop* is enumerated. At the end of each iteration, the following attributes are set in *env*.
 
 - :attr:`cputime`: cumulated cpu time of the loop iterations
 - :attr:`value`: object yielded by the last iteration
@@ -60,27 +56,33 @@ If *env* is :const:`None`, it is initialised to a new instance of :class:`State`
 Then each coroutine is advanced (using function :func:`next`), possibly updating *env*. The enumeration continues while the attribute :attr:`stop` of *env* remains :const:`None`.
     """
 #--------------------------------------------------------------------------------------------------
+    from threading import Thread
+    from time import clock, sleep
+    from functools import partial
+    def run0(loop,env,delay=None):
+      coroutines = [coroutine(env) for coroutine in self.coroutines]
+      env.stop = None
+      env.cputime = 0.
+      if delay is not None: sleep(delay)
+      t0 = clock()
+      for x in loop:
+        t = clock()
+        env.cputime += t-t0
+        env.value = x
+        for c in coroutines: next(c)
+        if env.stop is not None: break
+        t0 = t
     if env is None: env = State()
-    if detach:
-      w = threading.Thread(target=partial(self.run0,loop,env),daemon=daemon,**ka)
+    if detach is None:
+      env.thread = None
+      run0(loop,env)
+    elif not isinstance(detach,(int,float)): raise TypeError('Expected {}|{}, found {}'.format(int,float,type(detach)))
+    else:
+      ka.setdefault('daemon',True)
+      w = Thread(target=partial(run0,loop,env,detach),**ka)
       env.thread = w
       w.start()
-    else:
-      env.thread = None
-      self.run0(loop,env)
     return env
-  def run0(self,loop,env):
-    coroutines = [coroutine(env) for coroutine in self.coroutines]
-    env.stop = None
-    env.cputime = 0.
-    t0 = clock()
-    for x in loop:
-      t = clock()
-      env.cputime += t-t0
-      env.value = x
-      for c in coroutines: next(c)
-      if env.stop is not None: break
-      t0 = t
 
 #==================================================================================================
 # utilities
@@ -89,17 +91,19 @@ Then each coroutine is advanced (using function :func:`next`), possibly updating
 #--------------------------------------------------------------------------------------------------
 def monitor(f):
   r"""
-Returns a monitor associated to function *f*. Meant to be used as a decorator.
+Returns a monitor factory associated to function *f*. Meant to be used as a decorator.
 
-:param f: a generator expecting an environment as first argument
-:return: a monitor associated to *f*
-:rtype: :class:`Monitor`
+:param f: a generator function expecting an environment as first argument
+:return: a monitor factory associated to *f*
+:rtype: a callable returning :class:`Monitor` instances
 
-*f* is taken to be the sole coroutine of the returned monitor. *f* may yield values. In that case, if the monitor is called with an argument named *label*, its value is taken to be an attribute name of the environment to which the value yielded by *f* is assigned after each iteration.
+The returned factory, when invoked with some arguments, returns a monitor with *f*, bound to the given arguments, as sole coroutine. *f* may yield values. If one of the aguments has the special name ``label``, it is not passed to *f* and its value is taken to be an attribute name of the environment to which the value yielded by *f* is assigned after each iteration.
   """
 #--------------------------------------------------------------------------------------------------
-  @wraps(f)
+  import inspect
+  from . import type_annotation_checker
   def F(*a,label=None,**ka):
+    check(None,*a,**ka)
     if label is None:
       def coroutine(env,a=a,ka=ka): return f(env,*a,**ka)
     else:
@@ -109,13 +113,22 @@ Returns a monitor associated to function *f*. Meant to be used as a decorator.
           setattr(env,label,x)
           yield
     return Monitor((f.__name__,),(coroutine,))
+  check = type_annotation_checker(f)
+  sig = inspect.signature(f)
+  parm = list(sig.parameters.values())
+  del parm[0]
+  parm.append(inspect.Parameter('label',inspect.Parameter.POSITIONAL_OR_KEYWORD,default=None))
+  F.__signature__ = sig.replace(parameters=parm)
+  F.__name__ = f.__name__
+  F.__module__ = f.__module__
+  F.__doc__ = f.__doc__
   return F
 
 #--------------------------------------------------------------------------------------------------
 @monitor
-def iterc_monitor(env,maxiter=0,maxcpu=float('inf'),show=None,fmt=None,logger=None):
+def iterc_monitor(env,maxiter:int=0,maxcpu:float=float('inf'),logger:logging.Logger=None,show:(float,type(None))=None,fmt:(callable,type(None))=None):
   r"""
-Returns a monitor managing the number of iterations and making basic logging.
+Returns a monitor managing the number of iterations and enabling basic logging.
 
 :param maxiter: stops the loop at that number of iterations (if reached)
 :type maxiter: :class:`int`
@@ -127,10 +140,10 @@ Returns a monitor managing the number of iterations and making basic logging.
 :type fmt: callable
 :param logger: the logger to use
 :type logger: :class:`logging.Logger`\|\ :class:`NoneType`
+:param label: name of an attribute of the environment to which the iteration count is assigned at each iteration
+:type label: :class:`str`\|\ :class:`NoneType`
 
 If *logger* is :const:`None`, no logging occurs (*fmt* and *show* are ignored). Otherwise, if *show* is :const:`None`, logging occurs at each iteration. Otherwise, logging occurs every period roughly equal to *show* times the iteration count (hence, the logging rate slows down with the number of iterations).
-
-|monitor|
   """
 #--------------------------------------------------------------------------------------------------
   x = 1
@@ -148,24 +161,31 @@ If *logger* is :const:`None`, no logging occurs (*fmt* and *show* are ignored). 
       yield x
       x += 1
   else:
-    assert isinstance(show,float) and show<=1.
-    lastshow = 0
+    waitshow = 0
+    coeff = 1/show-1
     while True:
       if x == maxiter: env.stop = 'maxiter'
       elif env.cputime>maxcpu: env.stop = 'maxcpu'
-      if env.stop or show*x>lastshow:
-        logger.info('%s %s',fmt(x,env),'' if env.stop is None else '!'+env.stop)
-        lastshow = x
+      if env.stop is not None: logger.info('%s !%s',fmt(x,env),env.stop)
+      elif waitshow==0:
+        logger.info('%s',fmt(x,env))
+        waitshow = int(x*coeff)
+      else: waitshow -= 1
       yield x
       x += 1
 
 #--------------------------------------------------------------------------------------------------
 @monitor
-def averaging_monitor(env,targetf=None,rtype=namedtuple('stats',('count','mean','var'))):
+def averaging_monitor(env,targetf:callable=None,rtype=namedtuple('stats',('count','mean','var'))):
   r"""
-Returns a monitor which computes a triple <length,expectation,variance> of the list of results of applying callable *targetf* to the environment at each iteration.
+Returns a monitor which computes some basic statistics about the loop.
 
-|monitor|
+:param targetf: extracts from the environment the variable on which to compute the statistics
+:type targetf: callable
+:param label: name of an attribute of the environment to which the computed stats is assigned at each iteration
+:type label: :class:`str`\|\ :class:`NoneType`
+
+The computed statistics consists of a named triple <count,mean,variance> of the list of results of applying callable *targetf* to the environment at each iteration.
   """
 #--------------------------------------------------------------------------------------------------
   n,xmean,xvar = 0,0.,0.
@@ -179,18 +199,24 @@ Returns a monitor which computes a triple <length,expectation,variance> of the l
 
 #--------------------------------------------------------------------------------------------------
 @monitor
-def buffer_monitor(env,buf,size=0,targetf=None):
+def buffer_monitor(env,size:int=0,targetf:callable=None):
   r"""
-Returns a monitor which buffers the results of applying callable *targetf* to the environment at each iteration.
+Returns a monitor which buffers information collected from the loop.
 
-|monitor|
+:param targetf: extracts from the environment the variable to buffer
+:type targetf: callable
+:param size: size of the buffer (if null, the buffer is infinite, otherwise first in first out policy is applied)
+:type size: :class:`int`
+:param label: name of an attribute of the environment to which the buffer is assigned at each iteration
+:type label: :class:`str`\|\ :class:`NoneType`
   """
 #--------------------------------------------------------------------------------------------------
+  buf = []
   while True:
     x = targetf(env)
     buf.append(x)
     del buf[:-size]
-    yield x
+    yield buf
 
 #--------------------------------------------------------------------------------------------------
 class State: pass

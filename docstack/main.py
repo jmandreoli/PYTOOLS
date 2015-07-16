@@ -1,4 +1,4 @@
-# File:                 manager.py
+# File:                 main.py
 # Creation date:        2014-05-13
 # Contributors:         Jean-Marc Andreoli
 # Language:             python
@@ -13,7 +13,7 @@ from threading import Thread
 from pathlib import Path
 from random import randrange
 from hashlib import md5
-from . import LogStep
+from .util import LogStep
 logger = logging.getLogger(__name__)
 
 #==================================================================================================

@@ -3,16 +3,25 @@
 # Language:             python
 # Purpose:              Illustration of the mplext module
 
+if __name__=='__main__':
+  import sys
+  from myutil.demo.mplext import demo, Dbeta, Dweibull, Dnormal
+  from matplotlib.pyplot import show
+  demo(Dbeta(),Dweibull(),Dnormal(),figsize=(10,8))
+  show()
+  sys.exit(0)
+
+#--------------------------------------------------------------------------------------------------
+
 from scipy.special import betainc, beta, gamma, erf
 from numpy import sqrt, square, exp, infty, pi, linspace
-from myutil import mplext
+from ..mplext import Cell
 
 from collections import namedtuple
-Distr = namedtuple('Dist',('label','dom','domv','mean','std','pdf','cdf'))
+Distr = namedtuple('Distr',('name','dom','domv','mean','std','pdf','cdf'))
 
-def demo(view,*l):
-  # l is a list of distributions (Distr instances)
-  assert isinstance(view,mplext.Cell)
+def demo(*l,**ka): # l must be a list of Distr instances (probability distributions)
+  view = Cell.new(**ka)
   with view.clearm():
     # turn the cell *view* into a grid-cell:
     view.make_grid(5*len(l)+1,2)
@@ -27,11 +36,11 @@ def demo(view,*l):
       ax.axvline(D.mean+D.std,c='r',ls=':')
       ax.axvline(D.mean-D.std,c='r',ls=':')
       ax.set_xlim(D.domv)
-      ax.set_title('pdf: {}'.format(D.label))
+      ax.set_title('pdf: {}'.format(D.name))
       # automagically create an axes-cell for i-th entry cdf: rowspan S(i), right col
       ax = view[S(i),1].make_axes()
       ax.plot(x,D.cdf(x))
-      ax.set_title('cdf: {}'.format(D.label))
+      ax.set_title('cdf: {}'.format(D.name))
     # automagically create an axes-cell for the message: bottom row, both cols
     ax = view[-1,:].make_axes()
     ax.text(.5,.5,'Distribution details from Wikipedia.',ha='center',va='center')
@@ -40,7 +49,7 @@ def demo(view,*l):
 
 def Dbeta(a=1.5,b=2.5): # the beta distribution
   return Distr(
-    label='beta[a={0},b={1}]'.format(a,b),
+    name='beta[a={0},b={1}]'.format(a,b),
     dom=(0.,1.), domv=(1.e-10,1.-1.e-10),
     mean=a/(a+b), std=sqrt(a*b/(a+b+1))/(a+b),
     pdf=lambda x: x**(a-1.)*(1.-x)**(b-1.)/beta(a,b),
@@ -50,7 +59,7 @@ def Dbeta(a=1.5,b=2.5): # the beta distribution
 def Dweibull(k=1.2): # the weibull distribution
   m = gamma(1.+1./k)
   return Distr(
-    label='weibull[shape={0}]'.format(k),
+    name='weibull[shape={0}]'.format(k),
     dom=(0.,infty), domv=(0.,2.5),
     mean=m, std=sqrt(gamma(1.+2./k)-square(m)),
     pdf=lambda x: k*x**(k-1.)*exp(-x**k),
@@ -59,17 +68,10 @@ def Dweibull(k=1.2): # the weibull distribution
 
 def Dnormal(mu=0.,sigma=1.): # the normal distribution
   return Distr(
-    label='normal',
+    name='normal',
     dom=(-infty,infty), domv=(mu-4*sigma,mu+4*sigma),
     mean=mu, std=sigma,
     pdf=lambda x,K=sigma*sqrt(2*pi): exp(-square(x-mu)/2)/K,
     cdf=lambda x,K=sigma*sqrt(2): .5*(1+erf((x-mu)/K)),
   )
 
-#--------------------------------------------------------------------------------------------------
-
-if __name__=='__main__':
-  from matplotlib.pyplot import show
-  view = mplext.Cell.new()
-  demo(view,Dbeta(),Dweibull(),Dnormal())
-  show()

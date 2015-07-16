@@ -10,7 +10,7 @@
 
 import os,sys,logging,traceback,functools,collections
 from contextlib import contextmanager
-from .qtbinding import QtCore, QtGui
+from .pyqt import QtCore, QtGui
 logger = logging.getLogger(__name__)
 
 #--------------------------------------------------------------------------------------------------

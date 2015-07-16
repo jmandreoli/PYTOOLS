@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 import os, sqlite3, pickle, inspect, threading
 from pathlib import Path
-from functools import wraps
+from functools import update_wrapper
 from collections import namedtuple
 from collections.abc import MutableMapping
 
@@ -81,7 +81,7 @@ Instances of this class manage cache folders. There is at most one instance of t
 - ``hits``: number of call events with that functor where the argument had previously been seen; such a call does not generate a new ``Cell``, but reuses the existing one;
 - ``maxsize``: maximum number of cells attached to the block; when overflow occurs, the cells with the oldest ``hitdate`` are discarded (this amounts to the Least Recently Used policy, a.k.a. LRU, currently hardwired).
 
-Furthermore, a :class:`CacheDB` instance acts as a mapping object, where the keys are signature objects and values are :class:`CacheBlock` objects for the corresponding blocks. Such :class:`CacheBlock` objects are normally deactivated (i.e. do not support calls).
+Furthermore, a :class:`CacheDB` instance acts as a mapping object, where the keys are block identifiers (:class:`int`) and values are :class:`CacheBlock` objects for the corresponding blocks. Such :class:`CacheBlock` objects are normally deactivated (i.e. heir signatures do not support calls).
 
 Finally, :class:`CacheDB` instances have an HTML ipython display.
 
@@ -364,7 +364,7 @@ Methods:
   """
 #--------------------------------------------------------------------------------------------------
   def __init__(self,func,ignore):
-    while hasattr(func,'__wrapped__'): func = func.__wrapped__
+    func = inspect.unwrap(func)
     self.valfunc = func
     self.name, self.params = '{}.{}'.format(func.__module__, func.__name__), tuple(getparams(func,ignore))
   def keyfunc(self,a,ka):
@@ -388,8 +388,7 @@ Attempts to restore the :attr:`valfunc` attribute from the other attributes. Thi
     if hasattr(self,'valfunc'): return
     from importlib import import_module
     fmod,fname = self.name.rsplit('.',1)
-    valfunc = getattr(import_module(fmod),fname)
-    while hasattr(valfunc,'__wrapped__'): valfunc = valfunc.__wrapped__
+    valfunc = inspect.unwrap(getattr(import_module(fmod),fname))
     ignore = tuple(p for p,typ in self.params if typ==-1)
     params = tuple(getparams(valfunc,ignore))
     if params != self.params: raise SignatureMismatchException(params,self.params)
@@ -409,7 +408,7 @@ The signature is entirely defined by the components of :class:`Signature` applie
 #--------------------------------------------------------------------------------------------------
 
   def __init__(self,func,base):
-    while hasattr(func,'__wrapped__'): func = func.__wrapped__
+    func = inspect.unwrap(func)
     self.func = func
     self.base = base
     bnameS,bparamsS,self.keyfuncS  = (),(),(lambda *a: ())
@@ -533,7 +532,7 @@ A decorator which applies to a function and replaces it by a persistently cached
 :param factory: the block factory (normally :class:`CacheBlock`)
   """
 #--------------------------------------------------------------------------------------------------
-  return lambda f: wraps(f)(factory(signature=Signature(f,ignore),**ka))
+  return lambda f: update_wrapper(factory(signature=Signature(f,ignore),**ka),f)
 
 #--------------------------------------------------------------------------------------------------
 class PCacheBlock (CacheBlock):

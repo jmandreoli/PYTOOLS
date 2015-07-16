@@ -8,7 +8,7 @@
 # *** Xerox Research Centre Europe - Grenoble ***
 #
 
-from .main import shellscript, clients, Client, server
+from .main import shellscript, clients
 from functools import partial
 import sys, os
 
@@ -38,7 +38,7 @@ Instances of this class are lists of clients obtained by the SGE launcher.
 
 class sgeclients_ (clients):
 
-  def __init__(self,_N,factory=server,**ka):
+  def __init__(self,_N,factory,**ka):
     super(sgeclients_,self).__init__(_N*(sgelauncher(),),factory=partial(sgefactory,(SGESUBHOST,SGEENV),factory),**ka)
 
 def sgelauncher():

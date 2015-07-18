@@ -8,7 +8,8 @@
 # *** Xerox Research Centre Europe - Grenoble ***
 #
 
-import os, sys, logging, subprocess, collections, shutil, errno, whoosh.index, whoosh.fields
+import os, sys, logging, subprocess, collections, shutil, errno
+import whoosh.index, whoosh.fields
 from threading import Thread
 from pathlib import Path
 from random import randrange
@@ -52,11 +53,6 @@ Methods:
   def __getstate__(self):
     self.ix_ = None
     return self.__dict__
-
-  @staticmethod
-  def engines(njobs):
-    from myutil.remote import shclients
-    return shclients(min(njobs,4))
 
 #--------------------------------------------------------------------------------------------------
   def reset(self):
@@ -124,7 +120,6 @@ Inserts the new entries into the index and deletes old ones.
 #--------------------------------------------------------------------------------------------------
   def updatemeta(self):
 #--------------------------------------------------------------------------------------------------
-    from ..remote import IterableProxy
     def worker(w):
       label = '[{}#{}]'.format(w.uname().nodename,w.getpid())
       logger.info('metaprocess%s.start',label)

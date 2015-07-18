@@ -5,22 +5,22 @@
 
 if __name__=='__main__':
   import sys
-  from myutil.demo.mplext import demo, Dbeta, Dweibull, Dnormal
-  from matplotlib.pyplot import show
-  demo(Dbeta(),Dweibull(),Dnormal(),figsize=(10,8))
-  show()
+  from myutil.demo.mplext import demo
+  demo()
   sys.exit(0)
 
 #--------------------------------------------------------------------------------------------------
 
+from pathlib import Path
 from scipy.special import betainc, beta, gamma, erf
 from numpy import sqrt, square, exp, infty, pi, linspace
 from ..mplext import Cell
+automatic = False
 
 from collections import namedtuple
 Distr = namedtuple('Distr',('name','dom','domv','mean','std','pdf','cdf'))
 
-def demo(*l,**ka): # l must be a list of Distr instances (probability distributions)
+def demo1(*l,**ka): # l must be a list of Distr instances (probability distributions)
   view = Cell.new(**ka)
   with view.clearm():
     # turn the cell *view* into a grid-cell:
@@ -46,6 +46,7 @@ def demo(*l,**ka): # l must be a list of Distr instances (probability distributi
     ax.text(.5,.5,'Distribution details from Wikipedia.',ha='center',va='center')
     ax.set_xticks(()) ; ax.set_yticks(())
     view.figure.tight_layout()
+  if automatic: view.figure.savefig(str(Path(__file__).parent.resolve()/'mplext.png'))
 
 def Dbeta(a=1.5,b=2.5): # the beta distribution
   return Distr(
@@ -74,4 +75,9 @@ def Dnormal(mu=0.,sigma=1.): # the normal distribution
     pdf=lambda x,K=sigma*sqrt(2*pi): exp(-square(x-mu)/2)/K,
     cdf=lambda x,K=sigma*sqrt(2): .5*(1+erf((x-mu)/K)),
   )
+
+def demo():
+  from matplotlib.pyplot import show
+  demo1(Dbeta(),Dweibull(),Dnormal(),figsize=(10,8))
+  show(not automatic)
 

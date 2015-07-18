@@ -4,21 +4,18 @@
 # Purpose:              Illustration of the monitor module
 
 if __name__=='__main__':
-  import sys, logging
-  logging.basicConfig(level=logging.INFO)
-  from myutil.demo.monitor import demo1, demo2
-  for d in demo1, demo2:
-    print('----------------------------\n{}'.format(d.__name__))
-    d()
-    try: input('RET: continue; Ctrl-C: stop')
-    except: print();break
+  import sys
+  from myutil.demo.monitor import demo
+  demo()
   sys.exit(0)
 
 #--------------------------------------------------------------------------------------------------
 
 import logging, time, sys
 logger = logging.getLogger(__name__)
+automatic = False
 
+from pathlib import Path
 from ..monitor import monitor, iterc_monitor, averaging_monitor, buffer_monitor
 
 def demo1():
@@ -26,7 +23,7 @@ def demo1():
   loop = map(log,count(1)) # the iterable to monitor
   fmts = 'iterc:{0} log:{1.value:.4f}' # the logging format
   m = iterc_monitor(maxcpu=.1,maxiter=100000,show=.1,logger=logger,fmt=fmts.format)
-  return m.run(loop)
+  m.run(loop)
 
 @monitor
 def delay_monitor(env,delay:float=1.):
@@ -37,7 +34,7 @@ def delay_monitor(env,delay:float=1.):
 def display_monitor(env,targetf:callable,bounds):
   # assumes targetf returns a list of coordinate pairs, and displays the corresponding plot
   from matplotlib.pyplot import figure, show
-  fig = figure(figsize=(10,8))
+  env.fig = fig = figure(figsize=(10,8))
   ax = fig.add_subplot(1,1,1)
   ax.set_xlim(bounds[0])
   ax.set_ylim(bounds[1])
@@ -59,8 +56,9 @@ def demo2():
   m *= iterc_monitor(maxiter=200,logger=logger,fmt=fmts.format,show=.8)
   m *= buffer_monitor(label='buf',targetf=(lambda env: env.value))
   m *= display_monitor(targetf=(lambda env: env.buf),bounds=((-1.5,1.5),(-1.5,1.5)))
-  m *= delay_monitor(.04) # forces at most 25 frames per seconds (crude)
-  return m.run(cycloid(a=.3,omega=5.1,step=2.))
+  if not automatic: m *= delay_monitor(.04) # forces at most 25 frames per seconds (crude)
+  env = m.run(cycloid(a=.3,omega=5.1,step=2.))
+  if automatic: env.fig.savefig(str(Path(__file__).resolve().parent/'monitor.png'))
 
 def cycloid(a,omega,step):
   from math import sin, cos, pi
@@ -69,4 +67,13 @@ def cycloid(a,omega,step):
   while True:
     yield cos(u)+a*cos(omega*u), sin(u)+a*sin(omega*u)
     u += step
+
+def demo():
+  logging.basicConfig(level=logging.INFO)
+  for d in demo1, demo2:
+    print(80*'-'); print(d.__name__)
+    d()
+    if not automatic:
+      try: input('RET: continue; Ctrl-C: stop')
+      except: print();break
 

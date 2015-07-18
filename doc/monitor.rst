@@ -21,6 +21,7 @@ Typical output:
 .. literalinclude:: ../demo/monitor.out
 
 .. |output| image:: ../demo/monitor.png
+   :width: 400px
 
 |output|
 

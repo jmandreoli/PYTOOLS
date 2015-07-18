@@ -14,9 +14,14 @@ The following piece of code illustrates the use of this module.
    
 Typical output:
 
-.. |output| image:: ../demo/quickui.png
+.. |output1| image:: ../demo/quickui1.png
+   :width: 250px
+.. |output2| image:: ../demo/quickui2.png
+   :width: 250px
 
-|output|
++-----------+----------+
+| |output1| ||output2| |
++-----------+----------+
 
 Available types and functions
 -----------------------------

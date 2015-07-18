@@ -4,22 +4,24 @@
 # Purpose:              Illustration of the quickui module
 
 if __name__=='__main__':
-    import sys
-    from myutil.demo.quickui import demo
-    demo()
-    sys.exit(0)
+  import sys
+  from myutil.demo.quickui import demo
+  demo()
+  sys.exit(0)
 
 #--------------------------------------------------------------------------------------------------
 
+from pathlib import Path
 from functools import partial
 from ..quickui import ExperimentUI, cbook as Q, configuration, startup
 from ..pyqt import QtCore, QtGui
+automatic = False
 
 def demo():
   with startup() as app:
     w = Demo()
     w.main.setFixedWidth(500)
-    return w
+    if automatic: autoplay(w)
 
 class Demo (ExperimentUI):
 
@@ -55,4 +57,19 @@ class Demo (ExperimentUI):
     # the experiment
     def exper(r): wr.setText(str(r))
     super(Demo,self).setup(c,exper)
+
+def autoplay(w):
+  import time
+  from threading import Thread
+  def save(wid=w.main.winId(),DIR=Path(__file__).resolve().parent):
+    QtGui.QPixmap.grabWindow(wid).save(str(DIR/'quickui{}.png'.format(w.forsave)))
+  actionSave = QtGui.QAction(w.main)
+  QtCore.QObject.connect(actionSave, QtCore.SIGNAL("triggered()"), save)
+  def play(w):
+    time.sleep(.5)
+    w.forsave = 1; actionSave.trigger(); time.sleep(.1)
+    w.actionRelaunch.trigger(); time.sleep(.1)
+    w.forsave = 2; actionSave.trigger(); time.sleep(.1)
+    w.actionQuit.trigger()
+  Thread(target=play,args=(w,),daemon=True).start()
 

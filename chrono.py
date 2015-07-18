@@ -186,7 +186,7 @@ Starts the recording of the slice *slc* of the flow *flow* into the database att
 :param slc: the slice of the flow to record
 :type slc: :class:`slice`
 
-This method is normally called on a remote process (see :func:`Startc`).
+This method is normally called on a remote process (see method :meth:`ChronoBlock.launch`).
     """
 #--------------------------------------------------------------------------------------------------
     def getfield(conn,f):
@@ -291,7 +291,7 @@ Methods:
       return conn.execute('SELECT current FROM Activity WHERE block=?',(self.block,)).fetchone()[0]
 
 #--------------------------------------------------------------------------------------------------
-  def activate(self,start,slc=slice(0,None),**ka):
+  def activate(self,slc=slice(0,None),**ka):
 #--------------------------------------------------------------------------------------------------
     with self.db.connect(None,isolation_level='IMMEDIATE') as conn:
       session, = conn.execute('SELECT current FROM Activity WHERE block=?',(self.block,)).fetchone()
@@ -300,7 +300,7 @@ Methods:
       logger.info('session created: %s',session)
     with self.db.connect(session) as conn:
       for sql in DATA_SCHEMA.split('\n\n'): conn.execute(sql.strip())
-    start(session,self.flow,slc,**ka)
+    self.launch(session,self.flow,slc,**ka)
 
 #--------------------------------------------------------------------------------------------------
   def pause(self,cause):
@@ -385,6 +385,13 @@ If *sticky* is :const:`True`, only the sticky fields are listed; if *sticky* is 
   def as_html(self):
     return html_table(((k,v[:-1]) for k,v in self.items()),hdrs=('status','started','slice','nrec','nfield','nlog','nint'),fmts=(str,str,(lambda slc:'{}:{}:{}'.format(slc.start,('' if slc.stop is None else slc.stop),('' if slc.step is None else slc.step))),str,str,str,str),title=str(self.flow))
   def __str__(self): return 'ChronoDB<{}:{}>'.format(self.db.path,self.flow)
+
+#--------------------------------------------------------------------------------------------------
+# Base launcher (uses multiprocessing)
+#--------------------------------------------------------------------------------------------------
+  def launch(self,*a,**ka):
+    from multiprocessing import get_context
+    get_context('fork').Process(target=self.db.start,args=a,kwargs=ka).start()
 
 #==================================================================================================
 class Formatter (object):
@@ -501,20 +508,6 @@ class SQliteStack:
   def setup(conn,name,n):
     conn.create_aggregate(name,n,SQliteStack)
     return SQliteStack.contents.pop
-
-#--------------------------------------------------------------------------------------------------
-def Startc(c,db,*a,**ka):
-  """
-A utility to invoke method :meth:`start` of :class:`ChronoDB` instance *db* remotely on a client *c* as obtained from module :mod:`.remote`.
-  """
-#--------------------------------------------------------------------------------------------------
-  import Pyro4
-  if c is None: from .remote import shclients; c = shclients(1)[0]
-  c.declare(Start,static=False,async=True)
-  Pyro4.core.async(c).Start(db,*a,**ka)
-def Start(server,db,*a,**ka):
-  db.start(*a,**ka)
-  server._pyroDaemon.shutdown()
 
 #--------------------------------------------------------------------------------------------------
 def html_table(irows,fmts,hdrs=None,title=None):

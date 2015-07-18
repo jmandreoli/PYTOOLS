@@ -15,6 +15,7 @@ The following piece of code illustrates the use of this module:
 Typical output:
 
 .. |output| image:: ../demo/mplext.png
+   :width: 400px
 
 |output|
 

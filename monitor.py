@@ -9,6 +9,7 @@
 
 import logging
 from collections import namedtuple
+from . import type_annotation_autocheck
 
 #==================================================================================================
 class Monitor:
@@ -101,9 +102,7 @@ The returned factory, when invoked with some arguments, returns a monitor with *
   """
 #--------------------------------------------------------------------------------------------------
   import inspect
-  from . import type_annotation_checker
   def F(*a,label=None,**ka):
-    check(None,*a,**ka)
     if label is None:
       def coroutine(env,a=a,ka=ka): return f(env,*a,**ka)
     else:
@@ -113,7 +112,6 @@ The returned factory, when invoked with some arguments, returns a monitor with *
           setattr(env,label,x)
           yield
     return Monitor((f.__name__,),(coroutine,))
-  check = type_annotation_checker(f)
   sig = inspect.signature(f)
   parm = list(sig.parameters.values())
   del parm[0]
@@ -125,6 +123,7 @@ The returned factory, when invoked with some arguments, returns a monitor with *
   return F
 
 #--------------------------------------------------------------------------------------------------
+@type_annotation_autocheck
 @monitor
 def iterc_monitor(env,maxiter:int=0,maxcpu:float=float('inf'),logger:logging.Logger=None,show:(float,type(None))=None,fmt:(callable,type(None))=None):
   r"""
@@ -175,6 +174,7 @@ If *logger* is :const:`None`, no logging occurs (*fmt* and *show* are ignored). 
       x += 1
 
 #--------------------------------------------------------------------------------------------------
+@type_annotation_autocheck
 @monitor
 def averaging_monitor(env,targetf:callable=None,rtype=namedtuple('stats',('count','mean','var'))):
   r"""
@@ -198,6 +198,7 @@ The computed statistics consists of a named triple <count,mean,variance> of the 
     yield rtype(n,xmean,xvar)
 
 #--------------------------------------------------------------------------------------------------
+@type_annotation_autocheck
 @monitor
 def buffer_monitor(env,size:int=0,targetf:callable=None):
   r"""

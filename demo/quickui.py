@@ -17,12 +17,6 @@ from ..quickui import ExperimentUI, cbook as Q, configuration, startup
 from ..pyqt import QtCore, QtGui
 automatic = False
 
-def demo():
-  with startup() as app:
-    w = Demo()
-    w.main.setFixedWidth(500)
-    if automatic: autoplay(w)
-
 class Demo (ExperimentUI):
 
   def setup(self):
@@ -49,14 +43,19 @@ class Demo (ExperimentUI):
          ),
         )
 
-    # the result tab ('main')
+    # the result tab ('main'): a simple QLabel widget
     wr = QtGui.QLabel('')
     QtGui.QVBoxLayout(self.addtab('main')).addWidget(wr)
 
+    # the experiment: each time the configuration *c* produces a result *r*
+    # (by clicking the "Relaunch" button) that result is displayed in the main widget *wr*.
+    super(Demo,self).setup(c,lambda r: wr.setText(str(r)))
 
-    # the experiment
-    def exper(r): wr.setText(str(r))
-    super(Demo,self).setup(c,exper)
+def demo():
+  with startup() as app:
+    w = Demo()
+    w.main.setFixedWidth(500)
+    if automatic: autoplay(w)
 
 def autoplay(w):
   import time

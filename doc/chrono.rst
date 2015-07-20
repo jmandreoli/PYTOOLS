@@ -10,7 +10,7 @@ The following piece of code illustrates the use of this module.
    :language: python
    :tab-width: 2
 
-The generator :func:`weather` retrieves weather data from a remote site. Instances of :func:`OpenWeatherFlow` represent  persistent flows polled from that site.
+The generator function :func:`weather` retrieves weather data from a remote site. Instances of :class:`OpenWeatherFlow` represent persistent flows polled from that site. Similarly, instances of :class:`ProcFlow` represent persistent flows of process data (obtained using :mod:`psutil`) from the local machine.
 
 Typical output:
 

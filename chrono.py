@@ -311,7 +311,7 @@ Methods:
       conn.execute('INSERT INTO Interrupt (cause) VALUES (?)',(cause,))
 
 #--------------------------------------------------------------------------------------------------
-  def stream(self,session,reverse=False,limit=(-1,0),sticky=None):
+  def stream(self,session,reverse=False,limit=(-1,0)):
     r"""
 Iterates over the records of one session.
 
@@ -321,21 +321,16 @@ Iterates over the records of one session.
 :type reverse: :const:`bool`
 :param limit: pair of (max number of rows , offset) limiting the listing
 :type limit: (\ :const:`int`,\ :const:`int`\ )
-:param sticky: how the sticky fields are listed
-:type sticky: :const:`bool`
-
-If *sticky* is :const:`True`, only the sticky fields are listed; if *sticky* is :const:`False`, only the non-sticky fields are listed; if *sticky* is :const:`None`, all fields are listed.
     """
 #--------------------------------------------------------------------------------------------------
     def content(conn):
-      frm, whr = ('','') if sticky is None else (',Field',' AND Component.field=Field.oid AND {}Field.sticky'.format('' if stick else 'NOT '))
       rstack = SQliteStack.setup(conn,'Stack',2)
-      for rec,ts,comps in conn.execute('SELECT Record.oid,Record.timestamp,Stack(Component.field,Component.value) FROM Record,Component{} WHERE Component.record=Record.oid{} GROUP BY Record.oid,Record.timestamp ORDER BY Record.timestamp {} LIMIT {} OFFSET {}'.format(frm,whr,('DESC' if reverse else 'ASC'),*limit)):
+      for rec,ts,comps in conn.execute('SELECT Record.oid,Record.timestamp,Stack(Component.field,Component.value) FROM Record,Component WHERE Component.record=Record.oid GROUP BY Record.oid,Record.timestamp ORDER BY Record.timestamp {} LIMIT {} OFFSET {}'.format(('DESC' if reverse else 'ASC'),*limit)):
         comps = dict(rstack(comps))
-        yield (rec,ts)+tuple(comps.get(fid) for fid,fnam in fields)
+        yield (rec,ts)+tuple(comps.get(fid) for fid,fnam,sticky in fields)
     with self.db.connect(session) as conn:
-      fields = conn.execute('SELECT oid,name FROM Field {} ORDER BY name'.format('WHERE sticky' if sticky else '')).fetchall()
-      return WrapIterator(content(conn),attributes=('record','timestamp',)+tuple(fnam for fid,fnam in fields))
+      fields = conn.execute('SELECT oid,name,sticky FROM Field ORDER BY sticky DESC, name').fetchall()
+      return WrapIterator(content(conn),attributes=('record','timestamp',)+tuple(fnam for fid,fnam,sticky in fields),sticky=dict((fnam,sticky) for fid,fnam,sticky in fields))
 
 #--------------------------------------------------------------------------------------------------
 # ChronoBlock as Mapping
@@ -400,22 +395,22 @@ An object of this class defines a function which extracts information from recor
 
 :param fields: a list of fields (see below)
 
-* A field is a triple (*filtr*,*sticky*,(*fmtk*,*fmtv*)) where *filtr* is a regular expression, *sticky* is a Boolean and *fmtk*,*fmtv* are two 1-input 1-output functions.
+* A field is a triple (*fmtk*,*sticky*,*fmtv*) where *sticky* is a Boolean and *fmtk*,*fmtv* are two 1-input 1-output functions.
 * A record is assumed to be a list (or iterator) of (*key*,*value*) pairs.
 
-The information extracted from a record is obtained by filtering and processing the list of (*key*,*value*) pairs as follows. For each pair, *key* is matched against the regular expression *filtr* of each field, in sequence. If the match fails, the field is not extracted. If the match succeeds, a field name is obtained by applying *fmtk* to the list of groups of the match, and a field value is obtained by applying *fmtv* to *value*. If *sticky* is true and the field value is the same as the last value extracted for that field name, the field is not extracted. Otherwise, the pair of the field spec (pair of the field name and the *sticky* flag) and field value is extracted. The extracted fields are returned as an iterator.
+The information extracted from a record is obtained by filtering and processing the list of (*key*,*value*) pairs as follows. For each pair, *fmtk* is evaluated on *key*. If the result is None, the field is not extracted. Otherwise the result is taken to be the field name, and a field value is obtained by applying *fmtv* to *value*. If *sticky* is true and the field value is the same as the last value extracted for that field name, the field is not extracted. Otherwise, the pair of the field spec (pair of the field name and the *sticky* flag) and field value is extracted. The extracted fields are returned as an iterator.
 
 Methods:
   """
 #==================================================================================================
 
   def __init__(self,*fields):
-    def lookup(nam,cache={},null=(),rfields=tuple((re.compile(filtr),sticky,fmt) for filtr,sticky,fmt in fields)):
+    def lookup(nam,cache={},null=()):
       l = cache.get(nam,null)
       if l is null:
-        for r,sticky,(fmtk,fmtv) in rfields:
-          m = r.match(nam)
-          if m is not None: cache[nam] = l = fmtk(*m.groups()),sticky,fmtv; break
+        for fmtk,sticky,fmtv in fields:
+          fnam = fmtk(nam)
+          if fnam is not None: cache[nam] = l = fnam,sticky,fmtv; break
         else: cache[nam] = l = None
       return l
     self.lookup = lookup
@@ -432,15 +427,45 @@ Methods:
         yield (fnam,sticky),fmtv(val)
 
   @staticmethod
-  def FMT(fmts,unit=None,delunit=lambda x:float(x.split()[0])):
+  def Field(trig,sticky=None,fmtk=None,fmtv=None,ID=(lambda x: x)):
     r"""
-A convenience function to specify a format. The following evaluates to true::
+A convenience function to specify a :class:`Formatter` field. The following evaluates to true::
 
-   fmtk,fmtv = Formatter.FMT('a{:02}b',unit='V') 
-   fmtk('6'),fmtv('33.6 V') == 'a06b (V)',33.6
+   f = Formatter(
+    Formatter.Field(r'\.voltage\.(line-\d+)',fmtv=float),
+    Formatter.Field(r'\.name\.line-(\d+)',sticky=True,fmtk='L{}'.format)
+    )
+   T1 = f([('.name.line-6','Tom'),('.voltage.line-6','42.0'),('.voltage.line-23','35')])
+   T2 = f([('.name.line-6','Tom'),('.voltage.line-6','45.0'),('.current.line-6','14')])
+   T3 = f([('.name.line-6','Jerry'),('.voltage.line-6','44.0')])
+   list(T1) == [(('L6',True),'Tom'),(('line-6',False),42.0),(('line-23',False),35.0)]
+   list(T2) == [(('line-6',False),45.0)]
+   list(T3) == [(('L6',True),'Jerry'),(('line-6',False),44.0)]
+    """
+    if isinstance(trig,str): trig = re.compile(trig)
+    elif not isinstance(trig,re): raise TypeError('Expected {}|{}, found {}'.format(str,re,type(trig)))
+    if fmtk is None: fmtk = ID
+    elif not callable(fmtk): raise TypeError('Expected callable, found {}'.format(type(fmtk)))
+    def fmtk(nam,patmatch=trig.fullmatch,fmt=fmtk):
+      m = patmatch(nam)
+      return None if m is None else fmt(*m.groups()) 
+    if sticky is None: sticky = False
+    elif not (isinstance(sticky,bool) or sticky in (0,1)): raise TypeError('Expected {}|0|1, found {}'.format(bool,type(sticky)))
+    if fmtv is None: fmtv = ID
+    elif not callable(fmtv): raise TypeError('Expected callable, found {}'.format(type(fmtv)))
+    return fmtk,sticky,fmtv
+
+  @staticmethod
+  def UField(trig,fmts,unit=None,delunit=lambda x:float(x.split()[0]),**ka):
+    r"""
+A convenience function to specify a :class:`Formatter` field. The following evaluates to true::
+
+   f = Formatter(Formatter.UField(r'\.voltage\.line-(\d+)','L{:0>2}',unit='V'))
+   T = f([('.voltage.line-6','42.0 V'),('.voltage.line-23','35 V')])
+   list(T) == [(('L06 (V)',False),42.0), (('L23 (V)',False),35.0)]
     """
     if unit is not None: fmts = '{} ({})'.format(fmts,unit)
-    return fmts.format, float if unit is None else delunit
+    return Formatter.Field(trig,fmtk=fmts.format,fmtv=(float if unit is None else delunit),**ka)
 
 #==================================================================================================
 # Utilities
@@ -449,21 +474,16 @@ A convenience function to specify a format. The following evaluates to true::
 #--------------------------------------------------------------------------------------------------
 def flatten(x,pre=''):
   r"""
-Turns a simple structure *x* built from :const:`dict`, :const:`list` and :const:`tuple` into an iterator of key-value pairs. Example::
+Turns a simple structure *x* built from :const:`dict`, :const:`list` and :const:`tuple` into an iterator of key-value pairs. The following evaluates to true::
 
-   tuple(flatten({'a':{'b':({'ux':3,'uy':4.2},{'ux':5,'uy':6.7}),'c':'abcd'},'d':38.3}))
-
-returns::
-
-   (('.a.b.0.ux',3),('.a.b.0.uy',4.2),('.a.b.1.ux',5),('.a.b.1.uy',6.7),('.a.c','abcd'),('.d',38.3))
+   T = list(flatten({'a':{'b':({'ux':3,'uy':4.2},{'ux':5,'uy':6.7}),'c':'abcd'},'d':38.3}))
+   T==[('.a.b.0.ux',3),('.a.b.0.uy',4.2),('.a.b.1.ux',5),('.a.b.1.uy',6.7),('.a.c','abcd'),('.d',38.3)]
   """
 #--------------------------------------------------------------------------------------------------
   if isinstance(x,dict):
-    for k,xx in x.items():
-      for a in flatten(xx,'{}.{}'.format(pre,k)): yield a
-  elif isinstance(x,list) or isinstance(x,tuple):
-    for k,xx in enumerate(x):
-      for a in flatten(xx,'{}.{}'.format(pre,k)): yield a
+    for k,xx in x.items(): yield from flatten(xx,'{}.{}'.format(pre,k))
+  elif isinstance(x,(list,tuple)):
+    for k,xx in enumerate(x): yield from flatten(xx,'{}.{}'.format(pre,k))
   else: yield pre,x
 
 #--------------------------------------------------------------------------------------------------
@@ -472,7 +492,7 @@ def atinterval(it,period):
 Returns an iterator which enemerates the elements of *it* at regular real time interval.
 
 :param it: iterator
-:param period: amount of time (in secs) waited after each enumeration of an element of *it*
+:param period: period (in secs) between two consecutive extractions from *it*
 :type period: :const:`float`
   """
 #--------------------------------------------------------------------------------------------------

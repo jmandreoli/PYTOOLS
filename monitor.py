@@ -51,6 +51,7 @@ Enumerates *loop* and monitors it.
 
 If *env* is :const:`None`, it is initialised to a new instance of :class:`State`. Its attribute :attr:`stop` is assigned :const:`None`. Its attribute :attr:`thread` is assigned :const:`None` if *detach* is :const:`None`, otherwise the thread object on which the loop is run. A list of coroutines is obtained by calling each element of :attr:`coroutines` with argument *env*, then *loop* is enumerated. At the end of each iteration, the following attributes are set in *env*.
 
+- :attr:`icputime`: cpu time of the last iteration
 - :attr:`cputime`: cumulated cpu time of the loop iterations
 - :attr:`value`: object yielded by the last iteration
 
@@ -58,17 +59,18 @@ Then each coroutine is advanced (using function :func:`next`), possibly updating
     """
 #--------------------------------------------------------------------------------------------------
     from threading import Thread
-    from time import clock, sleep
+    from time import process_time, sleep
     from functools import partial
     def run0(loop,env,delay=None):
       coroutines = [coroutine(env) for coroutine in self.coroutines]
       env.stop = None
       env.cputime = 0.
       if delay is not None: sleep(delay)
-      t0 = clock()
+      t0 = process_time()
       for x in loop:
-        t = clock()
-        env.cputime += t-t0
+        t = process_time()
+        d = env.icputime = t-t0
+        env.cputime += d
         env.value = x
         for c in coroutines: next(c)
         if env.stop is not None: break
@@ -77,7 +79,8 @@ Then each coroutine is advanced (using function :func:`next`), possibly updating
     if detach is None:
       env.thread = None
       run0(loop,env)
-    elif not isinstance(detach,(int,float)): raise TypeError('Expected {}|{}, found {}'.format(int,float,type(detach)))
+    elif not isinstance(detach,(int,float)):
+      raise TypeError('Expected {}|{}, found {}'.format(int,float,type(detach)))
     else:
       ka.setdefault('daemon',True)
       w = Thread(target=partial(run0,loop,env,detach),**ka)

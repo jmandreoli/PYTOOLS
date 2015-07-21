@@ -455,19 +455,9 @@ Method:
 #==================================================================================================
 
   def __init__(self,db):
-    import pyinotify
     self.path = db.path
-    self.listeners = {}
-    def process(e):
-      for evt,(tname,rname) in list(self.listeners.items()):
-        if (e.mask&pyinotify.IN_DELETE and e.name==tname) or (e.mask&pyinotify.IN_MOVED_TO and e.name==rname):
-          del self.listeners[evt]
-          evt.set()
-    wm = pyinotify.WatchManager()
-    wm.add_watch(str(self.path),pyinotify.IN_DELETE|pyinotify.IN_MOVED_TO)
-    nt = pyinotify.ThreadedNotifier(wm,default_proc_fun=process)
-    nt.daemon = True
-    nt.start()
+    self.trackers = {},{},{}
+    self.watch()
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self,cell,size=-1,typ=namedtuple('StoreAPI',('getval','setval','commit','remove'))):
@@ -500,8 +490,7 @@ The *size* argument gives an indication of the intended use of the API in the cu
     if size is None: # current process is computing the value: setval, commit
       tfile = tpath.open('wb')
     elif size==0:    # other process is computing the value: getval (must wait)
-      evt = threading.Event()
-      self.listeners[evt] = tpath.name, rpath.name
+      evt = self.track(tpath.name,rpath.name)
     else:            # value already computed: getval (nowait), or to be removed: remove
       evt = None
     def getval():
@@ -517,6 +506,52 @@ The *size* argument gives an indication of the intended use of the API in the cu
       try: (rpath if r else tpath).unlink()
       except: pass
     return typ(getval,setval,commit,remove)
+
+  def track(self,tname,rname):
+    evt = threading.Event()
+    self.trackers[0][evt] = tname, rname
+    self.trackers[1][tname] = evt
+    self.trackers[2][rname] = evt
+    return evt
+
+  def untrack(self,i,name):
+    evt = self.trackers[i].get(name)
+    if evt is not None:
+      tname,rname = self.trackers[0][evt]
+      del self.trackers[0][evt], self.trackers[1][tname], self.trackers[2][rname]
+      evt.set()
+
+  def watch(self):
+    from sys import platform
+    getattr(self,'watch_'+platform)()
+
+  def watch_darwin(self):
+    raise NotImplemented()
+
+  def watch_linux(self):
+    import pyinotify
+    def process(e):
+      if e.mask&pyinotify.IN_DELETE: i=1
+      elif e.mask&pyinotify.IN_MOVED_TO: i=2
+      else: return
+      self.untrack(i,e.name)
+    wm = pyinotify.WatchManager()
+    wm.add_watch(str(self.path),pyinotify.IN_DELETE|pyinotify.IN_MOVED_TO)
+    nt = pyinotify.ThreadedNotifier(wm,default_proc_fun=process)
+    nt.daemon = True
+    nt.start()
+
+  def watch_win32(self):
+    def process():
+      import win32file, win32con
+      h = win32file.CreateFile(str(self.path),win32con.GENERIC_READ,win32con.FILE_SHARE_READ|win32con.FILE_SHARE_WRITE|win32con.FILE_SHARE_DELETE,None,win32con.OPEN_EXISTING,win32con.FILE_FLAG_BACKUP_SEMANTICS,None)
+      while True:
+        for action,name in win32file.ReadDirectoryChangesW(h,4096,False,win32con.FILE_NOTIFY_CHANGE_FILE_NAME):
+          if action == 2: i=1
+          elif action == 5: i=2
+          else: return
+          self.untrack(i,name)
+    threading.Thread(target=process,daemon=True).start()
 
 #==================================================================================================
 # Utilities

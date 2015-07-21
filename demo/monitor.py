@@ -56,7 +56,7 @@ def demo2():
   m *= iterc_monitor(maxiter=200,logger=logger,fmt=fmts.format,show=.8)
   m *= buffer_monitor(label='buf',targetf=(lambda env: env.value))
   m *= display_monitor(targetf=(lambda env: env.buf),bounds=((-1.5,1.5),(-1.5,1.5)))
-  if not automatic: m *= delay_monitor(.04) # forces at most 25 frames per seconds (crude)
+  if not automatic: m *= delay_monitor(.04) # slows down to at most 25 frames per seconds (crude)
   env = m.run(cycloid(a=.3,omega=5.1,step=2.))
   if automatic: env.fig.savefig(str(Path(__file__).resolve().parent/'monitor.png'))
 
@@ -67,6 +67,8 @@ def cycloid(a,omega,step):
   while True:
     yield cos(u)+a*cos(omega*u), sin(u)+a*sin(omega*u)
     u += step
+
+#--------------------------------------------------------------------------------------------------
 
 def demo():
   logging.basicConfig(level=logging.INFO)

@@ -47,9 +47,11 @@ class Demo (ExperimentUI):
     wr = QtGui.QLabel('')
     QtGui.QVBoxLayout(self.addtab('main')).addWidget(wr)
 
-    # the experiment: each time the configuration *c* produces a result *r*
-    # (by clicking the "Relaunch" button) that result is displayed in the main widget *wr*.
+    # setting up the experiment: each time the "Relaunch" button is clicked
+    # the configuration *c* is invoked and its result *r* displayed in the main widget *wr*.
     super(Demo,self).setup(c,lambda r: wr.setText(str(r)))
+
+#--------------------------------------------------------------------------------------------------
 
 def demo():
   with startup() as app:
@@ -58,17 +60,13 @@ def demo():
     if automatic: autoplay(w)
 
 def autoplay(w):
-  import time
-  from threading import Thread
-  def save(wid=w.main.winId(),DIR=Path(__file__).resolve().parent):
-    QtGui.QPixmap.grabWindow(wid).save(str(DIR/'quickui{}.png'.format(w.forsave)))
+  from threading import Timer; from itertools import count
+  def save(wid=w.main.winId(),DIR=Path(__file__).resolve().parent,cnt=count(1)):
+    QtGui.QPixmap.grabWindow(wid).save(str(DIR/'quickui{}.png'.format(next(cnt))))
   actionSave = QtGui.QAction(w.main)
   QtCore.QObject.connect(actionSave, QtCore.SIGNAL("triggered()"), save)
-  def play(w):
-    time.sleep(.5)
-    w.forsave = 1; actionSave.trigger(); time.sleep(.1)
-    w.actionRelaunch.trigger(); time.sleep(.1)
-    w.forsave = 2; actionSave.trigger(); time.sleep(.1)
-    w.actionQuit.trigger()
-  Thread(target=play,args=(w,),daemon=True).start()
+  Timer(.2,actionSave.trigger).start()
+  Timer(.4,w.actionRelaunch.trigger).start()
+  Timer(.6,actionSave.trigger).start()
+  Timer(.8,w.actionQuit.trigger).start()
 

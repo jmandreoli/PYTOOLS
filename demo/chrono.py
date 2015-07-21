@@ -19,11 +19,11 @@ automatic = False
 class PollingFlow:
   def __init__(self,period,**ka):
     self.period = period; self.__dict__.update(ka)
-  def __iter__(self):
-    yield from map(self.fformatter,map(flatten,atinterval(self.flow(),self.period)))
-  def __str__(self):
     d = ','.join('{}={}'.format(k,v) for k,v in self.__dict__.items())
-    return '{}({})'.format(self.__class__.__name__,d)
+    self.str_ = '{}({})'.format(self.__class__.__name__,d)
+  def __iter__(self):
+    yield from map(self.fformatter,map(flatten,atinterval(self.source(),self.period)))
+  def __str__(self): return self.str_
 
 class OpenWeatherFlow (PollingFlow):
   fformatter = Formatter(
@@ -34,7 +34,7 @@ class OpenWeatherFlow (PollingFlow):
     Formatter.Field(r'\.main\.(pressure)'),
     Formatter.Field(r'\.main\.(humidity)'),
   )
-  def flow(self):
+  def source(self):
     import requests
     url = 'http://api.openweathermap.org/data/2.5/weather?units=metric&q='+self.location
     s = requests.Session()
@@ -42,7 +42,7 @@ class OpenWeatherFlow (PollingFlow):
 
 class ProcFlow (PollingFlow):
   fformatter = Formatter(((lambda nam: nam[1:]),False,float))
-  def flow(self):
+  def source(self):
     import psutil
     while True:
       cpus = psutil.cpu_times_percent(percpu=True)
@@ -54,38 +54,40 @@ class ProcFlow (PollingFlow):
         net_io = psutil.net_io_counters().__dict__,
       )
 
-weatherchrono = ChronoBlock(flow=OpenWeatherFlow(period=2,location='london'),db=DIR)
-procchrono = ChronoBlock(flow=ProcFlow(period=3),db=DIR)
+weather_c = ChronoBlock(flow=OpenWeatherFlow(period=2,location='london'),db=DIR)
+proc_c = ChronoBlock(flow=ProcFlow(period=3),db=DIR)
 
-def demo1(chrono,period,nbuf):
-  print('Activate',chrono)
-  chrono.activate(slice(0,None),level=logging.INFO)
-  session = chrono.current
-  print('Polling(session: {} frequency: {:.02f}Hz buffer: {}); Ctrl-C to interrupt anytime'.format(session,1/period,nbuf))
-  try:
-    t = 0
-    while True:
-      time.sleep(period)
-      s = chrono.stream(session,limit=(nbuf,0),reverse=True)
-      for r in reversed(list(s)):
-        if r[1]>t: print(r); t = r[1]
-  except BaseException as e: print('Interrupted',e)
-  print(*tuple(a+('*' if s.sticky.get(a) else '') for a in s.attributes),sep=', ')
-  chrono.pause('Stop')
-  print('Pause',chrono,end=' ',flush=True)
-  while chrono.current is not None:
-    print('.',end='',flush=True)
-    time.sleep(period)
-  print()
+#--------------------------------------------------------------------------------------------------
 
 def demo():
-  for w in (weatherchrono,procchrono):
-    print(80*'-'); print('Clear',w); w.clear()
+  for chrono in weather_c,proc_c:
+    print(80*'-'); print('Clear',chrono); chrono.clear()
     if automatic:
-      from threading import Timer; from _thread import interrupt_main
-      Timer(10.,interrupt_main).start()
-    demo1(w,period=1,nbuf=2)
+      import threading, _thread; threading.Timer(10,_thread.interrupt_main).start()
+    chrono.activate(slice(0,None),level=logging.INFO)
+    waitwhile(chrono,lambda s: s is None)
+    trace(chrono)
+    chrono.pause('Stop')
+    waitwhile(chrono,lambda s: s is not None)
     if not automatic:
       try: input('RET: continue; Ctrl-C: stop')
       except: print(); break
+
+def trace(chrono,period=1.,nbuf=2): # trace records from current session of *chrono*
+  session = chrono.current
+  print('Trace(session: {} frequency: {:.02f}Hz buffer: {}); Ctrl-C to interrupt anytime'.format(session,1/period,nbuf))
+  try:
+    t = 0
+    while True: # can only be interrupted by another thread or signal
+      time.sleep(period)
+      s = chrono.stream(session,limit=(nbuf,0),reverse=True)
+      for r in reversed(list(s)): # last *nbuf* records in chronological order
+        if r[1]>t: print(r); t = r[1] # print only new records, based on record timestamp *t*
+  except BaseException as e: print('Interrupted',e)
+  print(*tuple(a+('*' if s.sticky.get(a) else '') for a in s.attributes),sep=', ')
+
+def waitwhile(chrono,cond,period=1.): # wait while value of *chrono*.current satifies *cond*
+  print(('Activate' if cond(None) else 'Pause'),chrono,end=' ',flush=True)
+  while cond(chrono.current): print('.',end='',flush=True); time.sleep(period)
+  print()
 

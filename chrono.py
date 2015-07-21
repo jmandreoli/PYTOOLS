@@ -395,10 +395,10 @@ An object of this class defines a function which extracts information from recor
 
 :param fields: a list of fields (see below)
 
-* A field is a triple (*fmtk*,*sticky*,*fmtv*) where *sticky* is a Boolean and *fmtk*,*fmtv* are two 1-input 1-output functions.
-* A record is assumed to be a list (or iterator) of (*key*,*value*) pairs.
+* A field is a triple (*fmtk*,\ *sticky*,\ *fmtv*) where *sticky* is a Boolean and *fmtk*,\ *fmtv* are two 1-input 1-output functions.
+* A record is assumed to be a list (or iterator) of (*key*,\ *value*) pairs.
 
-The information extracted from a record is obtained by filtering and processing the list of (*key*,*value*) pairs as follows. For each pair, *fmtk* is evaluated on *key*. If the result is None, the field is not extracted. Otherwise the result is taken to be the field name, and a field value is obtained by applying *fmtv* to *value*. If *sticky* is true and the field value is the same as the last value extracted for that field name, the field is not extracted. Otherwise, the pair of the field spec (pair of the field name and the *sticky* flag) and field value is extracted. The extracted fields are returned as an iterator.
+The information extracted from a record is obtained by filtering and processing the list of (*key*,\ *value*) pairs as follows. For each pair, *fmtk* is evaluated on *key*. If the result is None, the field is not extracted. Otherwise the result is taken to be the field name, and a field value is obtained by applying *fmtv* to *value*. If *sticky* is true and the field value is the same as the last value extracted for that field name, the field is not extracted. Otherwise, the pair of the field spec (pair of the field name and the *sticky* flag) and field value is extracted. The extracted fields are returned as an iterator.
 
 Methods:
   """
@@ -429,7 +429,17 @@ Methods:
   @staticmethod
   def Field(trig,sticky=None,fmtk=None,fmtv=None,ID=(lambda x: x)):
     r"""
-A convenience function to specify a :class:`Formatter` field. The following evaluates to true::
+A convenience function to specify a :class:`Formatter` field.
+
+:param trig: a regular expression
+:type trig: :class:`re`\|\ :class:`str`
+:param sticky: whether the field should be sticky
+:type sticky: :class:`bool`\|0\|1
+:param fmtk,fmtv: 1-input, 1-output functions
+:type fmtk,fmtv: callable\|\ :class:`NoneType`
+:rtype: a triple *fmtkr*, *sticky*, *fmtv*
+
+The field name formatting function *fmtkr* of the result field is defined as follows: its argument is matched against the regular expression *trig*; :const:`None` is returned if the match fails, otherwise, the result of applying *fmtk* to the groups extracted by the regular expression. For example, the following evaluate to true::
 
    f = Formatter(
     Formatter.Field(r'\.voltage\.(line-\d+)',fmtv=float),
@@ -516,6 +526,7 @@ A logging handler which writes the log messages in a database.
   def emit(self,rec):
     self.format(rec)
     self.conn.execute('INSERT INTO Log (level,created,module,funcName,message) VALUES (?,?,?,?,?)',(rec.levelno,rec.created,rec.module,rec.funcName,rec.message))
+    self.conn.commit()
 
 #--------------------------------------------------------------------------------------------------
 class SQliteStack:

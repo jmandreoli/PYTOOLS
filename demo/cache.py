@@ -5,9 +5,9 @@
 
 if __name__=='__main__':
   import sys
-  from myutil.demo.cache import demo, demo1
+  from myutil.demo.cache import demo, demo_
   if len(sys.argv) == 1: demo()
-  else: demo1(*sys.argv[1:])
+  else: demo_(*sys.argv[1:])
   sys.exit(0)
 
 #--------------------------------------------------------------------------------------------------
@@ -37,7 +37,9 @@ def stepB(state,c):
 
 process = lru_persistent_process_cache((stepA,dict(db=DIR)),(stepB,dict(db=DIR)))
 
-def demo1(t,*L):
+#--------------------------------------------------------------------------------------------------
+
+def demo_(t,*L):
   import time, logging
   logging.basicConfig(level=logging.INFO,format='[proc %(process)d @ %(asctime)s] %(message)s',datefmt='%H:%M:%S')
   logger = logging.getLogger()

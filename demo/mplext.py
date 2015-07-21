@@ -20,7 +20,7 @@ automatic = False
 from collections import namedtuple
 Distr = namedtuple('Distr',('name','dom','domv','mean','std','pdf','cdf'))
 
-def demo1(*l,**ka): # l must be a list of Distr instances (probability distributions)
+def display(*l,**ka): # l must be a list of Distr instances (probability distributions)
   view = Cell.new(**ka)
   with view.clearm():
     # turn the cell *view* into a grid-cell:
@@ -47,6 +47,13 @@ def demo1(*l,**ka): # l must be a list of Distr instances (probability distribut
     ax.set_xticks(()) ; ax.set_yticks(())
     view.figure.tight_layout()
   if automatic: view.figure.savefig(str(Path(__file__).parent.resolve()/'mplext.png'))
+
+#--------------------------------------------------------------------------------------------------
+
+def demo():
+  from matplotlib.pyplot import show
+  display(Dbeta(),Dweibull(),Dnormal(),figsize=(10,8))
+  show(not automatic)
 
 def Dbeta(a=1.5,b=2.5): # the beta distribution
   return Distr(
@@ -75,9 +82,4 @@ def Dnormal(mu=0.,sigma=1.): # the normal distribution
     pdf=lambda x,K=sigma*sqrt(2*pi): exp(-square(x-mu)/2)/K,
     cdf=lambda x,K=sigma*sqrt(2): .5*(1+erf((x-mu)/K)),
   )
-
-def demo():
-  from matplotlib.pyplot import show
-  demo1(Dbeta(),Dweibull(),Dnormal(),figsize=(10,8))
-  show(not automatic)
 

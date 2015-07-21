@@ -15,9 +15,9 @@ Contents:
    quickui.rst
    mplext.rst
    monitor.rst
-   remote.rst
    chrono.rst
    docstack.rst
+   remote.rst
    taskmanager.rst
 
 Indices and tables

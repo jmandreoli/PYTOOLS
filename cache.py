@@ -543,6 +543,18 @@ The *size* argument gives an indication of the intended use of the API in the cu
 
   def watch_win32(self):
     def process():
+      import win32file, win32con, win32event
+      h = win32file.FindFirstChangeNotification(str(self.path),0,win32con.FILE_NOTIFY_CHANGE_FILE_NAME)
+      D = dict((p.name,1) for p in self.path.iterdir())
+      while True:
+        r = win32event.WaitForSingleObject(h,win32event.INFINITE)
+        assert r == win32con.WAIT_OBJECT_0
+        DD = D.copy()
+        for p in self.path.iterdir():
+          if DD.pop(p.name,None) is None: D[p.name]=1; self.untrack(2,p.name)
+        for name in DD: del D[name]; self.untrack(1,name)
+        win32file.FindNextChangeNotification(h)
+    def process_(): # should work, but does not seem to
       import win32file, win32con
       h = win32file.CreateFile(str(self.path),win32con.GENERIC_READ,win32con.FILE_SHARE_READ|win32con.FILE_SHARE_WRITE|win32con.FILE_SHARE_DELETE,None,win32con.OPEN_EXISTING,win32con.FILE_FLAG_BACKUP_SEMANTICS,None)
       while True:

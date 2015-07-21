@@ -521,10 +521,6 @@ The *size* argument gives an indication of the intended use of the API in the cu
       del self.trackers[0][evt], self.trackers[1][tname], self.trackers[2][rname]
       evt.set()
 
-  def watch(self):
-    from sys import platform
-    getattr(self,'watch_'+platform)()
-
   def watch_darwin(self):
     raise NotImplemented()
 
@@ -542,10 +538,10 @@ The *size* argument gives an indication of the intended use of the API in the cu
     nt.start()
 
   def watch_win32(self):
+    import win32file, win32con, win32event
+    D = dict((p.name,1) for p in self.path.iterdir())
+    h = win32file.FindFirstChangeNotification(str(self.path),False,win32con.FILE_NOTIFY_CHANGE_FILE_NAME)
     def process():
-      import win32file, win32con, win32event
-      h = win32file.FindFirstChangeNotification(str(self.path),0,win32con.FILE_NOTIFY_CHANGE_FILE_NAME)
-      D = dict((p.name,1) for p in self.path.iterdir())
       while True:
         r = win32event.WaitForSingleObject(h,win32event.INFINITE)
         assert r == win32con.WAIT_OBJECT_0
@@ -554,9 +550,11 @@ The *size* argument gives an indication of the intended use of the API in the cu
           if DD.pop(p.name,None) is None: D[p.name]=1; self.untrack(2,p.name)
         for name in DD: del D[name]; self.untrack(1,name)
         win32file.FindNextChangeNotification(h)
-    def process_(): # should work, but does not seem to
-      import win32file, win32con
-      h = win32file.CreateFile(str(self.path),win32con.GENERIC_READ,win32con.FILE_SHARE_READ|win32con.FILE_SHARE_WRITE|win32con.FILE_SHARE_DELETE,None,win32con.OPEN_EXISTING,win32con.FILE_FLAG_BACKUP_SEMANTICS,None)
+    threading.Thread(target=process,daemon=True).start()
+
+  def watch_win32_alt(self): # does not seem to work
+    h = win32file.CreateFile(str(self.path),win32con.GENERIC_READ,win32con.FILE_SHARE_READ|win32con.FILE_SHARE_WRITE|win32con.FILE_SHARE_DELETE,None,win32con.OPEN_EXISTING,win32con.FILE_FLAG_BACKUP_SEMANTICS,None)
+    def process():
       while True:
         for action,name in win32file.ReadDirectoryChangesW(h,4096,False,win32con.FILE_NOTIFY_CHANGE_FILE_NAME):
           if action == 2: i=1
@@ -564,6 +562,9 @@ The *size* argument gives an indication of the intended use of the API in the cu
           else: return
           self.untrack(i,name)
     threading.Thread(target=process,daemon=True).start()
+
+  from sys import platform
+  watch = locals()['watch_'+platform]
 
 #==================================================================================================
 # Utilities

@@ -65,8 +65,6 @@ def autoplay(w):
     QtGui.QPixmap.grabWindow(wid).save(str(DIR/'quickui{}.png'.format(next(cnt))))
   actionSave = QtGui.QAction(w.main)
   QtCore.QObject.connect(actionSave, QtCore.SIGNAL("triggered()"), save)
-  Timer(.2,actionSave.trigger).start()
-  Timer(.4,w.actionRelaunch.trigger).start()
-  Timer(.6,actionSave.trigger).start()
-  Timer(.8,w.actionQuit.trigger).start()
+  for t,a in (.2,actionSave),(.4,w.actionRelaunch),(.6,actionSave),(.8,w.actionQuit):
+    Timer(t,a.trigger).start()
 

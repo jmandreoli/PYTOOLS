@@ -8,7 +8,7 @@
 # *** Xerox Research Centre Europe - Grenoble ***
 #
 
-import os, sys, logging, subprocess, collections, shutil, errno
+import os, sys, logging, subprocess, collections, shutil, errno, traceback
 import whoosh.index, whoosh.fields
 from threading import Thread
 from pathlib import Path
@@ -36,6 +36,7 @@ Methods:
     final=whoosh.fields.BOOLEAN(stored=True),
     )
   METASCHEMA = {}
+  # TARGETS MUST BE RESOLVED Path instances (no move) 
   TARGETS = ()
 
   def __init__(self,dirn):
@@ -53,6 +54,132 @@ Methods:
   def __getstate__(self):
     self.ix_ = None
     return self.__dict__
+
+  def process_target(self):
+    self.queue = Queue()
+    self.opsmap = D = collections.defaultdict(lambda: [None,None])
+    with self.ix.searcher() as ixs:
+      for doc in ixs.documents(): fr = doc['src']; D[fr][1] = -1,(doc['oid'],fr)
+    for fpath,filtr in self.TARGETS:
+      for fR in fpath.glob(filtr): D[str(fR)][0] = +1,fR
+    for ops in D.values():
+      if ops[1] is None: self.queue.put(ops[0])
+      elif ops[0] is None: self.queue.put(ops[1])
+    self.watch_target()
+    while True:
+      cbuf = accumulate(self.queue,5)
+      with self.ix.writer() as ixw:
+        for op,x in cbuf:
+          if op<0:
+            oid,fr = x
+            del D[fr]
+            f = (self.META/oid)
+            for ext in ('.wait','.log'):
+              try: f.with_suffix(ext).unlink()
+              except OSError as e:
+                if e.errno!=errno.ENOENT: raise
+            self.metaclear(self.META/oid)
+            n = ixw.delete_by_term('oid',oid)
+            assert n==1, 'unable to delete {}'.format(oid)
+            logger.info('deleted %s',oid)
+          else:
+            fR = x; fr = str(x)
+            with fR.open('rb') as u: x = u.read()
+            sig = md5(x).hexdigest()
+            while True:
+              oid = 'M{:06d}'.format(randrange(0,1000000))
+              f = (self.META/oid).with_suffix('.log')
+              try: n = os.open(str(f),os.O_EXCL|os.O_CREAT,mode=0o666)
+              except OSError as e:
+                if e.errno==errno.EEXIST: continue
+                raise
+              else: os.close(n); break
+            f.with_suffix('.wait').touch()
+            ixw.add_document(src=fr,signature=sig,version=fR.stat().st_mtime,oid=oid,active=False,final=False)
+            D[fr][1] = -1,(oid,fr)
+            logger.info('inserted %s',oid)
+
+  def watch_target(self):
+    import pyinotify
+    def process(e):
+      if e.mask&pyinotify.IN_DELETE:
+        self.queue.put(self.opsmap[e.pathname][1])
+      elif e.mask&pyinotify.IN_MOVE_TO:
+        self.queue.put((+1,Path(e.pathname)))
+    wm = pyinotify.WatchManager()
+    for fpath,filtr in self.TARGETS:
+      wm.add_watch(str(fpath),pyinotify.IN_DELETE|pyinotify.IN_MOVED_TO)
+    nt = pyinotify.ThreadedNotifier(wm,default_proc_fun=process)
+    nt.daemon = True
+    nt.start()
+
+  def process_genmeta(self):
+    with self.ix.searcher() as ixs:
+      L = list((doc['oid'],doc['src']) for doc in ixs.documents(active=False))
+    for oid,fr in L:
+      f = (self.META/oid).with_suffix('.wait')
+      f2 = f.with_suffix('.work')
+      try: f.rename(f2)
+      except OSError as e:
+        if e.errno!=errno.ENOENT: raise
+        continue
+      with f.with_suffix('.log').open('w') as v:
+        sys.stdout = sys.stderr = v
+        try:
+          for op,status in self.metamake(f,fr,self.TIMEOUT):
+            print('{}[{}]:{}'.format(op,oid,status))
+        except:
+          traceback.print_exc()
+          res = '.error'
+        else: res= '.ready'
+        sys.stdout.flush()
+        sys.stderr.flush()
+      f2.rename(f.with_suffix(res))
+
+  def process_meta(self):
+    self.queue_meta = Queue()
+    self.watch_meta()
+    for f in self.META.glob('*.ready'): self.queue_meta.put(f)
+    while True:
+      cbuf = accumulate(self.queue_meta,60)
+      with self.ix.writer() as ixw:
+        with self.ix.searcher() as ixs:
+          for f in cbuf:
+            try: f.unlink()
+            except OSError as e:
+              if e.errno!=errno.ENOENT: raise
+              continue
+            doc = ixs.document(oid=f.name)
+            if doc is None: continue
+            logger.info('indexing %s',doc['oid'])
+            doc.update(self.metasetdoc(self.META/doc['oid'],full=True),active=True)
+            ixw.update_document(**doc)
+        logger.info('committing index')
+      logger.info('optimising index')
+      self.ix.optimize()
+
+  def watch_meta(self):
+    import pyinotify
+    def process(e):
+      p = Path(e.pathname)
+      if p.suffix == '.ready': self.queue_meta.put(p)
+    wm = pyinotify.WatchManager()
+    wm.add_watch(str(self.META),pyinotify.IN_MOVED_TO)
+    nt = pyinotify.ThreadedNotifier(wm,default_proc_fun=process)
+    nt.daemon = True
+    nt.start()
+
+def accumulate(queue,t):
+  cbuf = []
+  while True:
+    while True:
+      while True:
+        try: cbuf.append(queue.get(False))
+        except Empty: break
+      try: cbuf.append(queue.get(False,t))
+      except Empty: break
+    if cbuf: return cbuf
+    cbuf.append(queue.get())
 
 #--------------------------------------------------------------------------------------------------
   def reset(self):

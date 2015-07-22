@@ -18,6 +18,7 @@ from collections.abc import MutableMapping
 from contextlib import contextmanager
 from itertools import islice
 from functools import partial
+from . import type_annotation_autocheck
 
 # IMPORTANT:
 # In order for the foreign key clauses to operate, one must set
@@ -427,23 +428,22 @@ Methods:
         yield (fnam,sticky),fmtv(val)
 
   @staticmethod
-  def Field(trig,sticky=None,fmtk=None,fmtv=None,ID=(lambda x: x)):
+  @type_annotation_autocheck
+  def Field(trig:str,sticky:(bool,set((0,1)))=None,fmtk:(callable,str,type(None))=None,fmtv:(callable,type(None))=None,ID=(lambda x: x)):
     r"""
 A convenience function to specify a :class:`Formatter` field.
 
 :param trig: a regular expression
-:type trig: :class:`re`\|\ :class:`str`
 :param sticky: whether the field should be sticky
-:type sticky: :class:`bool`\|0\|1
-:param fmtk,fmtv: 1-input, 1-output functions
-:type fmtk,fmtv: callable\|\ :class:`NoneType`
+:param fmtk: 1-input, 1-output function
+:param fmtv: 1-input, 1-output function
 :rtype: a triple *fmtkr*, *sticky*, *fmtv*
 
-The field name formatting function *fmtkr* of the result field is defined as follows: its argument is matched against the regular expression *trig*; :const:`None` is returned if the match fails, otherwise, the result of applying *fmtk* to the groups extracted by the regular expression. For example, the following evaluate to true::
+The field name formatting function *fmtkr* of the result field is defined as follows: its argument is matched against the regular expression *trig*; :const:`None` is returned if the match fails, otherwise, the result of applying *fmtk* to the groups extracted by the regular expression. If *fmtk* is unspecified or :const:`None`, identity is assumed, and if *fmtk* is a string, it must be a format string (curly brackets notation) and its formatting function is assumed. If *fmtv* is unspecified or :const:`None`, identity is assumed. For example, the following evaluate to true::
 
    f = Formatter(
     Formatter.Field(r'\.voltage\.(line-\d+)',fmtv=float),
-    Formatter.Field(r'\.name\.line-(\d+)',sticky=True,fmtk='L{}'.format)
+    Formatter.Field(r'\.name\.line-(\d+)',sticky=True,fmtk='L{}')
     )
    T1 = f([('.name.line-6','Tom'),('.voltage.line-6','42.0'),('.voltage.line-23','35')])
    T2 = f([('.name.line-6','Tom'),('.voltage.line-6','45.0'),('.current.line-6','14')])
@@ -452,9 +452,9 @@ The field name formatting function *fmtkr* of the result field is defined as fol
    list(T2) == [(('line-6',False),45.0)]
    list(T3) == [(('L6',True),'Jerry'),(('line-6',False),44.0)]
     """
-    if isinstance(trig,str): trig = re.compile(trig)
-    elif not isinstance(trig,re): raise TypeError('Expected {}|{}, found {}'.format(str,re,type(trig)))
+    trig = re.compile(trig)
     if fmtk is None: fmtk = ID
+    elif isinstance(fmtk,str): fmtk = fmtk.format
     elif not callable(fmtk): raise TypeError('Expected callable, found {}'.format(type(fmtk)))
     def fmtk(nam,patmatch=trig.fullmatch,fmt=fmtk):
       m = patmatch(nam)
@@ -466,7 +466,8 @@ The field name formatting function *fmtkr* of the result field is defined as fol
     return fmtk,sticky,fmtv
 
   @staticmethod
-  def UField(trig,fmts,unit=None,delunit=lambda x:float(x.split()[0]),**ka):
+  @type_annotation_autocheck
+  def UField(trig:str,fmts:str,unit:str=None,delunit=lambda x:float(x.split()[0]),**ka):
     r"""
 A convenience function to specify a :class:`Formatter` field. The following evaluates to true::
 

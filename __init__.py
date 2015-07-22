@@ -252,39 +252,60 @@ A simple utility to browse sliceable objects page per page.
 def type_annotation_autocheck(f):
 #==================================================================================================
   from functools import update_wrapper
-  check = type_annotation_checker(f)
+  import re
+  def addtype(m):
+    t = argcheck.get(m.group(2))
+    if t is None: return m.group(0)
+    return '{}:type {}: {}{}'.format(m.group(1),m.group(2),t.rst,m.group(0))
+  check,argcheck = type_annotation_checker(f)
   def F(*a,**ka):
     check(*a,**ka)
     return f(*a,**ka)
-  return update_wrapper(F,f)
+  F = update_wrapper(F,f)
+  F.__doc__ = re.sub(r'(\s*):param\s+(\w+)\s*:',addtype,F.__doc__)
+  return F
 
 #==================================================================================================
 def type_annotation_checker(f):
 #==================================================================================================
   import inspect
-  def tester(c):
-    if isinstance(c,tuple):
-      if all(isinstance(cc,type) for cc in c):
-        t = lambda v,c=c: isinstance(v,c)
-        t.testname = '|'.join(str(cc) for cc in c)
-      else:
-        T = tuple(tester(cc) for cc in c)
-        t = lambda v,T=T: any(tt(v) for tt in T)
-        t.testname = '|'.join(tt.testname for tt in T)
-    elif isinstance(c,type):
-      t = lambda v,c=c: isinstance(v,c)
-      t.testname = str(c)
+  def nstr(c): return c.__name__ if c.__module__ in ('builtins',f.__module__) else c.__module__+'.'+c.__name__
+  def nrst(c): return ':class:`{}`'.format(nstr(c))
+  def ravel(c):
+    for cc in c:
+      if isinstance(cc,tuple): yield from ravel(cc)
+      else: yield cc
+  def testera(c):
+    if isinstance(c,set):
+      t = lambda v,c=c: v in c
+      t.str = t.rst = str(c)
     elif callable(c):
       t = lambda v,c=c: c(v)
-      t.testname = c.__name__
-    else: raise TypeError('Expected type|callable|tuple thereof')
+      t.str,t.rst = nstr(c),nrst(c)
+    else: raise TypeError('Expected type|set|callable|tuple thereof')
+    return t
+  def tester(c):
+    if isinstance(c,tuple):
+      c = [(cc,(None if isinstance(cc,type) else testera(cc))) for cc in ravel(c)]
+      T = tuple(tt for cc,tt in c if tt is not None)
+      C = tuple(cc for cc,tt in c if tt is None)
+      if C:
+        if T: t = lambda v,C=C,T=T: isinstance(v,C) or any(tt(v) for tt in T)
+        else: t = lambda v,C=C: isinstance(v,C)
+      else: t = lambda v,T=T: any(tt(v) for tt in T)
+      t.str = '|'.join((nstr(cc) if tt is None else tt.str) for cc,tt in c)
+      t.rst = r'\|\ '.join((nrst(cc) if tt is None else tt.rst) for cc,tt in c)
+    elif isinstance(c,type):
+      t = lambda v,c=c: isinstance(v,c)
+      t.str,t.rst = nstr(c),nrst(c)
+    else: t = testera(c)
     return t
   sig = inspect.signature(f)
-  check = dict((k,tester(p.annotation)) for k,p in sig.parameters.items() if p.annotation is not p.empty)
-  def C(*a,**ka):
+  argcheck = dict((k,tester(p.annotation)) for k,p in sig.parameters.items() if p.annotation is not p.empty)
+  def check(*a,**ka):
     b = sig.bind(*a,**ka)
     for k,v in b.arguments.items():
-      c = check.get(k)
-      if c is not None and not c(v): raise TypeError('Argument {} failed to match {}'.format(k,c.testname))
-  return C
+      t = argcheck.get(k)
+      if t is not None and not t(v): raise TypeError('Argument {} failed to match {}'.format(k,t.str))
+  return check, argcheck
 

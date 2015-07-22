@@ -36,8 +36,8 @@ Methods:
     final=whoosh.fields.BOOLEAN(stored=True),
     )
   METASCHEMA = {}
-  # TARGETS MUST BE RESOLVED Path instances (no move) 
-  TARGETS = ()
+  # targets MUST BE RESOLVED Path instances (no move) 
+  targets = ()
 
   def __init__(self,dirn):
     self.path = Path(dirn).resolve()
@@ -56,16 +56,15 @@ Methods:
     return self.__dict__
 
   def process_target(self):
-    queue = Queue()
     D = collections.defaultdict(lambda: [None,None])
     with self.ix.searcher() as ixs:
       for doc in ixs.documents(): fr = doc['src']; D[fr][1] = -1,(doc['oid'],fr)
-    for fpath,filtr in self.TARGETS:
+    queue = self.watch_target(D)
+    for fpath,filtr in self.targets:
       for fR in fpath.glob(filtr): D[str(fR)][0] = +1,fR
     for ops in D.values():
       if ops[1] is None: queue.put(ops[0])
       elif ops[0] is None: queue.put(ops[1])
-    self.watch_target(queue,D)
     while True:
       cbuf = accumulate(queue,15)
       new = []
@@ -74,12 +73,12 @@ Methods:
           if op<0:
             oid,fr = x
             del D[fr]
-            f = (self.pathm/oid)
+            f = self.pathm/oid
             for ext in ('.wait','.work','.ready','.error','.log'):
               try: f.with_suffix(ext).unlink()
               except OSError as e:
                 if e.errno!=errno.ENOENT: raise
-            self.metaclear(self.pathm/oid)
+            self.metaclear(f)
             n = ixw.delete_by_term('oid',oid)
             assert n==1, 'unable to delete {}'.format(oid)
             logger.info('deleted %s',oid)
@@ -96,7 +95,7 @@ Methods:
                 raise
               else: os.close(n); break
             new.append(f)
-            ixw.add_document(src=fr,signature=sig,version=fR.stat().st_mtime,oid=oid,active=False,final=False)
+            ixw.add_document(oid=oid,src=fr,signature=sig,version=fR.stat().st_mtime,active=False,final=False)
             D[fr][1] = -1,(oid,fr)
             logger.info('inserted %s',oid)
       for f in new: f.with_suffix('.wait').touch()
@@ -104,18 +103,19 @@ Methods:
   def watch_target(self,queue,D):
     import pyinotify
     def process(e):
-      if e.mask&pyinotify.IN_DELETE: queue.put(D[e.pathname][1])
-      elif e.mask&pyinotify.IN_MOVE_TO: queue.put((+1,Path(e.pathname)))
+      if e.mask&(pyinotify.IN_DELETE|pyinotify.IN_MOVED_FROM): queue.put(D[e.pathname][1])
+      elif e.mask&pyinotify.IN_MOVED_TO: queue.put((+1,Path(e.pathname)))
+    queue = Queue()
     wm = pyinotify.WatchManager()
-    for fpath,filtr in self.TARGETS:
-      wm.add_watch(str(fpath),pyinotify.IN_DELETE|pyinotify.IN_MOVED_TO)
+    for fpath,filtr in self.targets:
+      wm.add_watch(str(fpath),pyinotify.IN_DELETE|pyinotify.IN_MOVED_FROM|pyinotify.IN_MOVED_TO)
     nt = pyinotify.ThreadedNotifier(wm,default_proc_fun=process)
     nt.daemon = True
     nt.start()
+    return queue
 
   def process_meta(self):
-    queue = Queue()
-    self.watch_meta(queue)
+    queue= self.watch_meta()
     for f in self.pathm.glob('*.ready'): queue.put(f)
     while True:
       cbuf = accumulate(queue,60)
@@ -126,7 +126,7 @@ Methods:
             except OSError as e:
               if e.errno!=errno.ENOENT: raise
               continue
-            doc = ixs.document(oid=f.name)
+            doc = ixs.document(oid=f.name,active=False)
             if doc is None: continue
             logger.info('indexing %s',doc['oid'])
             doc.update(self.metasetdoc(self.pathm/doc['oid'],full=True),active=True)
@@ -140,11 +140,13 @@ Methods:
     def process(e):
       p = Path(e.pathname)
       if p.suffix == '.ready': queue.put(p)
+    queue = Queue()
     wm = pyinotify.WatchManager()
     wm.add_watch(str(self.pathm),pyinotify.IN_MOVED_TO)
     nt = pyinotify.ThreadedNotifier(wm,default_proc_fun=process)
     nt.daemon = True
     nt.start()
+    return queue
 
   def genmeta(self):
     with self.ix.searcher() as ixs:

@@ -128,20 +128,15 @@ The returned factory, when invoked with some arguments, returns a monitor with *
 #--------------------------------------------------------------------------------------------------
 @type_annotation_autocheck
 @monitor
-def iterc_monitor(env,maxiter:int=0,maxcpu:float=float('inf'),logger:logging.Logger=None,show:(float,type(None))=None,fmt:(callable,type(None))=None):
+def iterc_monitor(env,maxiter:int=0,maxcpu:float=float('inf'),logger:(logging.Logger,type(None))=None,show:(float,type(None))=None,fmt:(callable,type(None))=None):
   r"""
 Returns a monitor managing the number of iterations and enabling basic logging.
 
 :param maxiter: stops the loop at that number of iterations (if reached)
-:type maxiter: :class:`int`
 :param maxcpu: stops the loop after that amount of cpu time (if reached)
-:type maxcpu: :class:`float`
 :param show: controls the logging rate (see below)
-:type show: :class:`float`\|\ :class:`NoneType`
 :param fmt: invoked to produce the log string, passed the current iteration count and environment
-:type fmt: callable
 :param logger: the logger to use
-:type logger: :class:`logging.Logger`\|\ :class:`NoneType`
 :param label: name of an attribute of the environment to which the iteration count is assigned at each iteration
 :type label: :class:`str`\|\ :class:`NoneType`
 

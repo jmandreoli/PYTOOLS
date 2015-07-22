@@ -40,15 +40,15 @@ Methods:
   TARGETS = ()
 
   def __init__(self,dirn):
-    self.DIR = Path(dirn).resolve()
-    assert self.DIR.exists()
-    self.META = self.DIR/'metadir'
-    self.INDEX = self.DIR/'inddir'
+    self.path = Path(dirn).resolve()
+    assert self.path.exists()
+    self.pathm = self.path/'metadir'
+    self.pathi = self.path/'inddir'
     self.ix_ = None
 
   @property
   def ix(self):
-    if self.ix_ is None: self.ix_ = whoosh.index.open_dir(str(self.INDEX))
+    if self.ix_ is None: self.ix_ = whoosh.index.open_dir(str(self.pathi))
     return self.ix_
 
   def __getstate__(self):
@@ -56,29 +56,30 @@ Methods:
     return self.__dict__
 
   def process_target(self):
-    self.queue = Queue()
-    self.opsmap = D = collections.defaultdict(lambda: [None,None])
+    queue = Queue()
+    D = collections.defaultdict(lambda: [None,None])
     with self.ix.searcher() as ixs:
       for doc in ixs.documents(): fr = doc['src']; D[fr][1] = -1,(doc['oid'],fr)
     for fpath,filtr in self.TARGETS:
       for fR in fpath.glob(filtr): D[str(fR)][0] = +1,fR
     for ops in D.values():
-      if ops[1] is None: self.queue.put(ops[0])
-      elif ops[0] is None: self.queue.put(ops[1])
-    self.watch_target()
+      if ops[1] is None: queue.put(ops[0])
+      elif ops[0] is None: queue.put(ops[1])
+    self.watch_target(queue,D)
     while True:
-      cbuf = accumulate(self.queue,5)
+      cbuf = accumulate(queue,15)
+      new = []
       with self.ix.writer() as ixw:
         for op,x in cbuf:
           if op<0:
             oid,fr = x
             del D[fr]
-            f = (self.META/oid)
-            for ext in ('.wait','.log'):
+            f = (self.pathm/oid)
+            for ext in ('.wait','.work','.ready','.error','.log'):
               try: f.with_suffix(ext).unlink()
               except OSError as e:
                 if e.errno!=errno.ENOENT: raise
-            self.metaclear(self.META/oid)
+            self.metaclear(self.pathm/oid)
             n = ixw.delete_by_term('oid',oid)
             assert n==1, 'unable to delete {}'.format(oid)
             logger.info('deleted %s',oid)
@@ -88,24 +89,23 @@ Methods:
             sig = md5(x).hexdigest()
             while True:
               oid = 'M{:06d}'.format(randrange(0,1000000))
-              f = (self.META/oid).with_suffix('.log')
+              f = (self.pathm/oid).with_suffix('.log')
               try: n = os.open(str(f),os.O_EXCL|os.O_CREAT,mode=0o666)
               except OSError as e:
                 if e.errno==errno.EEXIST: continue
                 raise
               else: os.close(n); break
-            f.with_suffix('.wait').touch()
+            new.append(f)
             ixw.add_document(src=fr,signature=sig,version=fR.stat().st_mtime,oid=oid,active=False,final=False)
             D[fr][1] = -1,(oid,fr)
             logger.info('inserted %s',oid)
+      for f in new: f.with_suffix('.wait').touch()
 
-  def watch_target(self):
+  def watch_target(self,queue,D):
     import pyinotify
     def process(e):
-      if e.mask&pyinotify.IN_DELETE:
-        self.queue.put(self.opsmap[e.pathname][1])
-      elif e.mask&pyinotify.IN_MOVE_TO:
-        self.queue.put((+1,Path(e.pathname)))
+      if e.mask&pyinotify.IN_DELETE: queue.put(D[e.pathname][1])
+      elif e.mask&pyinotify.IN_MOVE_TO: queue.put((+1,Path(e.pathname)))
     wm = pyinotify.WatchManager()
     for fpath,filtr in self.TARGETS:
       wm.add_watch(str(fpath),pyinotify.IN_DELETE|pyinotify.IN_MOVED_TO)
@@ -113,11 +113,44 @@ Methods:
     nt.daemon = True
     nt.start()
 
-  def process_genmeta(self):
+  def process_meta(self):
+    queue = Queue()
+    self.watch_meta(queue)
+    for f in self.pathm.glob('*.ready'): queue.put(f)
+    while True:
+      cbuf = accumulate(queue,60)
+      with self.ix.writer() as ixw:
+        with self.ix.searcher() as ixs:
+          for f in cbuf:
+            try: f.unlink()
+            except OSError as e:
+              if e.errno!=errno.ENOENT: raise
+              continue
+            doc = ixs.document(oid=f.name)
+            if doc is None: continue
+            logger.info('indexing %s',doc['oid'])
+            doc.update(self.metasetdoc(self.pathm/doc['oid'],full=True),active=True)
+            ixw.update_document(**doc)
+        logger.info('committing index')
+      logger.info('optimising index')
+      self.ix.optimize()
+
+  def watch_meta(self,queue):
+    import pyinotify
+    def process(e):
+      p = Path(e.pathname)
+      if p.suffix == '.ready': queue.put(p)
+    wm = pyinotify.WatchManager()
+    wm.add_watch(str(self.pathm),pyinotify.IN_MOVED_TO)
+    nt = pyinotify.ThreadedNotifier(wm,default_proc_fun=process)
+    nt.daemon = True
+    nt.start()
+
+  def genmeta(self):
     with self.ix.searcher() as ixs:
       L = list((doc['oid'],doc['src']) for doc in ixs.documents(active=False))
     for oid,fr in L:
-      f = (self.META/oid).with_suffix('.wait')
+      f = (self.pathm/oid).with_suffix('.wait')
       f2 = f.with_suffix('.work')
       try: f.rename(f2)
       except OSError as e:
@@ -135,39 +168,6 @@ Methods:
         sys.stdout.flush()
         sys.stderr.flush()
       f2.rename(f.with_suffix(res))
-
-  def process_meta(self):
-    self.queue_meta = Queue()
-    self.watch_meta()
-    for f in self.META.glob('*.ready'): self.queue_meta.put(f)
-    while True:
-      cbuf = accumulate(self.queue_meta,60)
-      with self.ix.writer() as ixw:
-        with self.ix.searcher() as ixs:
-          for f in cbuf:
-            try: f.unlink()
-            except OSError as e:
-              if e.errno!=errno.ENOENT: raise
-              continue
-            doc = ixs.document(oid=f.name)
-            if doc is None: continue
-            logger.info('indexing %s',doc['oid'])
-            doc.update(self.metasetdoc(self.META/doc['oid'],full=True),active=True)
-            ixw.update_document(**doc)
-        logger.info('committing index')
-      logger.info('optimising index')
-      self.ix.optimize()
-
-  def watch_meta(self):
-    import pyinotify
-    def process(e):
-      p = Path(e.pathname)
-      if p.suffix == '.ready': self.queue_meta.put(p)
-    wm = pyinotify.WatchManager()
-    wm.add_watch(str(self.META),pyinotify.IN_MOVED_TO)
-    nt = pyinotify.ThreadedNotifier(wm,default_proc_fun=process)
-    nt.daemon = True
-    nt.start()
 
 def accumulate(queue,t):
   cbuf = []
@@ -187,17 +187,17 @@ def accumulate(queue,t):
 Resets the whole document index and attached meta directory.
     """
 #--------------------------------------------------------------------------------------------------
-    try: shutil.rmtree(str(self.META))
+    try: shutil.rmtree(str(self.pathm))
     except: pass
-    try: shutil.rmtree(str(self.INDEX))
+    try: shutil.rmtree(str(self.pathi))
     except: pass
     self.META.mkdir()
-    self.INDEX.mkdir()
+    self.pathi.mkdir()
     schema = {}
     schema.update(self.SCHEMA)
     schema.update(self.METASCHEMA)
     schema = whoosh.fields.Schema(**schema)
-    whoosh.index.create_in(str(self.INDEX),schema)
+    whoosh.index.create_in(str(self.pathi),schema)
 
 #--------------------------------------------------------------------------------------------------
   def updateentries(self):

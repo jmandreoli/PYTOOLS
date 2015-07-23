@@ -8,7 +8,7 @@
 # *** Xerox Research Centre Europe - Grenoble ***
 #
 
-import os, sys, logging, subprocess, collections, shutil, errno, traceback
+import os, sys, logging, subprocess, collections, shutil, errno, traceback, time
 import whoosh.index, whoosh.fields
 from threading import Thread
 from pathlib import Path
@@ -45,6 +45,12 @@ Methods:
     self.pathm = self.path/'metadir'
     self.pathi = self.path/'inddir'
     self.ix_ = None
+    queue = Queue()
+    metaqueue = Queue()
+    threading.Thread(target=self.process_target,args=(queue,),daemon=True).start()
+    threading.Thread(target=self.process_meta,args=(metaqueue,),daemon=True).start()
+    self.init_target(queue)
+    self.init_meta(metaqueue)
 
   @property
   def ix(self):
@@ -55,11 +61,27 @@ Methods:
     self.ix_ = None
     return self.__dict__
 
-  def process_target(self):
+  def init_target(self,queue):
+    def ckalive(t):
+      nonlocal alive
+      for f in list(self.pathm.glob('*.work')):
+        if time.time()-f.stats().st_mtime>t:
+          try: f.unlink()
+          except OSError as e:
+            if e.errno!=errno.ENOENT: raise
+          self.metaclear(f)
+          queue.put((0,f))
+      alive = threading.Timer(t,ckalive,(t,))
+      alive.daemon = True
+      alive.start()
+    alive = None
+    ckalive(300)
+
+  def process_target(self,queue):
     D = collections.defaultdict(lambda: [None,None])
     with self.ix.searcher() as ixs:
       for doc in ixs.documents(): fr = doc['src']; D[fr][1] = -1,(doc['oid'],fr)
-    queue = self.watch_target(D)
+    self.watch_target(D,queue)
     for fpath,filtr in self.targets:
       for fR in fpath.glob(filtr): D[str(fR)][0] = +1,fR
     for ops in D.values():
@@ -82,7 +104,7 @@ Methods:
             n = ixw.delete_by_term('oid',oid)
             assert n==1, 'unable to delete {}'.format(oid)
             logger.info('deleted %s',oid)
-          else:
+          elif op>0:
             fR = x; fr = str(x)
             with fR.open('rb') as u: x = u.read()
             sig = md5(x).hexdigest()
@@ -98,25 +120,26 @@ Methods:
             ixw.add_document(oid=oid,src=fr,signature=sig,version=fR.stat().st_mtime,active=False,final=False)
             D[fr][1] = -1,(oid,fr)
             logger.info('inserted %s',oid)
+          else: new.append(x)
       for f in new: f.with_suffix('.wait').touch()
+      self.launch(len(new))
 
-  def watch_target(self,queue,D):
+  def watch_target(self,D,queue):
     import pyinotify
     def process(e):
       if e.mask&(pyinotify.IN_DELETE|pyinotify.IN_MOVED_FROM): queue.put(D[e.pathname][1])
       elif e.mask&pyinotify.IN_MOVED_TO: queue.put((+1,Path(e.pathname)))
-    queue = Queue()
     wm = pyinotify.WatchManager()
     for fpath,filtr in self.targets:
       wm.add_watch(str(fpath),pyinotify.IN_DELETE|pyinotify.IN_MOVED_FROM|pyinotify.IN_MOVED_TO)
     nt = pyinotify.ThreadedNotifier(wm,default_proc_fun=process)
     nt.daemon = True
     nt.start()
-    return queue
 
-  def process_meta(self):
-    queue= self.watch_meta()
-    for f in self.pathm.glob('*.ready'): queue.put(f)
+  def init_meta(self,queue):
+    for f in list(self.pathm.glob('*.ready')): queue.put(f)
+
+  def process_meta(self,queue):
     while True:
       cbuf = accumulate(queue,60)
       with self.ix.writer() as ixw:
@@ -135,22 +158,20 @@ Methods:
       logger.info('optimising index')
       self.ix.optimize()
 
-  def watch_meta(self,queue):
-    import pyinotify
-    def process(e):
-      p = Path(e.pathname)
-      if p.suffix == '.ready': queue.put(p)
-    queue = Queue()
-    wm = pyinotify.WatchManager()
-    wm.add_watch(str(self.pathm),pyinotify.IN_MOVED_TO)
-    nt = pyinotify.ThreadedNotifier(wm,default_proc_fun=process)
-    nt.daemon = True
-    nt.start()
-    return queue
-
   def genmeta(self):
+    def mkalive(t):
+      nonlocal alive
+      if current is not None:
+        try: current.touch()
+        except: pass
+      alive = threading.Timer(t,mkalive,(t,))
+      alive.daemon = True
+      alive.start()
     with self.ix.searcher() as ixs:
       L = list((doc['oid'],doc['src']) for doc in ixs.documents(active=False))
+    current = None
+    alive = None
+    mkalive(60)
     for oid,fr in L:
       f = (self.pathm/oid).with_suffix('.wait')
       f2 = f.with_suffix('.work')
@@ -158,6 +179,8 @@ Methods:
       except OSError as e:
         if e.errno!=errno.ENOENT: raise
         continue
+      current = f2
+      f2.touch()
       with f.with_suffix('.log').open('w') as v:
         sys.stdout = sys.stderr = v
         try:
@@ -170,6 +193,7 @@ Methods:
         sys.stdout.flush()
         sys.stderr.flush()
       f2.rename(f.with_suffix(res))
+      current = None
 
 def accumulate(queue,t):
   cbuf = []
@@ -182,132 +206,6 @@ def accumulate(queue,t):
       except Empty: break
     if cbuf: return cbuf
     cbuf.append(queue.get())
-
-#--------------------------------------------------------------------------------------------------
-  def reset(self):
-    """
-Resets the whole document index and attached meta directory.
-    """
-#--------------------------------------------------------------------------------------------------
-    try: shutil.rmtree(str(self.pathm))
-    except: pass
-    try: shutil.rmtree(str(self.pathi))
-    except: pass
-    self.META.mkdir()
-    self.pathi.mkdir()
-    schema = {}
-    schema.update(self.SCHEMA)
-    schema.update(self.METASCHEMA)
-    schema = whoosh.fields.Schema(**schema)
-    whoosh.index.create_in(str(self.pathi),schema)
-
-#--------------------------------------------------------------------------------------------------
-  def updateentries(self):
-    """
-Inserts the new entries into the index and deletes old ones.
-    """
-#--------------------------------------------------------------------------------------------------
-    D = collections.defaultdict(lambda: [None,None])
-    with self.ix.searcher() as ixs:
-      for doc in ixs.documents(): D[doc['src']][1] = doc['oid']
-    for fpath,filtr in self.TARGETS:
-      for fr in fpath.glob(filtr): D[str(fr)][0] = fr
-    Ladd, Ldel = [],[]
-    for fr,oid in D.values():
-      if fr is None: Ldel.append(oid)
-      elif oid is None: Ladd.append(fr)
-    with self.ix.writer() as ixw:
-      for oid in Ldel:
-        f = (self.META/oid)
-        for ext in ('.wait','.log'):
-          try: f.with_suffix(ext).unlink()
-          except OSError as e:
-            if e.errno!=errno.ENOENT: raise
-        self.metaclear(self.META/oid)
-        n = ixw.delete_by_term('oid',oid)
-        assert n==1, 'unable to delete {}'.format(oid)
-        logger.info('deleted %s',oid)
-      for fr in Ladd:
-        try:
-          with fr.open('rb') as u: x = u.read()
-        except OSError as e:
-          logger.warn('error opening %s: %s',fr,e.stderror)
-          continue
-        sig = md5(x).hexdigest()
-        while True:
-          oid = 'M{:06d}'.format(randrange(0,1000000))
-          f = (self.META/oid).with_suffix('.log')
-          try: n = os.open(str(f),os.O_EXCL|os.O_CREAT,mode=0o666)
-          except OSError as e:
-            if e.errno==errno.EEXIST: continue
-            raise
-          else: os.close(n); break
-        f.with_suffix('.wait').touch()
-        ixw.add_document(src=str(fr),signature=sig,version=fr.stat().st_mtime,oid=oid,active=False,final=False)
-        logger.info('inserted %s',oid)
-
-#--------------------------------------------------------------------------------------------------
-  def updatemeta(self):
-#--------------------------------------------------------------------------------------------------
-    def worker(w):
-      label = '[{}#{}]'.format(w.uname().nodename,w.getpid())
-      logger.info('metaprocess%s.start',label)
-      for r in IterableProxy(w.metaprocess(self)): logger.info('metaprocess%s.%s',label,r)
-      logger.info('metaprocess%s.stop',label)
-    ws = self.engines(len(tuple(self.META.glob('*.wait'))))
-    assert ws, 'Unable to launch enough metaprocesses'
-    for w in ws:
-      w.declare(metaprocess,static=False)
-      w.declare(os.getpid)
-      w.declare(os.uname)
-    L = tuple(Thread(target=worker,args=(w,)) for w in ws)
-    for t in L: t.start()
-    for t in L: t.join()
-    ws.shutdown()
-
-  def metaprocess(self):
-    with self.ix.searcher() as ixs:
-      L = list((doc['oid'],doc['src']) for doc in ixs.documents(active=False))
-    for oid,fr in L:
-      f = (self.META/oid).with_suffix('.wait')
-      try: f.unlink()
-      except OSError as e:
-        if e.errno!=errno.ENOENT: raise
-        continue
-      with f.with_suffix('.log').open('w') as v:
-        sys.stderr = v
-        for op,status in self.metamake(f,fr,self.TIMEOUT): yield '{}[{}]:{}'.format(op,oid,status)
-
-#--------------------------------------------------------------------------------------------------
-  def updateindex(self,newdocs=None):
-    """
-Updates all the index entries with newly computed metadata.
-    """
-#--------------------------------------------------------------------------------------------------
-    def newdocs_initial():
-      with self.ix.searcher() as ixs:
-        for doc in ixs.documents(active=False):
-          doc.update(self.metasetdoc(self.META/doc['oid'],full=True),active=True)
-          yield doc
-    if newdocs is None: newdocs = newdocs_initial()
-    with self.ix.writer() as ixw:
-      for doc in newdocs:
-        logger.info('indexing %s',doc['oid'])
-        ixw.update_document(**doc)
-      logger.info('committing index')
-    logger.info('optimising index')
-    self.ix.optimize()
-
-#--------------------------------------------------------------------------------------------------
-  def update(self):
-    """
-Update all.
-    """
-#--------------------------------------------------------------------------------------------------
-    with LogStep(logger,'update',showdate=True):
-      with LogStep(logger,'update.entries'): self.updateentries()
-      with LogStep(logger,'update.meta'): self.updatemeta()
-      with LogStep(logger,'update.index'): self.updateindex()
 
 #--------------------------------------------------------------------------------------------------
   def load(self,path=None):

@@ -3,7 +3,7 @@
 
 # You can set these variables from the command line.
 SPHINXOPTS    =
-SPHINXBUILD   = /opt/Tools/anaconda/3/bin/sphinx-build
+SPHINXBUILD   = 
 PAPER         =
 BUILDDIR      = _build
 

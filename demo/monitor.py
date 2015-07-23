@@ -33,6 +33,7 @@ def delay_monitor(env,delay:float=1.):
 @monitor
 def display_monitor(env,targetf:callable,bounds):
   # assumes targetf returns a list of coordinate pairs, and displays the corresponding plot
+  from matplotlib import use; use('Qt4Agg')
   from matplotlib.pyplot import figure, show
   env.fig = fig = figure(figsize=(10,8))
   ax = fig.add_subplot(1,1,1)

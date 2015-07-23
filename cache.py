@@ -16,6 +16,7 @@ from pathlib import Path
 from functools import update_wrapper
 from collections import namedtuple
 from collections.abc import MutableMapping
+from . import SQliteNew
 
 # Data associated with each cell is kept in a separate file
 # in the same folder as the database
@@ -116,23 +117,12 @@ Generates a :class:`CacheDB` object.
     with lock:
       self = listing.get(path)
       if self is None:
-        if not path.is_dir(): raise WrongCacheFolderException(path,'not a directory')
         self = super(CacheDB,cls).__new__(cls)
         self.path = path
-        indp = path/'index.db'
-        self.dbpath = str(indp)
-        if indp.exists():
-          if not indp.is_file(): raise WrongCacheFolderException(path,'index is not a file')
-          with sqlite3.connect(self.dbpath) as conn:
-            try: schema, = conn.execute('SELECT schema FROM Version').fetchone()
-            except: raise WrongCacheFolderException(path,'index is not a cache index')
-          if schema!=SCHEMA: raise WrongCacheFolderException(path,'index has a version conflict')
-        elif any(path.iterdir()): raise WrongCacheFolderException(path,'missing index in non empty directory')
-        else:
-          with sqlite3.connect(self.dbpath) as conn:
-            for sql in SCHEMA.split('\n\n'): conn.execute(sql.strip())
-            conn.execute('CREATE TABLE Version ( schema TEXT )')
-            conn.execute('INSERT INTO Version (schema) VALUES (?)',(SCHEMA,))
+        self.dbpath = str(path/'index.db')
+        check = (lambda:'cannot create index in non empty folder') if any(path.iterdir()) else (lambda:None)
+        r = SQliteNew(self.dbpath,SCHEMA,check)
+        if r is not None: raise WrongCacheFolderException(path,r)
         self.storage = Storage(self)
         listing[path] = self
     return self
@@ -522,7 +512,16 @@ The *size* argument gives an indication of the intended use of the API in the cu
       evt.set()
 
   def watch_darwin(self):
-    raise NotImplemented()
+    import fsevents
+    def process(e):
+      if e.mask&fsevents.IN_DELETE: i=1
+      elif e.mask&fsevents.IN_MOVED_TO: i=2
+      else: return
+      self.untrack(i,os.path.basename(e.name))
+    ob = fsevents.Observer()
+    ob.schedule(fsevents.Stream(process,str(self.path),file_events=True))
+    ob.daemon = True
+    ob.start()
 
   def watch_linux(self):
     import pyinotify

@@ -1,0 +1,8 @@
+TARGET := cache.out chrono.out monitor.out mplext.out quickui.out
+PYTHONPATH :=
+PYTHON :=
+
+all: ${TARGET}
+
+%.out: %.py
+export PYTHONPATH=${PYTHONPATH} ; ${PYTHON} make.py $(patsubst %.py,%,$<)

@@ -18,7 +18,7 @@ from collections.abc import MutableMapping
 from contextlib import contextmanager
 from itertools import islice
 from functools import partial
-from . import type_annotation_autocheck
+from . import type_annotation_autocheck, SQliteHandler, SQliteStack, SQliteNew
 
 # IMPORTANT:
 # In order for the foreign key clauses to operate, one must set
@@ -138,22 +138,12 @@ Generates a :class:`ChronoDB` object.
     with lock:
       self = listing.get(path)
       if self is None:
-        if not path.is_dir(): raise WrongChronoFolderException(path,'not a directory')
         self = super(ChronoDB,cls).__new__(cls)
         self.path = path
-        indp = path/'index.db'
-        if indp.exists():
-          if not indp.is_file(): raise WrongChronoFolderException(path,'index is not a file')
-          with sqlite3.connect(str(indp)) as conn:
-            try: schema, = conn.execute('SELECT schema FROM Version').fetchone()
-            except: raise WrongChronoFolderException(path,'index is not a ChronoDB index')
-          if schema!=SCHEMA: raise WrongChronoFolderException(path,'index has a version conflict')
-        elif any(path.iterdir()): raise WrongChronoFolderException(path,'missing index in non empty directory')
-        else:
-          with sqlite3.connect(str(indp)) as conn:
-            for sql in SCHEMA.split('\n\n'): conn.execute(sql.strip())
-            conn.execute('CREATE TABLE Version ( schema TEXT )')
-            conn.execute('INSERT INTO Version (schema) VALUES (?)',(SCHEMA,))
+        dbpath = str(path/'index.db')
+        check = (lambda:'cannot create index in non empty folder') if any(path.iterdir()) else (lambda:None)
+        r = SQliteNew(dbpath,SCHEMA,check)
+        if r is not None: raise WrongCacheFolderException(path,r)
         listing[path] = self
     return self
   
@@ -514,32 +504,6 @@ Returns an iterator which enemerates the elements of *it* at regular real time i
     nextt += period
     d = nextt-(time.perf_counter()-reft)
     if d>0: time.sleep(d)
-
-#--------------------------------------------------------------------------------------------------
-class SQliteHandler (logging.Handler):
-  r"""
-A logging handler which writes the log messages in a database.
-  """
-#--------------------------------------------------------------------------------------------------
-  def __init__(self,conn,*a,**ka):
-    self.conn = conn
-    super(SQliteHandler,self).__init__(*a,**ka)
-  def emit(self,rec):
-    self.format(rec)
-    self.conn.execute('INSERT INTO Log (level,created,module,funcName,message) VALUES (?,?,?,?,?)',(rec.levelno,rec.created,rec.module,rec.funcName,rec.message))
-    self.conn.commit()
-
-#--------------------------------------------------------------------------------------------------
-class SQliteStack:
-#--------------------------------------------------------------------------------------------------
-  contents = {}
-  def __init__(self): self.content = []
-  def step(self,*a): self.content.append(a)
-  def finalize(self): n = id(self.content); self.contents[n] = self.content; return n
-  @staticmethod
-  def setup(conn,name,n):
-    conn.create_aggregate(name,n,SQliteStack)
-    return SQliteStack.contents.pop
 
 #--------------------------------------------------------------------------------------------------
 def html_table(irows,fmts,hdrs=None,title=None):

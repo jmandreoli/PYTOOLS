@@ -1,4 +1,5 @@
 from collections.abc import MutableMapping
+import logging
 
 #==================================================================================================
 class ondemand (object):
@@ -247,6 +248,62 @@ A simple utility to browse sliceable objects page per page.
   assert start>=1 and start<=P
   if P==1: display(D)
   else: interact((lambda page=start:display(D[(page-1)*pgsize:page*pgsize])),page=(1,P))
+
+#==================================================================================================
+class SQliteHandler (logging.Handler):
+  r"""
+A logging handler which writes the log messages in a database.
+  """
+#==================================================================================================
+  def __init__(self,conn,*a,**ka):
+    self.conn = conn
+    super(SQliteHandler,self).__init__(*a,**ka)
+  def emit(self,rec):
+    self.format(rec)
+    self.conn.execute('INSERT INTO Log (level,created,module,funcName,message) VALUES (?,?,?,?,?)',(rec.levelno,rec.created,rec.module,rec.funcName,rec.message))
+    self.conn.commit()
+
+#==================================================================================================
+class SQliteStack:
+  r"""
+A aggregation function which simply collects results in a list, for use with a SQlite database. Example::
+
+   with sqlite3.connect('/path/to/db') as conn:
+     rstack = SQliteStack(conn,'stack',2)
+     for school,x in conn.execute('SELECT school,stack(age,height) FROM DataTable GROUP BY school'):
+       x = rstack(x)
+       print(school,x)
+
+prints pairs *school*, *L* where *L* is a list of pairs *age*, *height*.
+  """
+#==================================================================================================
+  contents = {}
+  def __init__(self): self.content = []
+  def step(self,*a): self.content.append(a)
+  def finalize(self): n = id(self.content); self.contents[n] = self.content; return n
+  @staticmethod
+  def setup(conn,name,n):
+    conn.create_aggregate(name,n,SQliteStack)
+    return SQliteStack.contents.pop
+
+#==================================================================================================
+def SQliteNew(path,schema,check=lambda:None):
+  r"""
+Makes sure the file at *path* is a SQlite3 database with schema exactly equal to *schema*. Returns :const:`None` if successful, otherwise a :class:`str` instance describing the problem. If *check* is present, it must be a callable with no argument, invoked just before the creation of the database (when it does not already exist). If it returns anything but :const:`None`, the creation is aborted.
+  """
+#==================================================================================================
+  import sqlite3
+  with sqlite3.connect(path,isolation_level='EXCLUSIVE') as conn:
+    if conn.execute('SELECT * FROM sqlite_master').fetchone() is None:
+      c = check()
+      if c is not None: return c
+      for sql in schema.split('\n\n'): conn.execute(sql.strip())
+      conn.execute('CREATE TABLE Version ( schema TEXT )')
+      conn.execute('INSERT INTO Version (schema) VALUES (?)',(schema,))
+    else:
+      try: s, = conn.execute('SELECT schema FROM Version').fetchone()
+      except: return 'non conformant index'
+      if s!=schema: return 'index has a version conflict'
 
 #==================================================================================================
 def type_annotation_autocheck(f):

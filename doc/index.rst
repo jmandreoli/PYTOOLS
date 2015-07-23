@@ -17,8 +17,15 @@ Contents:
    monitor.rst
    chrono.rst
    docstack.rst
-   remote.rst
    taskmanager.rst
+
+Available types and functions
+-----------------------------
+
+.. automodule:: myutil
+   :members:
+   :member-order: bysource
+   :show-inheritance:
 
 Indices and tables
 ==================

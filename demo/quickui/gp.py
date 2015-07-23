@@ -180,7 +180,7 @@ def runui():
             ('nsample',dict(accept=Q.i,tooltip='Number of test samples'),Q.Cbase.LinScalar(vtype=int,vmin=50,vmax=500)),
             ('logscale',dict(accept=Q.i,sel=None,tooltip='Check for x-axis in logscale'),Q.Cbase.Boolean(),),
             )
-    launchui(config)
+    launchui(config,width=800)
 
 if __name__=='__main__':
     logging.basicConfig(level=logging.INFO)

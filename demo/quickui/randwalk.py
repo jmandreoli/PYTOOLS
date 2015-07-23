@@ -28,7 +28,7 @@ class RandomWalk (object):
         axnorm.set_title('Distance to the origin')
         time = arange(N)
         a_norm = axnorm.plot((),(),c='k')[0]
-        clock = axnorm.text(.05,.95,'*',ha='center',transform=ax.transAxes,bbox=dict(edgecolor='k',facecolor='none'))
+        clock = axnorm.text(.05,.95,'*',ha='center',transform=ax.transAxes,bbox=dict(edgecolor='k',facecolor='none'),fontsize='x-small')
         btrip = arrround(abs(self.trip))
         bnorm = arrround(self.norm)
         def disp(t):
@@ -136,7 +136,7 @@ def runui():
         view.figure.set_size_inches((8,12),forward=True)
         view.make_grid(2,1)
         return view[0,0].make_axes(),view[1,0].make_axes()
-    launchui(config,axes=axes)
+    launchui(config,axes=axes,width=600)
 
 #--------------------------------------------------------------------------------------------------
 

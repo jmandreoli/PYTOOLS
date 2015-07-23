@@ -3,6 +3,6 @@ chrono.dir/*
 docstack.dir/*
 *.out
 *.png
-*.pck
+*.qcfg
 *.mp4
 

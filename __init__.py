@@ -4,29 +4,19 @@ import logging
 #==================================================================================================
 class ondemand (object):
   """
-Use as a decorator to declare a computable attribute in a class
-which is computed only once (cached value).
+Use as a decorator to declare, in a class, a computable attribute which is computed only once (its value is then cached). Example::
 
-Example:
-
-class c:
-  def __init__(self,u):
-    self.u = u
-  @ondemand
-  def att(self):
-    print 'Some complex computation here'
-    return self.u+1
-x = c(3)
-x.att
->>> Some complex computation here
->>> 4
-x.att
->>> 4
-x.u=6
-x.att
->>> 4
-c.att
->>> <....ondemand object at 0x...>
+   class c:
+     def __init__(self,u): self.u = u
+     @ondemand
+     def att(self): print('Computing att...'); return self.u+1
+   x = c(3); print(x.att)
+   #>>> Computing att...
+   #>>> 4
+   print(x.att)
+   #>>> 4
+   x.u = 6; print(x.att)
+   #>>> 4
   """
 #==================================================================================================
 
@@ -34,10 +24,10 @@ c.att
 
   def __init__(self,get):
     if get.__code__.co_argcount != 1:
-      raise Exception('OnDemand attribute must have a single argument')
+      raise Exception('ondemand attribute definition must be a function with a single argument')
     self.get = get
 
-  def __get__(self,instance,owner):
+  def __get__(self,instance,typ):
     if instance is None:
       return self
     else:
@@ -48,21 +38,16 @@ c.att
 #==================================================================================================
 class odict (MutableMapping):
   """
-Objects of this class act as dict objects, except their keys are also attributes.
+Objects of this class act as dict objects, except their keys are also attributes. Keys must be strings and must not override dict standard methods, but no check is performed. Example::
 
-Example:
-
-x = odict(a=3,b=6)
-x.a
->>> 3
-x['a']
->>> 3
-del x.a
-x
->>> {'b':6}
-x.b += 7
-x['b']
->>> 13
+   x = odict(a=3,b=6); print(x.a)
+   #>>> 3
+   print(x['a'])
+   #>>> 3
+   del x.a; print(x)
+   #>>> {'b':6}
+   x.b += 7; print(x['b'])
+   #>>> 13
   """
 #==================================================================================================
   def __init__(self,**ka): self.__dict__ = ka
@@ -75,13 +60,178 @@ x['b']
   def __repr__(self): return repr(self.__dict__)
 
 #==================================================================================================
-def set_qtbinding(b=None):
+def zipaxes(L,fig,sharex=False,sharey=False,**ka):
   """
-:param b: name of the qt interface
-:type b: ":const:`pyside`" | ":const:`pyqt4`"
+Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. The axes are spread more or less uniformly.
 
-Declares a module "qtbinding" in the package of this file
-equivalent to PySide or PyQt4 (depending on the value of *b*\ ).
+:param fig: a figure
+:type fig: :class:`matplotlib.figure.Figure`
+:param L: an arbitrary sequence (must support :func:`len`)
+:param sharex: whether all the axes share the same x-axis scale
+:type sharex: :class:`bool`
+:param sharey: whether all the axes share the same y-axis scale
+:type sharey: :class:`bool`
+:param ka: passed to :meth:`add_subplot` generating new axes
+  """
+#==================================================================================================
+  from math import sqrt,ceil
+  N = len(L)
+  nc = int(ceil(sqrt(N)))
+  nr = int(ceil(N/nc))
+  axrefx,axrefy = None,None
+  for i,o in enumerate(L,1):
+    ax = fig.add_subplot(nr,nc,i,sharex=axrefx,sharey=axrefy,**ka)
+    if sharex and axrefx is None: axrefx = ax
+    if sharey and axrefy is None: axrefy = ax
+    yield o,ax
+
+#==================================================================================================
+def browse(D,start=1,pgsize=10):
+  """
+A simple utility to browse sliceable objects page per page in IPython.
+  """
+#==================================================================================================
+  from IPython.display import display
+  from IPython.html.widgets.interaction import interact
+  P = (len(D)-1)//pgsize + 1
+  assert start>=1 and start<=P
+  if P==1: display(D)
+  else: interact((lambda page=start:display(D[(page-1)*pgsize:page*pgsize])),page=(1,P))
+
+#==================================================================================================
+class SQliteHandler (logging.Handler):
+  r"""
+A logging handler which writes the log messages in a database.
+
+:param conn: a connection to the database
+  """
+#==================================================================================================
+  def __init__(self,conn,*a,**ka):
+    self.conn = conn
+    super(SQliteHandler,self).__init__(*a,**ka)
+  def emit(self,rec):
+    self.format(rec)
+    self.conn.execute('INSERT INTO Log (level,created,module,funcName,message) VALUES (?,?,?,?,?)',(rec.levelno,rec.created,rec.module,rec.funcName,rec.message))
+    self.conn.commit()
+
+#==================================================================================================
+class SQliteStack:
+  r"""
+A aggregation function which simply collects results in a list, for use with a SQlite database. Example::
+
+   with sqlite3.connect('/path/to/db') as conn:
+     rstack = SQliteStack(conn,'stack',2)
+     for school,x in conn.execute('SELECT school,stack(age,height) FROM DataTable GROUP BY school'):
+       x = rstack(x)
+       print(school,x)
+
+prints pairs *school*, *L* where *L* is a list of pairs *age*, *height*.
+  """
+#==================================================================================================
+  contents = {}
+  def __init__(self): self.content = []
+  def step(self,*a): self.content.append(a)
+  def finalize(self): n = id(self.content); self.contents[n] = self.content; return n
+  @staticmethod
+  def setup(conn,name,n):
+    conn.create_aggregate(name,n,SQliteStack)
+    return SQliteStack.contents.pop
+
+#==================================================================================================
+def SQliteNew(path,schema,check=lambda:None):
+  r"""
+Makes sure the file at *path* is a SQlite3 database with schema exactly equal to *schema*. Returns :const:`None` if successful, otherwise a :class:`str` instance describing the problem. If *check* is present, it must be a callable with no argument, invoked just before the creation of the database (when it does not already exist). If it returns anything but :const:`None`, the creation is aborted.
+  """
+#==================================================================================================
+  import sqlite3
+  if isinstance(schema,str): schema = list(sql.strip() for sql in schema.split('\n\n'))
+  with sqlite3.connect(path,isolation_level='EXCLUSIVE') as conn:
+    S = list(sql for sql, in conn.execute('SELECT sql FROM sqlite_master WHERE name NOT LIKE \'sqlite%\''))
+    if S:
+      return None if S==schema else 'index has a version conflict'
+    else:
+      c = check()
+      if c is not None: return c
+      for sql in schema: conn.execute(sql)
+
+#==================================================================================================
+def type_annotation_autocheck(f):
+  r"""
+Decorator which uses type annotations in the signature of *f* to include a type-check in it. Each argument in the signature can be annotated by
+
+* a type
+* a set, taken to be an enumeration of all the allowed values
+* a callable, passed the value of the argument and expected to return a boolean indicating whether it is valid
+* a tuple thereof, interpreted disjunctively
+
+The doc string of function *f* is also modified so that each sphinx ``:param:`` declaration is augmented with the corresponding ``:type:`` declaration (whenever possible).
+  """
+#==================================================================================================
+  from functools import update_wrapper
+  import re
+  def addtype(m):
+    t = argcheck.get(m.group(2))
+    if t is None: return m.group(0)
+    return '{}:type {}: {}{}'.format(m.group(1),m.group(2),t.rst,m.group(0))
+  check,argcheck = type_annotation_checker(f)
+  def F(*a,**ka):
+    check(*a,**ka)
+    return f(*a,**ka)
+  F = update_wrapper(F,f)
+  F.__doc__ = re.sub(r'(\s*):param\s+(\w+)\s*:',addtype,F.__doc__)
+  return F
+
+#==================================================================================================
+def type_annotation_checker(f):
+#==================================================================================================
+  import inspect
+  def nstr(c): return c.__qualname__ if c.__module__ in ('builtins',f.__module__) else c.__module__+'.'+c.__qualname__
+  def nrst(c): return ':class:`{}`'.format(nstr(c))
+  def ravel(c):
+    for cc in c:
+      if isinstance(cc,tuple): yield from ravel(cc)
+      else: yield cc
+  def testera(c):
+    if isinstance(c,set):
+      t = lambda v,c=c: v in c
+      t.str = t.rst = str(c)
+    elif callable(c):
+      t = lambda v,c=c: c(v)
+      t.str,t.rst = nstr(c),nrst(c)
+    else: raise TypeError('Expected type|set|callable|tuple thereof')
+    return t
+  def tester(c):
+    if isinstance(c,tuple):
+      c = [(cc,(None if isinstance(cc,type) else testera(cc))) for cc in ravel(c)]
+      T = tuple(tt for cc,tt in c if tt is not None)
+      C = tuple(cc for cc,tt in c if tt is None)
+      if C:
+        if T: t = lambda v,C=C,T=T: isinstance(v,C) or any(tt(v) for tt in T)
+        else: t = lambda v,C=C: isinstance(v,C)
+      else: t = lambda v,T=T: any(tt(v) for tt in T)
+      t.str = '|'.join((nstr(cc) if tt is None else tt.str) for cc,tt in c)
+      t.rst = r'\|\ '.join((nrst(cc) if tt is None else tt.rst) for cc,tt in c)
+    elif isinstance(c,type):
+      t = lambda v,c=c: isinstance(v,c)
+      t.str,t.rst = nstr(c),nrst(c)
+    else: t = testera(c)
+    return t
+  sig = inspect.signature(f)
+  argcheck = dict((k,tester(p.annotation)) for k,p in sig.parameters.items() if p.annotation is not p.empty)
+  def check(*a,**ka):
+    b = sig.bind(*a,**ka)
+    for k,v in b.arguments.items():
+      t = argcheck.get(k)
+      if t is not None and not t(v): raise TypeError('Argument {} failed to match {}'.format(k,t.str))
+  return check, argcheck
+
+#==================================================================================================
+def set_qtbinding(b=None):
+  r"""
+:param b: name of the qt interface
+:type b: 'pyside'\|\ 'pyqt4'
+
+Declares a module :mod:`pyqt` in the package of this file equivalent to :mod:`PySide` or :mod:`PyQt4` (depending on the value of *b*).
   """
 #==================================================================================================
   import sys
@@ -118,9 +268,9 @@ equivalent to PySide or PyQt4 (depending on the value of *b*\ ).
 def gitcheck(pkgname):
   """
 :param pkgname: full name of a package
-:type pkgname: :const:`str`
+:type pkgname: :class:`str`
 
-Assumes that *pkgname* is a package contained in a git repository which is a local, passive copy of a remote repository. Checks that the package is up-to-date.
+Assumes that *pkgname* is a package contained in a git repository which is a local, passive copy of a remote repository. Checks that the package is up-to-date, and updates it if needed using the git pull operation.
   """
 #==================================================================================================
   from git import Repo, InvalidGitRepositoryError
@@ -142,9 +292,9 @@ Assumes that *pkgname* is a package contained in a git repository which is a loc
 def gitsetcmd(git):
   """
 :param git: git executable path
-:type git: :const:`str`
+:type git: :class:`str`
 
-Sets the git command to *git* in module :const:`git`\ .
+Sets the git command to *git* in module :mod:`git`.
   """
 #==================================================================================================
   from git.cmd import Git
@@ -154,7 +304,7 @@ Sets the git command to *git* in module :const:`git`\ .
 def infosql(table=None,full=False,driver=None):
   """
 :param table: A sql table name
-:type table: :class:`str` | :class:`NoneType`
+:type table: :class:`str`\|\ :class:`NoneType`
 
 Returns the SQL query needed to extract information on *table*, if specified, or on all the tables otherwise.
   """
@@ -212,157 +362,4 @@ class sqlite3 (Infosql):
   @classmethod
   def column(cls,table,full):
     return 'PRAGMA table_info({})'.format(table)
-
-#==================================================================================================
-def addaxes(fig,L,sharex=False,**ka):
-  """
-:param fig: a figure
-:type fig: :class:`matplotlib.figure.Figure`
-:param L: an arbitrary sequence (must support :func:`len`\)
-:param sharex: if :const:`True`\, all the axes share the same x-axis scale
-:type sharex: :class:`bool`
-:param **ka: passed to :meth:`add_subplot` generating new axes
-
-Yields an axes on *fig* for each item in sequence *L*\. The axes are spread more or less uniformly.
-  """
-#==================================================================================================
-  from numpy import sqrt,ceil
-  N = len(L)
-  nc = int(ceil(sqrt(N)))
-  nr = int(ceil(N/nc))
-  axref = None
-  for i,x in enumerate(L,1):
-    ax = fig.add_subplot(nr,nc,i,sharex=axref,**ka)
-    if sharex and axref is None: axref = ax
-    yield x,ax
-
-#==================================================================================================
-def browse(D,start=1,pgsize=10):
-  """
-A simple utility to browse sliceable objects page per page.
-  """
-#==================================================================================================
-  from IPython.display import display
-  from IPython.html.widgets.interaction import interact
-  P = (len(D)-1)//pgsize + 1
-  assert start>=1 and start<=P
-  if P==1: display(D)
-  else: interact((lambda page=start:display(D[(page-1)*pgsize:page*pgsize])),page=(1,P))
-
-#==================================================================================================
-class SQliteHandler (logging.Handler):
-  r"""
-A logging handler which writes the log messages in a database.
-  """
-#==================================================================================================
-  def __init__(self,conn,*a,**ka):
-    self.conn = conn
-    super(SQliteHandler,self).__init__(*a,**ka)
-  def emit(self,rec):
-    self.format(rec)
-    self.conn.execute('INSERT INTO Log (level,created,module,funcName,message) VALUES (?,?,?,?,?)',(rec.levelno,rec.created,rec.module,rec.funcName,rec.message))
-    self.conn.commit()
-
-#==================================================================================================
-class SQliteStack:
-  r"""
-A aggregation function which simply collects results in a list, for use with a SQlite database. Example::
-
-   with sqlite3.connect('/path/to/db') as conn:
-     rstack = SQliteStack(conn,'stack',2)
-     for school,x in conn.execute('SELECT school,stack(age,height) FROM DataTable GROUP BY school'):
-       x = rstack(x)
-       print(school,x)
-
-prints pairs *school*, *L* where *L* is a list of pairs *age*, *height*.
-  """
-#==================================================================================================
-  contents = {}
-  def __init__(self): self.content = []
-  def step(self,*a): self.content.append(a)
-  def finalize(self): n = id(self.content); self.contents[n] = self.content; return n
-  @staticmethod
-  def setup(conn,name,n):
-    conn.create_aggregate(name,n,SQliteStack)
-    return SQliteStack.contents.pop
-
-#==================================================================================================
-def SQliteNew(path,schema,check=lambda:None):
-  r"""
-Makes sure the file at *path* is a SQlite3 database with schema exactly equal to *schema*. Returns :const:`None` if successful, otherwise a :class:`str` instance describing the problem. If *check* is present, it must be a callable with no argument, invoked just before the creation of the database (when it does not already exist). If it returns anything but :const:`None`, the creation is aborted.
-  """
-#==================================================================================================
-  import sqlite3
-  with sqlite3.connect(path,isolation_level='EXCLUSIVE') as conn:
-    if conn.execute('SELECT * FROM sqlite_master').fetchone() is None:
-      c = check()
-      if c is not None: return c
-      for sql in schema.split('\n\n'): conn.execute(sql.strip())
-      conn.execute('CREATE TABLE Version ( schema TEXT )')
-      conn.execute('INSERT INTO Version (schema) VALUES (?)',(schema,))
-    else:
-      try: s, = conn.execute('SELECT schema FROM Version').fetchone()
-      except: return 'non conformant index'
-      if s!=schema: return 'index has a version conflict'
-
-#==================================================================================================
-def type_annotation_autocheck(f):
-#==================================================================================================
-  from functools import update_wrapper
-  import re
-  def addtype(m):
-    t = argcheck.get(m.group(2))
-    if t is None: return m.group(0)
-    return '{}:type {}: {}{}'.format(m.group(1),m.group(2),t.rst,m.group(0))
-  check,argcheck = type_annotation_checker(f)
-  def F(*a,**ka):
-    check(*a,**ka)
-    return f(*a,**ka)
-  F = update_wrapper(F,f)
-  F.__doc__ = re.sub(r'(\s*):param\s+(\w+)\s*:',addtype,F.__doc__)
-  return F
-
-#==================================================================================================
-def type_annotation_checker(f):
-#==================================================================================================
-  import inspect
-  def nstr(c): return c.__name__ if c.__module__ in ('builtins',f.__module__) else c.__module__+'.'+c.__name__
-  def nrst(c): return ':class:`{}`'.format(nstr(c))
-  def ravel(c):
-    for cc in c:
-      if isinstance(cc,tuple): yield from ravel(cc)
-      else: yield cc
-  def testera(c):
-    if isinstance(c,set):
-      t = lambda v,c=c: v in c
-      t.str = t.rst = str(c)
-    elif callable(c):
-      t = lambda v,c=c: c(v)
-      t.str,t.rst = nstr(c),nrst(c)
-    else: raise TypeError('Expected type|set|callable|tuple thereof')
-    return t
-  def tester(c):
-    if isinstance(c,tuple):
-      c = [(cc,(None if isinstance(cc,type) else testera(cc))) for cc in ravel(c)]
-      T = tuple(tt for cc,tt in c if tt is not None)
-      C = tuple(cc for cc,tt in c if tt is None)
-      if C:
-        if T: t = lambda v,C=C,T=T: isinstance(v,C) or any(tt(v) for tt in T)
-        else: t = lambda v,C=C: isinstance(v,C)
-      else: t = lambda v,T=T: any(tt(v) for tt in T)
-      t.str = '|'.join((nstr(cc) if tt is None else tt.str) for cc,tt in c)
-      t.rst = r'\|\ '.join((nrst(cc) if tt is None else tt.rst) for cc,tt in c)
-    elif isinstance(c,type):
-      t = lambda v,c=c: isinstance(v,c)
-      t.str,t.rst = nstr(c),nrst(c)
-    else: t = testera(c)
-    return t
-  sig = inspect.signature(f)
-  argcheck = dict((k,tester(p.annotation)) for k,p in sig.parameters.items() if p.annotation is not p.empty)
-  def check(*a,**ka):
-    b = sig.bind(*a,**ka)
-    for k,v in b.arguments.items():
-      t = argcheck.get(k)
-      if t is not None and not t(v): raise TypeError('Argument {} failed to match {}'.format(k,t.str))
-  return check, argcheck
 

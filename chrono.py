@@ -429,18 +429,18 @@ A convenience function to specify a :class:`Formatter` field.
 :param fmtv: 1-input, 1-output function
 :rtype: a triple *fmtkr*, *sticky*, *fmtv*
 
-The field name formatting function *fmtkr* of the result field is defined as follows: its argument is matched against the regular expression *trig*; :const:`None` is returned if the match fails, otherwise, the result of applying *fmtk* to the groups extracted by the regular expression. If *fmtk* is unspecified or :const:`None`, identity is assumed, and if *fmtk* is a string, it must be a format string (curly brackets notation) and its formatting function is assumed. If *fmtv* is unspecified or :const:`None`, identity is assumed. For example, the following evaluate to true::
+The field name formatting function *fmtkr* of the result field is defined as follows: its argument is matched against the regular expression *trig*; :const:`None` is returned if the match fails, otherwise, the result of applying *fmtk* to the groups extracted by the regular expression. If *fmtk* is unspecified or :const:`None`, identity is assumed, and if *fmtk* is a string, it must be a format string (curly brackets notation) and its formatting function is assumed. If *fmtv* is unspecified or :const:`None`, identity is assumed. For example::
 
    f = Formatter(
     Formatter.Field(r'\.voltage\.(line-\d+)',fmtv=float),
     Formatter.Field(r'\.name\.line-(\d+)',sticky=True,fmtk='L{}')
     )
-   T1 = f([('.name.line-6','Tom'),('.voltage.line-6','42.0'),('.voltage.line-23','35')])
-   T2 = f([('.name.line-6','Tom'),('.voltage.line-6','45.0'),('.current.line-6','14')])
-   T3 = f([('.name.line-6','Jerry'),('.voltage.line-6','44.0')])
-   list(T1) == [(('L6',True),'Tom'),(('line-6',False),42.0),(('line-23',False),35.0)]
-   list(T2) == [(('line-6',False),45.0)]
-   list(T3) == [(('L6',True),'Jerry'),(('line-6',False),44.0)]
+   list(f([('.name.line-6','Tom'),('.voltage.line-6','42.0'),('.voltage.line-23','35')]))
+   >>> [(('L6',True),'Tom'),(('line-6',False),42.0),(('line-23',False),35.0)]
+   list(f([('.name.line-6','Tom'),('.voltage.line-6','45.0'),('.current.line-6','14')]))
+   >>> [(('line-6',False),45.0)]
+   list(f([('.name.line-6','Jerry'),('.voltage.line-6','44.0')]))
+   >>> [(('L6',True),'Jerry'),(('line-6',False),44.0)]
     """
     trig = re.compile(trig)
     if fmtk is None: fmtk = ID
@@ -459,11 +459,11 @@ The field name formatting function *fmtkr* of the result field is defined as fol
   @type_annotation_autocheck
   def UField(trig:str,fmts:str,unit:str=None,delunit=lambda x:float(x.split()[0]),**ka):
     r"""
-A convenience function to specify a :class:`Formatter` field. The following evaluates to true::
+A convenience function to specify a :class:`Formatter` field. For example::
 
    f = Formatter(Formatter.UField(r'\.voltage\.line-(\d+)','L{:0>2}',unit='V'))
-   T = f([('.voltage.line-6','42.0 V'),('.voltage.line-23','35 V')])
-   list(T) == [(('L06 (V)',False),42.0), (('L23 (V)',False),35.0)]
+   list(f([('.voltage.line-6','42.0 V'),('.voltage.line-23','35 V')]))
+   >>> [(('L06 (V)',False),42.0), (('L23 (V)',False),35.0)]
     """
     if unit is not None: fmts = '{} ({})'.format(fmts,unit)
     return Formatter.Field(trig,fmtk=fmts.format,fmtv=(float if unit is None else delunit),**ka)
@@ -475,10 +475,10 @@ A convenience function to specify a :class:`Formatter` field. The following eval
 #--------------------------------------------------------------------------------------------------
 def flatten(x,pre=''):
   r"""
-Turns a simple structure *x* built from :const:`dict`, :const:`list` and :const:`tuple` into an iterator of key-value pairs. The following evaluates to true::
+Turns a simple structure *x* built from :const:`dict`, :const:`list` and :const:`tuple` into an iterator of key-value pairs. For example:: 
 
-   T = list(flatten({'a':{'b':({'ux':3,'uy':4.2},{'ux':5,'uy':6.7}),'c':'abcd'},'d':38.3}))
-   T==[('.a.b.0.ux',3),('.a.b.0.uy',4.2),('.a.b.1.ux',5),('.a.b.1.uy',6.7),('.a.c','abcd'),('.d',38.3)]
+   list(flatten({'a':{'b':({'ux':3,'uy':4.2},{'ux':5,'uy':6.7}),'c':'abcd'},'d':38.3}))
+   >>> [('.a.b.0.ux',3),('.a.b.0.uy',4.2),('.a.b.1.ux',5),('.a.b.1.uy',6.7),('.a.c','abcd'),('.d',38.3)]
   """
 #--------------------------------------------------------------------------------------------------
   if isinstance(x,dict):

@@ -21,7 +21,7 @@ def launch(syst=None,animate=None,axes=(lambda fig: fig.add_subplot(1,1,1)),**ka
     show()
 
 #--------------------------------------------------------------------------------------------------
-def launchui(cfg,axes=(lambda view: view.make_axes())):
+def launchui(cfg,axes=(lambda view: view.make_axes()),width=None):
 #--------------------------------------------------------------------------------------------------
   from myutil import quickui, mplext
 
@@ -37,7 +37,9 @@ def launchui(cfg,axes=(lambda view: view.make_axes())):
         with view.clearm(): main(view,**ka)
       super(MyExperimentUI,self).setup(cfg(timer),exper)
 
-  with quickui.startup(): MyExperimentUI()
+  with quickui.startup():
+    w = MyExperimentUI()
+    if width is not None: w.main.setFixedWidth(width)
 
 #--------------------------------------------------------------------------------------------------
 def cfg_anim(basetimer,modifier={}):

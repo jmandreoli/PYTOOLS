@@ -77,6 +77,6 @@ def demo():
     print(80*'-'); print(d.__name__)
     d()
     if not automatic:
-      try: input('RET: continue; Ctrl-C: stop')
+      try: input('RET: continue; ^-C: stop')
       except: print();break
 

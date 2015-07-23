@@ -61,6 +61,6 @@ def demo():
     print(80*'-'); print('Clearing',f); f.clear()
     for w in [subprocess.Popen(cmd(t,L)) for t in (0.,2.)]: w.wait()
     if not automatic:
-      try: input('RET: continue; Ctrl-C: stop')
+      try: input('RET: continue; ^-C: stop')
       except: print(); break
 

@@ -70,12 +70,12 @@ def demo():
     chrono.pause('Stop')
     waitwhile(chrono,lambda s: s is not None)
     if not automatic:
-      try: input('RET: continue; Ctrl-C: stop')
+      try: input('RET: continue; ^-C: stop')
       except: print(); break
 
 def trace(chrono,period=1.,nbuf=2): # trace records from current session of *chrono*
   session = chrono.current
-  print('Trace(session: {} frequency: {:.02f}Hz buffer: {}); Ctrl-C to interrupt anytime'.format(session,1/period,nbuf))
+  print('Trace(session: {} frequency: {:.02f}Hz buffer: {}); ^-C to interrupt anytime'.format(session,1/period,nbuf))
   try:
     t = 0
     while True: # can only be interrupted by another thread or signal

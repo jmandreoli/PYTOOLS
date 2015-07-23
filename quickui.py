@@ -244,7 +244,7 @@ Methods:
   def parload(self,**ka):
     r"""Loads parameter of *self* from a file."""
     import pickle
-    ka.setdefault('filter','Pickle (*.pck)')
+    ka.setdefault('filter','Quickui config (*.qcfg)')
     filen,sel = QtGui.QFileDialog.getOpenFileName(**ka)
     filen = str(filen)
     if filen:
@@ -254,11 +254,11 @@ Methods:
   def parsave(self,**ka):
     r"""Saves parameter of *self* into a file."""
     import pickle
-    ka.setdefault('filter','Pickle (*.pck)')
+    ka.setdefault('filter','Quickui config (*.qcfg)')
     filen,sel = QtGui.QFileDialog.getSaveFileName(**ka)
     filen = str(filen)
     if filen:
-      if not os.path.splitext(filen)[1]: filen += '.pck'
+      if not os.path.splitext(filen)[1]: filen += '.qcfg'
       with open(filen,'wb') as v: pickle.dump(self.parget(),v)
       return True
 

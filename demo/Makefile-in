@@ -1,6 +1,6 @@
-TARGET := cache.out chrono.out monitor.out mplext.out quickui.out
 PYTHONPATH :=
 PYTHON :=
+TARGET := cache.out chrono.out monitor.out mplext.out quickui.out
 
 all: ${TARGET}
 

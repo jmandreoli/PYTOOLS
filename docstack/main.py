@@ -36,7 +36,8 @@ Methods:
     final=whoosh.fields.BOOLEAN(stored=True),
     )
   METASCHEMA = {}
-  # targets MUST BE RESOLVED Path instances (no move) 
+  # targets MUST BE RESOLVED Path instances (no move)
+  # metaclear must also remove log
   targets = ()
 
   def __init__(self,dirn):
@@ -44,13 +45,14 @@ Methods:
     assert self.path.exists()
     self.pathm = self.path/'metadir'
     self.pathi = self.path/'inddir'
+    self.pathw = self.path/'workdir'
     self.ix_ = None
     queue = Queue()
-    metaqueue = Queue()
+    mqueue = Queue()
     threading.Thread(target=self.process_target,args=(queue,),daemon=True).start()
-    threading.Thread(target=self.process_meta,args=(metaqueue,),daemon=True).start()
+    threading.Thread(target=self.process_meta,args=(mqueue,),daemon=True).start()
     self.init_target(queue)
-    self.init_meta(metaqueue)
+    self.init_meta(mqueue)
 
   @property
   def ix(self):
@@ -64,13 +66,11 @@ Methods:
   def init_target(self,queue):
     def ckalive(t):
       nonlocal alive
-      for f in list(self.pathm.glob('*.work')):
+      for f in list(self.pathw.glob('*.work')):
         if time.time()-f.stats().st_mtime>t:
-          try: f.unlink()
-          except OSError as e:
-            if e.errno!=errno.ENOENT: raise
+          rmifp(f)
           self.metaclear(f)
-          queue.put((0,f))
+          queue.put((0,f.name))
       alive = threading.Timer(t,ckalive,(t,))
       alive.daemon = True
       alive.start()
@@ -95,12 +95,9 @@ Methods:
           if op<0:
             oid,fr = x
             del D[fr]
-            f = self.pathm/oid
-            for ext in ('.wait','.work','.ready','.error','.log'):
-              try: f.with_suffix(ext).unlink()
-              except OSError as e:
-                if e.errno!=errno.ENOENT: raise
-            self.metaclear(f)
+            f = self.pathw/oid
+            for ext in ('.wait','.work','.ready','.error'): rmifp(f.with_suffix(ext))
+            self.metaclear(oid)
             n = ixw.delete_by_term('oid',oid)
             assert n==1, 'unable to delete {}'.format(oid)
             logger.info('deleted %s',oid)
@@ -116,12 +113,12 @@ Methods:
                 if e.errno==errno.EEXIST: continue
                 raise
               else: os.close(n); break
-            new.append(f)
+            new.append(oid)
             ixw.add_document(oid=oid,src=fr,signature=sig,version=fR.stat().st_mtime,active=False,final=False)
             D[fr][1] = -1,(oid,fr)
             logger.info('inserted %s',oid)
           else: new.append(x)
-      for f in new: f.with_suffix('.wait').touch()
+      for oid in new: (self.pathw/oid).with_suffix('.wait').touch()
       self.launch(len(new))
 
   def watch_target(self,D,queue):
@@ -135,28 +132,40 @@ Methods:
     nt = pyinotify.ThreadedNotifier(wm,default_proc_fun=process)
     nt.daemon = True
     nt.start()
+    time.sleep(1)
 
   def init_meta(self,queue):
     for f in list(self.pathm.glob('*.ready')): queue.put(f)
 
   def process_meta(self,queue):
+    self.watch_meta(queue)
     while True:
       cbuf = accumulate(queue,60)
       with self.ix.writer() as ixw:
         with self.ix.searcher() as ixs:
           for f in cbuf:
-            try: f.unlink()
-            except OSError as e:
-              if e.errno!=errno.ENOENT: raise
-              continue
-            doc = ixs.document(oid=f.name,active=False)
+            if rmifp(f): continue
+            oid = f.name
+            doc = ixs.document(oid=oid,active=False)
             if doc is None: continue
-            logger.info('indexing %s',doc['oid'])
-            doc.update(self.metasetdoc(self.pathm/doc['oid'],full=True),active=True)
+            logger.info('indexing %s',oid)
+            doc.update(self.metasetdoc(oid,full=True),active=True)
             ixw.update_document(**doc)
         logger.info('committing index')
       logger.info('optimising index')
       self.ix.optimize()
+
+  def watch_meta(self,queue):
+    import pyinotify
+    def process(e):
+      f = Path(e.pathname)
+      if f.suffix == '.ready': queue.put(f)
+    wm = pyinotify.WatchManager()
+    wm.add_watch(str(self.pathw),pyinotify.IN_MOVED_TO)
+    nt = pyinotify.ThreadedNotifier(wm,default_proc_fun=process)
+    nt.daemon = True
+    nt.start()
+    time.sleep(1)
 
   def genmeta(self):
     def mkalive(t):
@@ -206,6 +215,12 @@ def accumulate(queue,t):
       except Empty: break
     if cbuf: return cbuf
     cbuf.append(queue.get())
+
+def rmifp(f):
+  try: f.unlink()
+  except OSError as e:
+    if e.errno!=errno.ENOENT: raise
+    return True
 
 #--------------------------------------------------------------------------------------------------
   def load(self,path=None):

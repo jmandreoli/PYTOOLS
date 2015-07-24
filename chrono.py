@@ -244,8 +244,9 @@ This method is normally called on a remote process (see method :meth:`ChronoBloc
 
   def _repr_html_(self):
     from lxml.etree import tounicode
-    return tounicode(html_stack(*(v.as_html() for k,v in self.items())))
-
+    return tounicode(self.as_html())
+  def as_html(self):
+    return html_stack(*(v.as_html() for k,v in self.items()))
   def __str__(self): return 'ChronoDB<{}>'.format(self.path)
 
 #==================================================================================================

@@ -1,5 +1,6 @@
 from collections.abc import MutableMapping
 import logging
+logger = logging.getLogger(__name__)
 
 #==================================================================================================
 class ondemand (object):
@@ -61,7 +62,7 @@ Objects of this class act as dict objects, except their keys are also attributes
 
 #==================================================================================================
 def zipaxes(L,fig,sharex=False,sharey=False,**ka):
-  """
+  r"""
 Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. The axes are spread more or less uniformly.
 
 :param fig: a figure
@@ -84,6 +85,33 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
     if sharex and axrefx is None: axrefx = ax
     if sharey and axrefy is None: axrefy = ax
     yield o,ax
+
+#==================================================================================================
+def unfold(tree,exp={}):
+  r"""
+A simple utility to fold/unfold a tree in IPython.
+  """
+#==================================================================================================
+  from IPython.display import display, clear_output
+  from IPython.html.widgets import HBox, VBox, Button, Text, HTML
+  def nav(b):
+    p,r = b.args
+    if r: del exp[p]
+    else: exp[p] = True
+    clear_output(wait=True)
+    w.close()
+    display(unfold(tree,exp))
+  def button(p,r):
+    b = Button(width='10',font_size='xx-small',description='-' if r else '+',background_color='green' if r else 'gray')
+    b.args = (p,r)
+    b.on_click(nav)
+    return b
+  def label(p,x):
+    if hasattr(x,'_repr_html_'): x = x._repr_html_
+    else: x = str(x).replace('<','&lt;').replace('>','&gt;')
+    return HTML('<div><b>{}</b> <span style="padding-left:1cm;">{}</span></div>'.format('<span style="color: red; font-size: xx-large;">.</span>'.join(p),x))
+  w = VBox(children=tuple(HBox(children=(button(pre,r),label(pre,x))) for pre,x,r in tree(exp=exp)))
+  display(w)
 
 #==================================================================================================
 def browse(D,start=1,pgsize=10):
@@ -265,6 +293,17 @@ Declares a module :mod:`pyqt` in the package of this file equivalent to :mod:`Py
   return mod
 
 #==================================================================================================
+def set_gitexecutable(git):
+  """
+:param git: git executable path
+:type git: :class:`str`
+
+Sets the git command to *git* in module :mod:`git`.
+  """
+#==================================================================================================
+  from git.cmd import Git
+  Git.GIT_PYTHON_GIT_EXECUTABLE = git
+#==================================================================================================
 def gitcheck(pkgname):
   """
 :param pkgname: full name of a package
@@ -278,27 +317,17 @@ Assumes that *pkgname* is a package contained in a git repository which is a loc
   def check(path):
     try: r = Repo(path)
     except InvalidGitRepositoryError: return
-    assert not r.is_dirty(), '{} should not be changed; please sync manually.'.format(r)
+    if r.is_dirty(): return 'target', r
     rr = Repo(r.remote().url)
-    assert not rr.is_dirty(), 'There are uncommitted changes in {}; please commit first.'.format(rr)
+    if rr.is_dirty(): return 'source', rr
     if r.commit() != rr.commit():
-      print('Updating (git pull) {} ...'.format(r))
+      logger.info('Synching (git pull) %s ...',r)
       r.remote().pull()
-      print('done')
-    assert r.commit() == rr.commit(), 'Updating {} does not seem to have worked :-('.format(r)
+    if r.commit() != rr.commit(): raise Exception('Unsuccessful git synching')
   p = PathFinder.find_spec(pkgname)
-  for path in p.submodule_search_locations._path: check(path)
-#==================================================================================================
-def gitsetcmd(git):
-  """
-:param git: git executable path
-:type git: :class:`str`
-
-Sets the git command to *git* in module :mod:`git`.
-  """
-#==================================================================================================
-  from git.cmd import Git
-  Git.GIT_PYTHON_GIT_EXECUTABLE = git
+  for path in p.submodule_search_locations._path:
+    c = check(path)
+    if c is not None: return c
 
 #==================================================================================================
 def infosql(table=None,full=False,driver=None):

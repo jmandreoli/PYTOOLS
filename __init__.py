@@ -304,16 +304,20 @@ Declares a module :mod:`pyqt` in the package of this file equivalent to :mod:`Py
   return mod
 
 #==================================================================================================
-def set_gitexecutable(git):
+def set_gitexecutable(*exes):
   """
-:param git: git executable path
-:type git: :class:`str`
+:param exes: possible git executable paths
+:type exes: tuple(\ :class:`str`)
 
-Sets the git command to *git* in module :mod:`git`.
+Sets the git executable path in module :mod:`git` to the first existing path from *exes*.
   """
 #==================================================================================================
   from git.cmd import Git
-  Git.GIT_PYTHON_GIT_EXECUTABLE = git
+  import os
+  for ex in exes:
+    if os.path.exists(ex):
+      Git.GIT_PYTHON_GIT_EXECUTABLE = ex
+      return ex
 #==================================================================================================
 def gitcheck(pkgname):
   """

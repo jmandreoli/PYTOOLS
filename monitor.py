@@ -118,7 +118,9 @@ The returned factory, when invoked with some arguments, returns a monitor with *
   sig = inspect.signature(f)
   parm = list(sig.parameters.values())
   del parm[0]
-  parm.append(inspect.Parameter('label',inspect.Parameter.POSITIONAL_OR_KEYWORD,default=None))
+  lbl = inspect.Parameter('label',inspect.Parameter.POSITIONAL_OR_KEYWORD,default=None)
+  if parm and parm[-1].kind == inspect.Parameter.VAR_KEYWORD: parm.insert(-1,lbl)
+  else: parm.append(lbl)
   F.__signature__ = sig.replace(parameters=parm)
   F.__name__ = f.__name__
   F.__module__ = f.__module__

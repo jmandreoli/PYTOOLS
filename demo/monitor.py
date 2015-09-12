@@ -31,32 +31,33 @@ def delay_monitor(env,delay:float=1.):
   while True: yield time.sleep(delay)
 
 @monitor
-def display_monitor(env,targetf:callable,bounds):
-  # assumes targetf returns a list of coordinate pairs, and displays the corresponding plot
+def display_monitor(env,initf:callable,updatef:callable,**figargs):
   from matplotlib import use; use('Qt4Agg')
   from matplotlib.pyplot import figure, show
-  env.fig = fig = figure(figsize=(10,8))
-  ax = fig.add_subplot(1,1,1)
-  ax.set_xlim(bounds[0])
-  ax.set_ylim(bounds[1])
-  ax.set_aspect('equal')
+  env.fig = fig = figure(**figargs)
+  ax,artists = initf(fig)
   show(False)
   fig.canvas.blit(fig.bbox)
   background = fig.canvas.copy_from_bbox(ax.bbox)
-  line, = ax.plot(())
   while True:
-    fig.canvas.restore_region(background)
-    line.set_data(*zip(*targetf(env)))
-    ax.draw_artist(line)
+    for a in updatef(env,artists): ax.draw_artist(a)
     fig.canvas.blit(ax.bbox)
     yield
+    fig.canvas.restore_region(background)
 
 def demo2():
   fmts = 'iterc:{0} x:{1.value[0]:.4f} (mean: {1.stat.mean:.4f}) y:{1.value[1]:.4f}'
   m = averaging_monitor(label='stat',targetf=(lambda env: env.value[0]))
   m *= iterc_monitor(maxiter=200,logger=logger,fmt=fmts.format,show=.8)
   m *= buffer_monitor(label='buf',targetf=(lambda env: env.value))
-  m *= display_monitor(targetf=(lambda env: env.buf),bounds=((-1.5,1.5),(-1.5,1.5)))
+  def initf(fig,bounds=((-1.5,1.5),(-1.5,1.5))):
+    ax = fig.add_subplot(1,1,1,xlim=bounds[0],ylim=bounds[1],aspect='equal')
+    return ax,ax.plot(())
+  def updatef(env,artists):
+    line, = artists
+    line.set_data(*zip(*env.buf))
+    return artists
+  m *= display_monitor(initf,updatef,figsize=(10,8))
   if not automatic: m *= delay_monitor(.04) # slows down to at most 25 frames per seconds (crude)
   env = m.run(cycloid(a=.3,omega=5.1,step=2.))
   if automatic: env.fig.savefig(str(Path(__file__).resolve().parent/'monitor.png'))

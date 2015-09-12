@@ -67,7 +67,7 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
 
 :param fig: a figure
 :type fig: :class:`matplotlib.figure.Figure`
-:param L: an arbitrary sequence (must support :func:`len`)
+:param L: an arbitrary sequence
 :param sharex: whether all the axes share the same x-axis scale
 :type sharex: :class:`bool`
 :param sharey: whether all the axes share the same y-axis scale
@@ -76,6 +76,7 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
   """
 #==================================================================================================
   from math import sqrt,ceil
+  L = list(L)
   N = len(L)
   nc = int(ceil(sqrt(N)))
   nr = int(ceil(N/nc))

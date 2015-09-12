@@ -88,9 +88,19 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
     yield o,ax
 
 #==================================================================================================
-def unfold(tree,exp={}):
+def unfold(tree,exp=None,style=(dict(width='10',font_size='xx-small',description='+',background_color='gray'),dict(width='10',font_size='xx-small',description='-',background_color='green'))):
   r"""
-A simple utility to fold/unfold a tree in IPython.
+A simple utility to navigate through a tree in IPython.
+
+:param tree: callable with one input, returning an iterable (or generator function)
+:param style: a pair of dictionaries specifying the arguments passed to the button widget factory
+
+The tree edges are assumed labeled by strings, and a path in the tree is a sequence (tuple) of labels. Callable *tree* takes as argument a tree map, i.e. a dictionary mapping some paths to :const:`True`. It must traverse the tree depth-first left-to-right, and at each node:
+
+* it yields a triple *pre*, *x*, *r* where *pre* is the prefix so far, *x* is some arbitrary information attached to the node, and *r* is a boolean indicating whether the prefix *pre* is in the given tree map
+* if *r* is true, then the traversal continues deeper on the same branch, otherwise the traversal stops for that branch.
+
+In IPython, this function will allow an interactive navigation through the tree, displaying a list of node prefixes with a click-button styled with the first component of *style* if the node has not been unfolded yet, to unfold it, and styled with the other component of *style* if the node is unfolded, to fold it. Furthermore, if the information attached to a node has an HTML representation, it will be used, otherwise a default one is used.
   """
 #==================================================================================================
   from IPython.display import display, clear_output
@@ -101,16 +111,17 @@ A simple utility to fold/unfold a tree in IPython.
     else: exp[p] = True
     clear_output(wait=True)
     w.close()
-    display(unfold(tree,exp))
+    unfold(tree,exp,style)
   def button(p,r):
-    b = Button(width='10',font_size='xx-small',description='-' if r else '+',background_color='green' if r else 'gray')
+    b = Button(**style[1 if r else 0])
     b.args = (p,r)
     b.on_click(nav)
     return b
   def label(p,x):
-    if hasattr(x,'_repr_html_'): x = x._repr_html_
-    else: x = str(x).replace('<','&lt;').replace('>','&gt;')
-    return HTML('<div><b>{}</b> <span style="padding-left:1cm;">{}</span></div>'.format('<span style="color: red; font-size: xx-large;">.</span>'.join(p),x))
+    if hasattr(x,'_repr_html_'): x = x._repr_html_()
+    else: x = '<span style="padding-left:1cm;">{}</span>'.format(str(x).replace('<','&lt;').replace('>','&gt;'))
+    return HTML('<div><b>{}</b> {}</div>'.format('<span style="color: red; font-size: xx-large;">.</span>'.join(p),x))
+  if exp is None: exp = {}
   w = VBox(children=tuple(HBox(children=(button(pre,r),label(pre,x))) for pre,x,r in tree(exp=exp)))
   display(w)
 
@@ -294,16 +305,20 @@ Declares a module :mod:`pyqt` in the package of this file equivalent to :mod:`Py
   return mod
 
 #==================================================================================================
-def set_gitexecutable(git):
+def set_gitexecutable(*exes):
   """
-:param git: git executable path
-:type git: :class:`str`
+:param exes: possible git executable paths
+:type exes: tuple(\ :class:`str`)
 
-Sets the git command to *git* in module :mod:`git`.
+Sets the git executable path in module :mod:`git` to the first existing path from *exes*.
   """
 #==================================================================================================
   from git.cmd import Git
-  Git.GIT_PYTHON_GIT_EXECUTABLE = git
+  import os
+  for ex in exes:
+    if os.path.exists(ex):
+      Git.GIT_PYTHON_GIT_EXECUTABLE = ex
+      return ex
 #==================================================================================================
 def gitcheck(pkgname):
   """

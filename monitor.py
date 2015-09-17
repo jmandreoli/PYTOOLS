@@ -33,6 +33,12 @@ Methods:
     assert isinstance(other,Monitor)
     return Monitor(self.category+other.category,self.coroutines+other.coroutines)
 
+  def __imul__(self,other):
+    assert isinstance(other,Monitor)
+    self.category += other.category
+    self.coroutines += other.coroutines
+    return self
+
   def __str__(self):
     return 'Monitor<{}>'.format('*'.join(self.category))
 

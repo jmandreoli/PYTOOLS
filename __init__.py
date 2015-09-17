@@ -104,7 +104,7 @@ In IPython, this function will allow an interactive navigation through the tree,
   """
 #==================================================================================================
   from IPython.display import display, clear_output
-  from IPython.html.widgets import HBox, VBox, Button, Text, HTML
+  from ipywidgets.widgets import HBox, VBox, Button, Text, HTML
   def nav(b):
     p,r = b.args
     if r: del exp[p]
@@ -132,7 +132,7 @@ A simple utility to browse sliceable objects page per page in IPython.
   """
 #==================================================================================================
   from IPython.display import display
-  from IPython.html.widgets.interaction import interact
+  from ipywidgets.widgets.interaction import interact
   P = (len(D)-1)//pgsize + 1
   assert start>=1 and start<=P
   if P==1: display(D)
@@ -218,7 +218,7 @@ The doc string of function *f* is also modified so that each sphinx ``:param:`` 
     check(*a,**ka)
     return f(*a,**ka)
   F = update_wrapper(F,f)
-  F.__doc__ = re.sub(r'(\s*):param\s+(\w+)\s*:',addtype,F.__doc__)
+  if F.__doc__ is not None: F.__doc__ = re.sub(r'(\s*):param\s+(\w+)\s*:',addtype,F.__doc__)
   return F
 
 #==================================================================================================

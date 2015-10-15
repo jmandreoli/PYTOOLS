@@ -4,7 +4,7 @@ logger = logging.getLogger(__name__)
 
 #==================================================================================================
 class ondemand (object):
-  """
+  r"""
 Use as a decorator to declare, in a class, a computable attribute which is computed only once (its value is then cached). Example::
 
    class c:
@@ -38,7 +38,7 @@ Use as a decorator to declare, in a class, a computable attribute which is compu
 
 #==================================================================================================
 class odict (MutableMapping):
-  """
+  r"""
 Objects of this class act as dict objects, except their keys are also attributes. Keys must be strings and must not override dict standard methods, but no check is performed. Example::
 
    x = odict(a=3,b=6); print(x.a)
@@ -127,7 +127,7 @@ In IPython, this function will allow an interactive navigation through the tree,
 
 #==================================================================================================
 def browse(D,start=1,pgsize=10):
-  """
+  r"""
 A simple utility to browse sliceable objects page per page in IPython.
   """
 #==================================================================================================
@@ -306,7 +306,7 @@ Declares a module :mod:`pyqt` in the package of this file equivalent to :mod:`Py
 
 #==================================================================================================
 def set_gitexecutable(*exes):
-  """
+  r"""
 :param exes: possible git executable paths
 :type exes: tuple(\ :class:`str`)
 
@@ -321,7 +321,7 @@ Sets the git executable path in module :mod:`git` to the first existing path fro
       return ex
 #==================================================================================================
 def gitcheck(pkgname):
-  """
+  r"""
 :param pkgname: full name of a package
 :type pkgname: :class:`str`
 
@@ -346,65 +346,22 @@ Assumes that *pkgname* is a package contained in a git repository which is a loc
     if c is not None: return c
 
 #==================================================================================================
-def infosql(table=None,full=False,driver=None):
-  """
-:param table: A sql table name
-:type table: :class:`str`\|\ :class:`NoneType`
+def prettylist(name,columns,fmt=None):
+  r"""
+:param name: name of the type
+:type name: :class:`str`
+:param columns: a tuple of column names
+:type columns: :class:`tuple`\ (\ :class:`str`)
+:param fmt: a formatting function
 
-Returns the SQL query needed to extract information on *table*, if specified, or on all the tables otherwise.
+Returns a subclass of :class:`list` with an IPython pretty printer for columns. Function *fmt* takes an object and a column name, i.e. an element of *columns*, and returns the string representation of that column for that object. It defaults to :func:`getattr`.
   """
 #==================================================================================================
-  i = Infosql.listing.get(driver.__name__ if hasattr(driver,'__name__') else driver,Infosql)
-  if table is None: return i.tables(full)
-  else: return i.columns(table,full)
-
-#--------------------------------------------------------------------------------------------------
-class Infosql:
-  """Generic info class, works with most flavours of SQL. Not meant to be instantiated."""
-#--------------------------------------------------------------------------------------------------
-
-  listing = {}
-
-  table_mainfields = 'TABLE_NAME,TABLE_TYPE'
-  table_view = 'INFORMATION_SCHEMA.TABLES ORDER BY TABLE_NAME'
-
-  column_mainfields = 'COLUMN_NAME,DATA_TYPE,IS_NULLABLE'
-
-  @classmethod
-  def column_view(cls,table):
-    return 'INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME=\'{}\' ORDER BY ORDINAL_POSITION'.format(table)
-
-  @classmethod
-  def tables(cls,full):
-    sel = '*' if full else cls.table_mainfields
-    return 'SELECT {} FROM {}'.format(sel,cls.table_view)
-
-  @classmethod
-  def columns(cls,table,full):
-    sel = '*' if full else cls.column_mainfields
-    return 'SELECT {} FROM {}'.format(sel,cls.column_view(table))
-
-  @classmethod
-  def declare(cls,c):
-    assert issubclass(c,cls)
-    cls.listing[c.__name__] = c
-    return c
-
-  @classmethod
-  def declare_multi(cls,*L):
-    assert all(isinstance(x,str) for x in L)
-    def tr(c):
-      assert issubclass(c,cls)
-      for x in L: cls.listing[x] = c
-      return c
-    return tr
-
-#--------------------------------------------------------------------------------------------------
-@Infosql.declare
-class sqlite3 (Infosql):
-#--------------------------------------------------------------------------------------------------
-
-  @classmethod
-  def column(cls,table,full):
-    return 'PRAGMA table_info({})'.format(table)
+  from lxml.builder import E
+  from lxml.etree import tounicode
+  if fmt is None: fmt = getattr
+  t = type(name,(list,),{})
+  t._repr_html_ = lambda self,columns=columns,fmt=fmt: tounicode(E.TABLE(E.THEAD(E.TR(*(E.TH(c) for c in columns))),E.TBODY(*(E.TR(*(E.TD(str(fmt(x,c))) for c in columns)) for x in self))))
+  t.__getitem__ = lambda self,s,t=t: t(super(t,self).__getitem__(s)) if isinstance(s,slice) else super(t,self).__getitem__(s)
+  return t
 

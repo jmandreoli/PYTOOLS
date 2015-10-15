@@ -630,13 +630,12 @@ Returns a variant of *self* where *a* is appended to the positional arguments an
     return ARG(*a,**ka1)
 
 #--------------------------------------------------------------------------------------------------
-def getparams(func,ignore=()):
+def getparams(func,ignore=(),code={inspect.Parameter.VAR_POSITIONAL:1,inspect.Parameter.VAR_KEYWORD:2}):
 #--------------------------------------------------------------------------------------------------
-  s = inspect.getargspec(func)
-  varargs = s.varargs or ()
-  keywords = s.keywords or ()
-  for p in s.args:
-    yield p,(-1 if p in ignore else 2 if p in keywords else 1 if p in varargs else 0)
+  s = inspect.signature(func)
+  for p in s.parameters.values():
+    # coding needed because p.kind is not pickable/unpickable before python 3.5
+    yield p.name,(-1 if p.name in ignore else code.get(p.kind,0))
 
 #--------------------------------------------------------------------------------------------------
 def html_table(irows,fmts,hdrs=None,title=None):

@@ -182,7 +182,7 @@ Generates a :class:`CacheDB` object.
     from lxml.etree import tounicode
     return tounicode(self.as_html())
   def as_html(self):
-    return html_stack(*(v.as_html() for k,v in self.items()))
+    return html_stack(*(v.as_html() for k,v in sorted(self.items())))
   def __str__(self): return 'Cache<{}>'.format(self.path)
 
 #==================================================================================================
@@ -332,7 +332,7 @@ Checks whether there is a cache overflow and applies the LRU policy.
     from lxml.etree import tounicode
     return tounicode(self.as_html())
   def as_html(self):
-    return html_table(self.items(),hdrs=('hitdate','ckey','size'),fmts=(str,self.sig.html,str),title=str(self.sig))
+    return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size'),fmts=(str,self.sig.html,str),title='{}: {}'.format(self.block,self.sig))
   def __str__(self): return 'Cache<{}:{}>'.format(self.db.path,self.sig)      
 
 #==================================================================================================
@@ -632,8 +632,7 @@ Returns a variant of *self* where *a* is appended to the positional arguments an
 #--------------------------------------------------------------------------------------------------
 def getparams(func,ignore=(),code={inspect.Parameter.VAR_POSITIONAL:1,inspect.Parameter.VAR_KEYWORD:2}):
 #--------------------------------------------------------------------------------------------------
-  s = inspect.signature(func)
-  for p in s.parameters.values():
+  for p in inspect.signature(func).parameters.values():
     # coding needed because p.kind is not pickable/unpickable before python 3.5
     yield p.name,(-1 if p.name in ignore else code.get(p.kind,0))
 

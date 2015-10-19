@@ -88,45 +88,135 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
     yield o,ax
 
 #==================================================================================================
-def unfold(tree,exp=None,style=(dict(width='10',font_size='xx-small',description='+',background_color='gray'),dict(width='10',font_size='xx-small',description='-',background_color='green'))):
+def ipynav(tree,exp=None,
+  style_folded =   dict(width='3mm',height='3mm',padding='0cm',font_size='xx-small',label='+',background_color='gray'),
+  style_unfolded = dict(width='3mm',height='3mm',padding='0cm',font_size='xx-small',label='-',background_color='darkblue'),
+  ):
   r"""
-A simple utility to navigate through a tree in IPython.
-
-:param tree: callable with one input, returning an iterable (or generator function)
-:param style: a pair of dictionaries specifying the arguments passed to the button widget factory
-
-The tree edges are assumed labeled by strings, and a path in the tree is a sequence (tuple) of labels. Callable *tree* takes as argument a tree map, i.e. a dictionary mapping some paths to :const:`True`. It must traverse the tree depth-first left-to-right, and at each node:
-
-* it yields a triple *pre*, *x*, *r* where *pre* is the prefix so far, *x* is some arbitrary information attached to the node, and *r* is a boolean indicating whether the prefix *pre* is in the given tree map
-* if *r* is true, then the traversal continues deeper on the same branch, otherwise the traversal stops for that branch.
-
-In IPython, this function will allow an interactive navigation through the tree, displaying a list of node prefixes with a click-button styled with the first component of *style* if the node has not been unfolded yet, to unfold it, and styled with the other component of *style* if the node is unfolded, to fold it. Furthermore, if the information attached to a node has an HTML representation, it will be used, otherwise a default one is used.
+Navigation in an IPython tree.
   """
 #==================================================================================================
   from IPython.display import display, clear_output
   from ipywidgets.widgets import HBox, VBox, Button, Text, HTML
+  def walk(obj,pre,exp):
+    r = exp.get(pre,False)
+    yield pre,obj,r
+    if r:
+      for k,objc in obj.children:
+        yield from walk(objc,pre+(k,),exp)
   def nav(b):
     p,r = b.args
     if r: del exp[p]
     else: exp[p] = True
     clear_output(wait=True)
     w.close()
-    unfold(tree,exp,style)
-  def button(p,r):
-    b = Button(**style[1 if r else 0])
+    ipynav(tree,exp)
+  def hcontent(p,x,r):
+    yield HTML('<div style="padding-left: {}cm">&nbsp;</div>'.format(len(p)+.2))
+    b = Button(**(style_unfolded if r else style_folded))
     b.args = (p,r)
     b.on_click(nav)
-    return b
-  def label(p,x):
-    if hasattr(x,'_repr_html_'): x = x._repr_html_()
-    else: x = '<span style="padding-left:1cm;">{}</span>'.format(str(x).replace('<','&lt;').replace('>','&gt;'))
-    return HTML('<div><b>{}</b> {}</div>'.format('<span style="color: red; font-size: xx-large;">.</span>'.join(p),x))
+    yield b
+    if p:
+      yield HTML('<div style="padding-left:1mm;"><span style="background-color: lavender;" title="{}">{}</style></div>'.format('.'.join(p),p[-1]))
+    if hasattr(x,'_repr_html_'): s = x._repr_html_()
+    else: s = '<span>{}</span>'.format(str(x).replace('<','&lt;').replace('>','&gt;'))
+    yield HTML('<div style="padding-left:3mm;">{}</div>'.format(s))
   if exp is None: exp = {}
-  w = VBox(children=tuple(HBox(children=(button(pre,r),label(pre,x))) for pre,x,r in tree(exp=exp)))
+  w = VBox(children=tuple(HBox(children=tuple(hcontent(*q))) for q in walk(tree,(),exp)))
   display(w)
 
 #==================================================================================================
-def browse(D,start=1,pgsize=10):
+class ObjTree:
+#==================================================================================================
+
+  fchildren = []
+  fsummary = []
+  @staticmethod
+  def register(*filtrs,D=dict(get_children=fchildren,get_summary=fsummary)):
+    import inspect
+    L,LL = [],[]
+    for filtr in filtrs:
+      if inspect.isclass(filtr): L.append(filtr)
+      elif inspect.isroutine(filtr): LL.append(filtr)
+      else: raise Exception('Filter must be a class or routine')
+    if L: LL.insert(0,(lambda x,c=tuple(L): isinstance(x,c)))
+    filtrs = lambda x,LL=LL: any(filtr(x) for filtr in LL)
+    def reg(f,filtrs=filtrs):
+      D[f.__name__].append((filtrs,f))
+      return f
+    return reg
+  @classmethod
+  def registernum(cls,D={}):
+    def add(m):
+      import sys
+      if m in sys.modules and not m in D: D[m] = True; return True
+    if add('pandas.core.base'):
+      from pandas.core.base import PandasObject
+      @cls.register(PandasObject)
+      def get_children(a):
+        if hasattr(a,'columns'):
+          for c in a.columns: yield c,ObjTree(a[c])
+    if add('numpy'):
+      from numpy import ndarray
+      @cls.register(ndarray)
+      def get_children(a): return ()
+    if add('scipy.sparse.base'):
+      from scipy.sparse.base import spmatrix
+      @cls.register(spmatrix)
+      def get_children(a): return ()
+
+  @staticmethod
+  def gchildren(obj):
+    import inspect
+    from numbers import Number
+    if isinstance(obj,(Number,str)) or inspect.isroutine(obj): return
+    for k,objc in inspect.getmembers(obj,lambda x: not inspect.isbuiltin(x)):
+      if k.startswith('_'): continue
+      yield k,ObjTree(objc)
+
+  @staticmethod
+  def gsummary(obj):
+    import inspect
+    from numbers import Number
+    if isinstance(obj,(Number,str)):
+      yield 'value',obj      
+    elif inspect.isroutine(obj):
+      yield 'signature',inspect.signature(obj)
+    else:
+      try: yield 'shape',obj.shape
+      except:
+        try: yield 'len',len(obj)
+        except: pass
+      try: yield 'dtype',obj.dtype
+      except: pass
+
+  @ondemand
+  def children(self): return tuple(self.gchildren(self.obj))
+  @ondemand
+  def summary(self): return tuple(self.gsummary(self.obj))
+
+  def __init__(self,obj):
+    import inspect
+    from numbers import Number
+    self.obj = obj
+    for filtr,g in self.fchildren:
+      if filtr(obj): self.gchildren = g; break
+    for filtr,g in self.fsummary:
+      if filtr(obj): self.gsummary = g; break
+
+  def _repr_html_(self):
+    x = self.summary
+    if x: x = ' '.join('<em>{}</em>: {}'.format(k,(v._repr_html_() if hasattr(v,'_repr_html_') else str(v).replace('<','&lt;').replace('>','&gt;'))) for k,v in x)
+    else: x = ''
+    t = '{0.__module__}.{0.__name__}'.format(type(self.obj))
+    return '<b>{}</b> {}'.format(t,x)
+
+  def ipynav(self):
+    ipynav(self)
+
+#==================================================================================================
+def ipybrowse(D,start=1,pgsize=10):
   r"""
 A simple utility to browse sliceable objects page per page in IPython.
   """

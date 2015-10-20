@@ -88,150 +88,184 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
     yield o,ax
 
 #==================================================================================================
-def ipynav(tree,exp=None,
-  style_folded =   dict(width='3mm',height='3mm',padding='0cm',font_size='xx-small',label='+',background_color='gray'),
-  style_unfolded = dict(width='3mm',height='3mm',padding='0cm',font_size='xx-small',label='-',background_color='darkblue'),
-  ):
+class Tree:
   r"""
-Navigation in an IPython tree.
+Objects of this class are trees with IPython navigation facilities.
+
+.. attribute:: children
+   A list of :class:`Tree` objects, the offspring of this object (must be defined in sub-classes).
   """
 #==================================================================================================
-  from IPython.display import display, clear_output
-  from ipywidgets.widgets import HBox, VBox, Button, Text, HTML
-  def walk(obj,pre,exp):
-    r = exp.get(pre,False)
-    yield pre,obj,r
-    if r:
-      for k,objc in obj.children:
-        yield from walk(objc,pre+(k,),exp)
-  def nav(b):
-    p,r = b.args
-    if r: del exp[p]
-    else: exp[p] = True
-    clear_output(wait=True)
-    w.close()
-    ipynav(tree,exp)
-  def hcontent(p,x,r):
-    yield HTML('<div style="padding-left: {}cm">&nbsp;</div>'.format(len(p)+.2))
-    b = Button(**(style_unfolded if r else style_folded))
-    b.args = (p,r)
-    b.on_click(nav)
-    yield b
-    if p:
-      yield HTML('<div style="padding-left:1mm;"><span style="background-color: lavender;" title="{}">{}</style></div>'.format('.'.join(p),p[-1]))
-    if hasattr(x,'_repr_html_'): s = x._repr_html_()
-    else: s = '<span>{}</span>'.format(str(x).replace('<','&lt;').replace('>','&gt;'))
-    yield HTML('<div style="padding-left:3mm;">{}</div>'.format(s))
-  if exp is None: exp = {}
-  w = VBox(children=tuple(HBox(children=tuple(hcontent(*q))) for q in walk(tree,(),exp)))
-  display(w)
+
+  style_folded =   dict(width='3mm',height='3mm',padding='0cm',font_size='xx-small',label='+',background_color='gray')
+  style_unfolded = dict(width='3mm',height='3mm',padding='0cm',font_size='xx-small',label='-',background_color='darkblue')
+
+  def ipynav(self):
+    r"""
+Displays a widget for nagigating this tree.
+    """
+    from IPython.display import display
+    from ipywidgets.widgets import HBox, VBox, Button, Text, HTML
+    def lines(node,pre):
+      s = exp.get(pre)
+      if s is None: s = exp[pre] = [False]; s.append(HBox(children=tuple(getline(node,pre,s))))
+      yield s[1]
+      if s[0]:
+        if node.children is None: logger.error('ObjTree object child generator failed'); return
+        for k,nodec in node.children:
+          yield from lines(nodec,pre+(k,))
+    def getline(node,pre,s):
+      yield HTML('<div style="padding-left: {}cm">&nbsp;</div>'.format(len(pre)+.2))
+      buttons = Button(**self.style_folded), Button(visible=False,**self.style_unfolded)
+      for r,b in enumerate(buttons):
+        b.dual = buttons[1-r]
+        b.cell = s
+        b.on_click(nav)
+      yield from buttons
+      if pre:
+        yield HTML('<div style="padding-left:1mm;"><span style="background-color: lavender;" title="{}">{}</style></div>'.format('.'.join(pre),pre[-1]))
+      if hasattr(node,'_repr_html_'): s = node._repr_html_()
+      else: s = '<span>{}</span>'.format(str(node).replace('<','&lt;').replace('>','&gt;'))
+      yield HTML('<div style="padding-left:3mm;">{}</div>'.format(s))
+    def nav(b):
+      b.cell[0] = not b.cell[0]
+      b.visible = False
+      b.dual.visible = True
+      display(next(wdgs))
+    def wdggen():
+      while True:
+        wdg = VBox(children=tuple(lines(self,())))
+        yield wdg
+        wdg.close()
+    exp = {}
+    wdgs = wdggen()
+    display(next(wdgs))
 
 #==================================================================================================
-class ObjTree:
+class ObjTree (Tree):
+  r"""
+Objects of this class are :class:`Tree` instances which represent arbitrary objects as trees.
+
+:param obj: an arbitrary object
+  """
 #==================================================================================================
 
-  fchildren = []
-  fsummary = []
+  style = 'border-left: thin solid blue; padding-top: 0mm; padding-bottom: 0mm; padding-left: 1mm; padding-right: 1mm;'
+
+  Register = [],[]
   @staticmethod
-  def register(*filtrs,D=dict(get_children=fchildren,get_summary=fsummary)):
-    import inspect
-    L,LL = [],[]
-    for filtr in filtrs:
-      if inspect.isclass(filtr): L.append(filtr)
-      elif inspect.isroutine(filtr): LL.append(filtr)
-      else: raise Exception('Filter must be a class or routine')
-    if L: LL.insert(0,(lambda x,c=tuple(L): isinstance(x,c)))
-    filtrs = lambda x,LL=LL: any(filtr(x) for filtr in LL)
-    def reg(f,filtrs=filtrs):
-      D[f.__name__].append((filtrs,f))
-      return f
-    return reg
-  @classmethod
-  def registernum(cls,D={}):
-    def add(m):
-      import sys
-      if m in sys.modules and not m in D: D[m] = True; return True
-    if add('pandas.core.base'):
-      from pandas.core.base import PandasObject
-      @cls.register(PandasObject)
-      def get_children(a):
-        if hasattr(a,'columns'):
-          for c in a.columns: yield c,ObjTree(a[c])
-    if add('numpy'):
-      from numpy import ndarray
-      @cls.register(ndarray)
-      def get_children(a): return ()
-    if add('scipy.sparse.base'):
-      from scipy.sparse.base import spmatrix
-      @cls.register(spmatrix)
-      def get_children(a): return ()
+  def register(spec,Register=Register):
+    if isinstance(spec,str): i,spec = 1,spec.rsplit('.',1)
+    elif isinstance(spec,type): i=0
+    else: raise Exception('Argument must be a string or a class')
+    return lambda f,i=i,spec=spec: Register[i].append((f.__name__,spec,f))
+
+  def __init__(self,obj):
+    from sys import modules
+    L0,L1 = self.Register
+    for i,(a,(mod,klass),f) in reversed(list(enumerate(L1))): # update independent of self,obj
+      m = modules.get(mod)
+      if m is not None: L0.insert(0,(a,getattr(m,klass),f)); del L1[i]
+    self.obj = obj
+    for a,klass,f in L0:
+      if isinstance(obj,klass): setattr(self,a,f)
 
   @staticmethod
-  def gchildren(obj):
-    import inspect
-    from numbers import Number
-    if isinstance(obj,(Number,str)) or inspect.isroutine(obj): return
-    for k,objc in inspect.getmembers(obj,lambda x: not inspect.isbuiltin(x)):
-      if k.startswith('_'): continue
-      yield k,ObjTree(objc)
+  def get_children(obj):
+    r"""
+Returns the offspring of an arbitrary object *obj* as an iterator of pairs, each with a :class:`str` label and a :class:`Tree` instance. By default, returns the sorted content of the attribute dictionary of *obj* (if any), where each value is encapsulated in an :class:`ObjTree` instance. Can be overriden by subclassing, or by registering a hook. Example::
+
+   @ObjTree.register('numpy.ndarray')
+   def get_children(obj): return ()
+
+will replace the default each time :attr:`obj` is of class :class:`numpy.ndarray`. If `myclass` is in the local scope::
+
+   @ObjTree.register(myclass)
+   def get_children(obj): ...
+    """
+    if hasattr(obj,'__dict__'):
+      return tuple((k,ObjTree(x)) for k,x in sorted(obj.__dict__.items()))
+    return ()
 
   @staticmethod
-  def gsummary(obj):
+  def get_summary(obj):
+    r"""
+Returns the description of an arbitrary object *obj* as an iterator of pairs, each with a :class:`str` label and an arbitrary value. By default, returns the :func:`len` of *obj* if it is a sequence, or its signature if it is a routine, nothing otherwise. Can be overriden by subclassing, or by registering a hook (same mechanism as :meth:`get_children`\ ).
+    """
     import inspect
-    from numbers import Number
-    if isinstance(obj,(Number,str)):
-      yield 'value',obj      
-    elif inspect.isroutine(obj):
+    if inspect.isroutine(obj):
       yield 'signature',inspect.signature(obj)
     else:
-      try: yield 'shape',obj.shape
-      except:
-        try: yield 'len',len(obj)
-        except: pass
-      try: yield 'dtype',obj.dtype
+      try: yield 'len',len(obj)
       except: pass
 
   @ondemand
-  def children(self): return tuple(self.gchildren(self.obj))
+  def children(self):
+    try: return tuple(self.get_children(self.obj))
+    except: return None
   @ondemand
-  def summary(self): return tuple(self.gsummary(self.obj))
-
-  def __init__(self,obj):
-    import inspect
-    from numbers import Number
-    self.obj = obj
-    for filtr,g in self.fchildren:
-      if filtr(obj): self.gchildren = g; break
-    for filtr,g in self.fsummary:
-      if filtr(obj): self.gsummary = g; break
+  def summary(self):
+    try: return tuple(self.get_summary(self.obj))
+    except: return None
 
   def _repr_html_(self):
     x = self.summary
-    if x: x = ' '.join('<em>{}</em>: {}'.format(k,(v._repr_html_() if hasattr(v,'_repr_html_') else str(v).replace('<','&lt;').replace('>','&gt;'))) for k,v in x)
+    if x is None: x = '<span style="color: red;">error</a>'
+    elif x: x = ' '.join('<span style="{}"><em>{}</em>: {}</span>'.format(self.style,k,(v._repr_html_() if hasattr(v,'_repr_html_') else str(v).replace('<','&lt;').replace('>','&gt;'))) for k,v in x)
     else: x = ''
     t = '{0.__module__}.{0.__name__}'.format(type(self.obj))
     return '<b>{}</b> {}'.format(t,x)
 
-  def ipynav(self):
-    ipynav(self)
+@ObjTree.register('numbers.Number')
+def get_children(obj): return ()
+@ObjTree.register('numbers.Number')
+def get_summary(obj): yield 'value',obj
+
+@ObjTree.register('pandas.core.base.PandasObject')
+def get_children(obj):
+  if hasattr(obj,'columns'):
+    for c in obj.columns: yield c,ObjTree(obj[c])
+@ObjTree.register('pandas.core.base.PandasObject')
+def get_summary(obj):
+  if hasattr(obj,'shape'): yield 'shape', obj.shape
+  if hasattr(obj,'dtype'): yield 'dtype', obj.dtype
+
+@ObjTree.register('numpy.ndarray')
+def get_children(obj): return ()
+@ObjTree.register('numpy.ndarray')
+def get_summary(obj): yield 'shape',obj.shape; yield 'dtype',obj.dtype
+
+@ObjTree.register('scipy.sparse.base.spmatrix')
+def get_children(obj): return ()
+@ObjTree.register('scipy.sparse.base.spmatrix')
+def get_summary(obj):
+  n = 1
+  for d in obj.shape: n *= d
+  yield 'shape',obj.shape
+  yield 'density',obj.nnz/n
 
 #==================================================================================================
 def ipybrowse(D,start=1,pgsize=10):
   r"""
+:param D: a sequence object (must have :func:`len`\ ).
+:param start: the index of the initial page
+:param pgsize: the size of the pages
+
 A simple utility to browse sliceable objects page per page in IPython.
   """
 #==================================================================================================
   from IPython.display import display
   from ipywidgets.widgets.interaction import interact
   P = (len(D)-1)//pgsize + 1
-  assert start>=1 and start<=P
+  if start<1: start = 1
+  if start>P: start = P
   if P==1: display(D)
   else: interact((lambda page=start:display(D[(page-1)*pgsize:page*pgsize])),page=(1,P))
 
 #==================================================================================================
 class SQliteHandler (logging.Handler):
   r"""
-A logging handler which writes the log messages in a database.
+A logging handler class which writes the log messages into a database.
 
 :param conn: a connection to the database
   """
@@ -436,7 +470,7 @@ Assumes that *pkgname* is a package contained in a git repository which is a loc
     if c is not None: return c
 
 #==================================================================================================
-def prettylist(name,columns,fmt=None):
+def ipylist(name,columns,fmt=None):
   r"""
 :param name: name of the type
 :type name: :class:`str`
@@ -444,7 +478,7 @@ def prettylist(name,columns,fmt=None):
 :type columns: :class:`tuple`\ (\ :class:`str`)
 :param fmt: a formatting function
 
-Returns a subclass of :class:`list` with an IPython pretty printer for columns. Function *fmt* takes an object and a column name, i.e. an element of *columns*, and returns the string representation of that column for that object. It defaults to :func:`getattr`.
+Returns a subclass of :class:`list` with an IPython pretty printer for columns. Function *fmt* takes an object and a column name (from *columns*) as input and returns the string representation of that column for that object. It defaults to :func:`getattr`.
   """
 #==================================================================================================
   from lxml.builder import E

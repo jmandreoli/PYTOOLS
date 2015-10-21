@@ -18,6 +18,9 @@ Use as a decorator to declare, in a class, a computable attribute which is compu
    #>>> 4
    x.u = 6; print(x.att)
    #>>> 4
+   del x.att; print(x.att)
+   #>>> Computing att...
+   #>>> 7
   """
 #==================================================================================================
 
@@ -63,8 +66,6 @@ Objects of this class act as dict objects, except their keys are also attributes
 #==================================================================================================
 def zipaxes(L,fig,sharex=False,sharey=False,**ka):
   r"""
-Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. The axes are spread more or less uniformly.
-
 :param fig: a figure
 :type fig: :class:`matplotlib.figure.Figure`
 :param L: an arbitrary sequence
@@ -73,6 +74,8 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
 :param sharey: whether all the axes share the same y-axis scale
 :type sharey: :class:`bool`
 :param ka: passed to :meth:`add_subplot` generating new axes
+
+Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. The axes are spread more or less uniformly.
   """
 #==================================================================================================
   from math import sqrt,ceil
@@ -92,13 +95,23 @@ class Tree:
   r"""
 Objects of this class are trees with IPython navigation facilities.
 
+Attributes (must be defined in sub-classes):
+
 .. attribute:: children
-   A list of :class:`Tree` objects, the offspring of this object (must be defined in sub-classes).
+
+   A sequence of :class:`Tree` objects, the offspring of this tree.
+
+.. attribute:: summary
+
+   A string or tuple whose first component is a string and the other components (if any) are name-value pairs. In the latter case, the tuple is formatted into a string. The string must be an HTML representation of the root of this tree.
+
+Methods:
   """
 #==================================================================================================
 
   style_folded =   dict(width='3mm',height='3mm',padding='0cm',font_size='xx-small',label='+',background_color='gray')
   style_unfolded = dict(width='3mm',height='3mm',padding='0cm',font_size='xx-small',label='-',background_color='darkblue')
+  style_summary = 'border-left: thin solid blue; padding-top: 0mm; padding-bottom: 0mm; padding-left: 1mm; padding-right: 1mm;'
 
   def ipynav(self):
     r"""
@@ -111,22 +124,23 @@ Displays a widget for nagigating this tree.
       if s is None: s = exp[pre] = [False]; s.append(HBox(children=tuple(getline(node,pre,s))))
       yield s[1]
       if s[0]:
-        if node.children is None: logger.error('ObjTree object child generator failed'); return
-        for k,nodec in node.children:
-          yield from lines(nodec,pre+(k,))
+        for k,nodec in node.children: yield from lines(nodec,pre+(k,))
     def getline(node,pre,s):
       yield HTML('<div style="padding-left: {}cm">&nbsp;</div>'.format(len(pre)+.2))
-      buttons = Button(**self.style_folded), Button(visible=False,**self.style_unfolded)
-      for r,b in enumerate(buttons):
-        b.dual = buttons[1-r]
-        b.cell = s
-        b.on_click(nav)
-      yield from buttons
+      buttons = Button(**node.style_folded), Button(visible=False,**node.style_unfolded)
+      for i,b in enumerate(buttons): b.dual = buttons[1-i]; b.cell = s; b.on_click(nav); yield b
       if pre:
         yield HTML('<div style="padding-left:1mm;"><span style="background-color: lavender;" title="{}">{}</style></div>'.format('.'.join(pre),pre[-1]))
-      if hasattr(node,'_repr_html_'): s = node._repr_html_()
-      else: s = '<span>{}</span>'.format(str(node).replace('<','&lt;').replace('>','&gt;'))
-      yield HTML('<div style="padding-left:3mm;">{}</div>'.format(s))
+      x = node.summary
+      try:
+        if isinstance(x,tuple):
+          t = htmlsafe(x[0]); x = x[1:]
+          if x: x = ' '.join('<span style="{}"><em>{}</em>: {}</span>'.format(node.style_summary,k,htmlsafe(v)) for k,v in x)
+          else: x = ''
+          x = '<b>{}</b> {}'.format(t,x)
+        elif not isinstance(x,str): raise Exception('Unknown summary format')
+      except Exception as e: x = '<span style="color: red;">{}</span>'.format(e)
+      yield HTML('<div style="padding-left:3mm;">{}</div>'.format(x))
     def nav(b):
       b.cell[0] = not b.cell[0]
       b.visible = False
@@ -147,15 +161,26 @@ class ObjTree (Tree):
 Objects of this class are :class:`Tree` instances which represent arbitrary objects as trees.
 
 :param obj: an arbitrary object
+
+Methods:
   """
 #==================================================================================================
-
-  style = 'border-left: thin solid blue; padding-top: 0mm; padding-bottom: 0mm; padding-left: 1mm; padding-right: 1mm;'
 
   Register = [],[]
   @staticmethod
   def register(spec,Register=Register):
-    if isinstance(spec,str): i,spec = 1,spec.rsplit('.',1)
+    r"""
+:param spec: the type of objects to which the hook applies
+:type spec: :class:`type`\|\ :class:`str`
+
+Registers a function as a hook. Use as decorator. Example::
+
+  @ObjTree.register('numpy.ndarray')
+  def get_children(obj): ...
+
+will replace the default :attr:`get_children` function attribute at creation time, whenever the argument *obj* is of class :class:`numpy.ndarray` (only if module :mod:`numpy` is already loaded). Note that it is important to keep :attr:`get_children` as a function and not set the :attr:`children` attribute directly, so offspring computation is done only on demand (otherwise, it may loop).
+    """
+    if isinstance(spec,str): i,spec = 1,tuple(spec.rsplit('.',1))
     elif isinstance(spec,type): i=0
     else: raise Exception('Argument must be a string or a class')
     return lambda f,i=i,spec=spec: Register[i].append((f.__name__,spec,f))
@@ -173,24 +198,15 @@ Objects of this class are :class:`Tree` instances which represent arbitrary obje
   @staticmethod
   def get_children(obj):
     r"""
-Returns the offspring of an arbitrary object *obj* as an iterator of pairs, each with a :class:`str` label and a :class:`Tree` instance. By default, returns the sorted content of the attribute dictionary of *obj* (if any), where each value is encapsulated in an :class:`ObjTree` instance. Can be overriden by subclassing, or by registering a hook. Example::
-
-   @ObjTree.register('numpy.ndarray')
-   def get_children(obj): return ()
-
-will replace the default each time :attr:`obj` is of class :class:`numpy.ndarray`. If `myclass` is in the local scope::
-
-   @ObjTree.register(myclass)
-   def get_children(obj): ...
+Returns the offspring of an arbitrary object *obj* as an iterator of pairs, each with a string label and a :class:`Tree` instance. By default, returns the sorted content of the attribute dictionary of *obj* (if any), where each value is encapsulated in an :class:`ObjTree` instance. Can be overriden by subclassing, or by registering a hook using :meth:`register`.
     """
     if hasattr(obj,'__dict__'):
-      return tuple((k,ObjTree(x)) for k,x in sorted(obj.__dict__.items()))
-    return ()
+      for k,x in sorted(obj.__dict__.items()): yield k,ObjTree(x)
 
   @staticmethod
   def get_summary(obj):
     r"""
-Returns the description of an arbitrary object *obj* as an iterator of pairs, each with a :class:`str` label and an arbitrary value. By default, returns the :func:`len` of *obj* if it is a sequence, or its signature if it is a routine, nothing otherwise. Can be overriden by subclassing, or by registering a hook (same mechanism as :meth:`get_children`\ ).
+Returns the description of an arbitrary object *obj* as an iterator of pairs, each with a string label and an arbitrary value. By default, returns the :func:`len` of *obj* if it is a sequence, or its signature if it is a routine, nothing otherwise. Can be overriden by subclassing, or by registering a hook using :meth:`register`.
     """
     import inspect
     if inspect.isroutine(obj):
@@ -200,21 +216,11 @@ Returns the description of an arbitrary object *obj* as an iterator of pairs, ea
       except: pass
 
   @ondemand
-  def children(self):
-    try: return tuple(self.get_children(self.obj))
-    except: return None
+  def children(self): return tuple(self.get_children(self.obj))
   @ondemand
   def summary(self):
-    try: return tuple(self.get_summary(self.obj))
-    except: return None
-
-  def _repr_html_(self):
-    x = self.summary
-    if x is None: x = '<span style="color: red;">error</a>'
-    elif x: x = ' '.join('<span style="{}"><em>{}</em>: {}</span>'.format(self.style,k,(v._repr_html_() if hasattr(v,'_repr_html_') else str(v).replace('<','&lt;').replace('>','&gt;'))) for k,v in x)
-    else: x = ''
-    t = '{0.__module__}.{0.__name__}'.format(type(self.obj))
-    return '<b>{}</b> {}'.format(t,x)
+    t = '{0.__module__}.{0.__qualname__}'.format(type(self.obj))
+    return (t,)+tuple(self.get_summary(self.obj))
 
 @ObjTree.register('numbers.Number')
 def get_children(obj): return ()
@@ -263,11 +269,39 @@ A simple utility to browse sliceable objects page per page in IPython.
   else: interact((lambda page=start:display(D[(page-1)*pgsize:page*pgsize])),page=(1,P))
 
 #==================================================================================================
+def ipylist(name,columns,fmt=None):
+  r"""
+:param name: name of the type
+:type name: :class:`str`
+:param columns: a tuple of column names
+:type columns: :class:`tuple`\ (\ :class:`str`)
+:param fmt: a formatting function
+
+Returns a subclass of :class:`list` with an IPython pretty printer for columns. Function *fmt* takes an object and a column name (from *columns*) as input and returns the string representation of that column for that object. It defaults to :func:`getattr`.
+  """
+#==================================================================================================
+  from lxml.builder import E
+  from lxml.etree import tounicode
+  if fmt is None: fmt = getattr
+  t = type(name,(list,),{})
+  t._repr_html_ = lambda self,columns=columns,fmt=fmt: tounicode(E.TABLE(E.THEAD(E.TR(*(E.TH(c) for c in columns))),E.TBODY(*(E.TR(*(E.TD(str(fmt(x,c))) for c in columns)) for x in self))))
+  t.__getitem__ = lambda self,s,t=t: t(super(t,self).__getitem__(s)) if isinstance(s,slice) else super(t,self).__getitem__(s)
+  return t
+
+#==================================================================================================
+def htmlsafe(x):
+  r"""
+Returns an HTML safe representation of *x*.
+  """
+#==================================================================================================
+  return x._repr_html_() if hasattr(x,'_repr_html_') else str(x).replace('<','&lt;').replace('>','&gt;')
+
+#==================================================================================================
 class SQliteHandler (logging.Handler):
   r"""
-A logging handler class which writes the log messages into a database.
-
 :param conn: a connection to the database
+
+A logging handler class which writes the log messages into a SQLite database.
   """
 #==================================================================================================
   def __init__(self,conn,*a,**ka):
@@ -281,13 +315,12 @@ A logging handler class which writes the log messages into a database.
 #==================================================================================================
 class SQliteStack:
   r"""
-A aggregation function which simply collects results in a list, for use with a SQlite database. Example::
+Objects of this class are aggregation functions which simply collect results in a list, for use with a SQlite database. Example::
 
    with sqlite3.connect('/path/to/db') as conn:
      rstack = SQliteStack(conn,'stack',2)
      for school,x in conn.execute('SELECT school,stack(age,height) FROM DataTable GROUP BY school'):
-       x = rstack(x)
-       print(school,x)
+       print(school,rstack(x))
 
 prints pairs *school*, *L* where *L* is a list of pairs *age*, *height*.
   """
@@ -449,7 +482,7 @@ def gitcheck(pkgname):
 :param pkgname: full name of a package
 :type pkgname: :class:`str`
 
-Assumes that *pkgname* is a package contained in a git repository which is a local, passive copy of a remote repository. Checks that the package is up-to-date, and updates it if needed using the git pull operation.
+Assumes that *pkgname* is the name of a python package contained in a git repository which is a local, passive copy of a remote repository. Checks that the package is up-to-date, and updates it if needed using the git pull operation. Call before loading the package...
   """
 #==================================================================================================
   from git import Repo, InvalidGitRepositoryError
@@ -468,24 +501,4 @@ Assumes that *pkgname* is a package contained in a git repository which is a loc
   for path in p.submodule_search_locations._path:
     c = check(path)
     if c is not None: return c
-
-#==================================================================================================
-def ipylist(name,columns,fmt=None):
-  r"""
-:param name: name of the type
-:type name: :class:`str`
-:param columns: a tuple of column names
-:type columns: :class:`tuple`\ (\ :class:`str`)
-:param fmt: a formatting function
-
-Returns a subclass of :class:`list` with an IPython pretty printer for columns. Function *fmt* takes an object and a column name (from *columns*) as input and returns the string representation of that column for that object. It defaults to :func:`getattr`.
-  """
-#==================================================================================================
-  from lxml.builder import E
-  from lxml.etree import tounicode
-  if fmt is None: fmt = getattr
-  t = type(name,(list,),{})
-  t._repr_html_ = lambda self,columns=columns,fmt=fmt: tounicode(E.TABLE(E.THEAD(E.TR(*(E.TH(c) for c in columns))),E.TBODY(*(E.TR(*(E.TD(str(fmt(x,c))) for c in columns)) for x in self))))
-  t.__getitem__ = lambda self,s,t=t: t(super(t,self).__getitem__(s)) if isinstance(s,slice) else super(t,self).__getitem__(s)
-  return t
 

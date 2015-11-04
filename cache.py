@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 import os, sqlite3, pickle, inspect, threading
 from pathlib import Path
 from functools import update_wrapper
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 from collections.abc import MutableMapping
 from . import SQliteNew
 
@@ -131,12 +131,13 @@ Generates a :class:`CacheDB` object.
 
   def connect(self,**ka):
     conn = sqlite3.connect(self.dbpath,**ka)
-    conn.create_function('cellrm',2,lambda cell,size,s=self.storage: s(cell).remove(size>0))
+    conn.create_function('cellrm',2,lambda cell,size,s=self.storage: s.remove(cell,size>0))
     return conn
 
   def getblock(self,sig):
     sigp = pickle.dumps(sig)
-    with self.connect(isolation_level='IMMEDIATE') as conn:
+    with self.connect() as conn:
+      conn.execute('BEGIN IMMEDIATE TRANSACTION')
       row = conn.execute('SELECT oid FROM Block WHERE signature=?',(sigp,)).fetchone()
       if row is None:
         return conn.execute('INSERT INTO Block (signature) VALUES (?)',(sigp,)).lastrowid
@@ -245,16 +246,17 @@ Returns information about this block. Available attributes:
 #--------------------------------------------------------------------------------------------------
   def __call__(self,*a,**ka):
 #--------------------------------------------------------------------------------------------------
-    ckey = pickle.dumps(self.sig.keyfunc(a,ka))    
-    with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES,isolation_level='IMMEDIATE') as conn:
+    ckey = pickle.dumps(self.sig.keyfunc(a,ka))
+    with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+      conn.execute('BEGIN IMMEDIATE TRANSACTION')
       row = conn.execute('SELECT oid,size FROM Cell WHERE block=? AND ckey=?',(self.block,ckey,)).fetchone()
       if row is None:
         cell = conn.execute('INSERT INTO Cell (block,ckey) VALUES (?,?)',(self.block,ckey)).lastrowid
-        conn.execute('UPDATE Block SET misses=misses+1 WHERE oid=?',(self.block,))
         size = None
+        conn.execute('UPDATE Block SET misses=misses+1 WHERE oid=?',(self.block,))
       else:
-        conn.execute('UPDATE Block SET hits=hits+1 WHERE oid=?',(self.block,))
         cell,size = row
+        conn.execute('UPDATE Block SET hits=hits+1 WHERE oid=?',(self.block,))
       store = self.db.storage(cell,size)
     if row is None:
       logger.info('%s MISS(%s)',self,cell)
@@ -265,7 +267,8 @@ Returns information about this block. Available attributes:
         with self.db.connect() as conn:
           conn.execute('DELETE FROM Cell WHERE oid=?',(cell,))
         raise
-      with self.db.connect(isolation_level='IMMEDIATE') as conn:
+      with self.db.connect() as conn:
+        conn.execute('BEGIN IMMEDIATE TRANSACTION')
         if conn.execute('SELECT oid FROM Cell WHERE oid=?',(cell,)).fetchone() is None:
           logger.info('%s LOST(%s)',self,cell)
         else:
@@ -273,7 +276,9 @@ Returns information about this block. Available attributes:
           conn.execute('UPDATE Cell SET size=?, hitdate=datetime(\'now\') WHERE oid=?',(size,cell))
       self.checkmax()
     else:
-      if size==0: logger.info('%s WAIT(%s)',self,cell)
+      if size==0:
+        logger.info('%s WAIT(%s)',self,cell)
+        store.waitval()
       cval = store.getval()
       logger.info('%s HIT(%s)',self,cell)
       with self.db.connect() as conn:
@@ -286,7 +291,8 @@ Returns information about this block. Available attributes:
 Checks whether there is a cache overflow and applies the LRU policy.
     """
 #--------------------------------------------------------------------------------------------------
-    with self.db.connect(isolation_level='IMMEDIATE') as conn:
+    with self.db.connect() as conn:
+      conn.execute('BEGIN IMMEDIATE TRANSACTION')
       row = conn.execute('SELECT osize FROM Overflow WHERE block=?',(self.block,)).fetchone()
       if row is not None:
         osize = row[0]
@@ -447,78 +453,69 @@ Method:
 
   def __init__(self,db):
     self.path = db.path
-    self.trackers = {},{},{}
+    self.tracker = defaultdict(threading.Event)
     self.watch()
 
 #--------------------------------------------------------------------------------------------------
-  def __call__(self,cell,size=-1,typ=namedtuple('StoreAPI',('getval','setval','commit','remove'))):
+  def __call__(self,cell,size,typ=namedtuple('StoreAPI',('waitval','getval','setval','commit'))):
     r"""
 Returns an incarnation of the API to manipulate the value of *cell* (see below).
 
 :param cell: oid of the cell
 :type cell: :class:`int`
-:param size: current size recorded in the cache
+:param size: size status of the cell
 :type size: :class:`int`\|\ :class:`NoneType`
 
 The API to manipulate the value of a cell consists of:
 
-- :func:`getval` invoked (possibly concurrently) to obtain the value of *cell*
+- :func:`waitval` invoked (possibly concurrently) to wait for the value of *cell* to be computed.
+- :func:`getval` invoked (possibly concurrently) to obtain the value of *cell*.
 - :func:`setval` invoked with an argument *val* to pre-assign the value of *cell* to *val*. Invoked only once, but *cell* may have disappeared from the cache when invoked, or may disappear while executing, so the assignment may have to later be rollbacked.
 - :func:`commit` invoked to confirm a pre-assignment made by :func:`setval`. The size of the assigned value (positive number) must be returned. The cache is frozen during execution, and no other cell value operations can happen.
-- :func:`remove` invoked with an argument *r* when *cell* is removed (*r* is a boolean indicating whether the cell value is committed). If the cell is being assigned, locally or remotely, this must be eventually rollbacked. The cache is frozen during execution, and no other cell value operations can happen.
 
-The *size* argument gives an indication of the intended use of the API in the current thread:
+The *size* parameter has the following meaning:
 
-- When *size* is :const:`None`, the cache expects the cell value to be computed by the current thread, calling :func:`setval` then :func:`commit`.
-- When the *size* is :const:`0`, the cache expects the cell value to be computed by another thread/process, which must be waited for, calling :func:`getval`.
-- When *size* is a positive number, the cache expects the cell value to have already been computed in the past (with size *size*) and be directly accessible, calling :func:`getval`.
-- When *size* is :const:`-1`, the cache intends to remove the cell value, calling :func:`remove`.
+- When *size* is :const:`None`, the cell has just been created by the current thread, which will compute its value and invoke :func:`setval` and :func:`commit` to store it.
+- When *size* is :const:`0`, the cell is currently being computed by another thread (possibly in another process) and the current thread will invoke :func:`waitval` to wait until the value is available, then :func:`getval` to get its value.
+- Otherwise, the cell has been computed in the past and the current thread will invoke :func:`getval` to get its value.
     """
 #--------------------------------------------------------------------------------------------------
-    vpath = self.path/'V{:06d}'.format(cell)
-    rpath = vpath.with_suffix('.pck')
-    tpath = vpath.with_suffix('.tmp')
-    if size is None: # current process is computing the value: setval, commit
-      tfile = tpath.open('wb')
-    elif size==0:    # other process is computing the value: getval (must wait)
-      evt = self.track(tpath.name,rpath.name)
-    else:            # value already computed: getval (nowait), or to be removed: remove
-      evt = None
+    tpath,rpath = self.getpaths(cell)
     def getval():
-      if evt is not None: evt.wait()
-      with rpath.open('rb') as u: return pickle.load(u)
+      val = pickle.load(tfile)
+      tfile.close()
+      return val
     def setval(val):
       pickle.dump(val,tfile)
       tfile.close()
     def commit():
       tpath.rename(rpath)
       return rpath.stat().st_size
-    def remove(r):
-      try: (rpath if r else tpath).unlink()
-      except: pass
-    return typ(getval,setval,commit,remove)
+    def waitval(): evt.wait()
+    if size is None: tfile = tpath.open('wb')
+    elif size==0: tfile = tpath.open('rb'); evt = self.tracker[tpath.stem]
+    else: tfile = rpath.open('rb')
+    return typ(waitval,getval,setval,commit)
 
-  def track(self,tname,rname):
-    evt = threading.Event()
-    self.trackers[0][evt] = tname, rname
-    self.trackers[1][tname] = evt
-    self.trackers[2][rname] = evt
-    return evt
+  def remove(self,cell,r):
+    tpath,rpath = self.getpaths(cell)
+    try: (rpath if r else tpath).unlink()
+    except: pass
 
-  def untrack(self,i,name):
-    evt = self.trackers[i].get(name)
-    if evt is not None:
-      tname,rname = self.trackers[0][evt]
-      del self.trackers[0][evt], self.trackers[1][tname], self.trackers[2][rname]
-      evt.set()
+  def getpaths(self,cell):
+    vpath = self.path/'V{:06d}'.format(cell)
+    tpath = vpath.with_suffix('.tmp')
+    rpath = vpath.with_suffix('.pck')
+    return tpath,rpath
+
+  def untrack(self,path):
+    evt = self.tracker.pop(Path(path).stem,None)
+    if evt is not None: evt.set()
 
   def watch_darwin(self):
     import fsevents
     def process(e):
-      if e.mask&fsevents.IN_DELETE: i=1
-      elif e.mask&fsevents.IN_MOVED_TO: i=2
-      else: return
-      self.untrack(i,os.path.basename(e.name))
+      if e.mask&(fsevents.IN_DELETE|fsevents.IN_MOVED_TO): self.untrack(e.name)
     ob = fsevents.Observer()
     ob.schedule(fsevents.Stream(process,str(self.path),file_events=True))
     ob.daemon = True
@@ -526,16 +523,21 @@ The *size* argument gives an indication of the intended use of the API in the cu
 
   def watch_linux(self):
     import pyinotify
-    def process(e):
-      if e.mask&pyinotify.IN_DELETE: i=1
-      elif e.mask&pyinotify.IN_MOVED_TO: i=2
-      else: return
-      self.untrack(i,e.name)
+    def process(e): self.untrack(e.name)
     wm = pyinotify.WatchManager()
     wm.add_watch(str(self.path),pyinotify.IN_DELETE|pyinotify.IN_MOVED_TO)
     nt = pyinotify.ThreadedNotifier(wm,default_proc_fun=process)
     nt.daemon = True
     nt.start()
+
+  def watch_win32_clean(self): # does not seem to work
+    import win32file, win32con
+    h = win32file.CreateFile(str(self.path),win32con.GENERIC_READ,win32con.FILE_SHARE_READ|win32con.FILE_SHARE_WRITE|win32con.FILE_SHARE_DELETE,None,win32con.OPEN_EXISTING,win32con.FILE_FLAG_BACKUP_SEMANTICS,None)
+    def process():
+      while True:
+        for action,name in win32file.ReadDirectoryChangesW(h,4096,False,win32con.FILE_NOTIFY_CHANGE_FILE_NAME):
+          if action == 2 or action == 5: self.untrack(name)
+    threading.Thread(target=process,daemon=True).start()
 
   def watch_win32(self):
     import win32file, win32con, win32event
@@ -547,24 +549,14 @@ The *size* argument gives an indication of the intended use of the API in the cu
         assert r == win32con.WAIT_OBJECT_0
         DD = D.copy()
         for p in self.path.iterdir():
-          if DD.pop(p.name,None) is None: D[p.name]=1; self.untrack(2,p.name)
-        for name in DD: del D[name]; self.untrack(1,name)
+          if DD.pop(p.name,None) is None: D[p.name]=1
+        for name in DD: del D[name]; self.untrack(name)
         win32file.FindNextChangeNotification(h)
-    threading.Thread(target=process,daemon=True).start()
-
-  def watch_win32_alt(self): # does not seem to work
-    h = win32file.CreateFile(str(self.path),win32con.GENERIC_READ,win32con.FILE_SHARE_READ|win32con.FILE_SHARE_WRITE|win32con.FILE_SHARE_DELETE,None,win32con.OPEN_EXISTING,win32con.FILE_FLAG_BACKUP_SEMANTICS,None)
-    def process():
-      while True:
-        for action,name in win32file.ReadDirectoryChangesW(h,4096,False,win32con.FILE_NOTIFY_CHANGE_FILE_NAME):
-          if action == 2: i=1
-          elif action == 5: i=2
-          else: return
-          self.untrack(i,name)
     threading.Thread(target=process,daemon=True).start()
 
   from sys import platform
   watch = locals()['watch_'+platform]
+  del platform
 
 #==================================================================================================
 # Utilities

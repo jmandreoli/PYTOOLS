@@ -502,3 +502,18 @@ Assumes that *pkgname* is the name of a python package contained in a git reposi
     c = check(path)
     if c is not None: return c
 
+
+#==================================================================================================
+def iso2date(iso):
+  r'''
+:param iso: triple as returned by :meth:`datetime.isocalendar`
+
+Returns the :class:`datetime` instance for which the :meth:`datetime.isocalendar` method returns *iso*.
+  '''
+#==================================================================================================
+  from datetime import date,timedelta
+  isoyear,isoweek,isoday = iso
+  year_jan4 = date(isoyear,1,4)
+  year_jan1 = year_jan4-timedelta(days=year_jan4.isoweekday()-1)
+  return year_jan1+timedelta(days=isoday-1,weeks=isoweek-1)
+

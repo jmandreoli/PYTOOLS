@@ -13,7 +13,7 @@ if __name__=='__main__':
 #--------------------------------------------------------------------------------------------------
 
 from pathlib import Path; DIR = Path(__file__).resolve().parent/'cache.dir'
-from ..cache import lru_persistent_cache, lru_persistent_process_cache, ARG
+from ..cache import lru_persistent_cache, make_cache, ARG, State
 automatic = False
 
 @lru_persistent_cache(db=DIR,ignore=('z',))
@@ -25,7 +25,8 @@ def longfunc(x,delay=10):
   sleep(delay)
   return x
 
-def stepA(state,a,b):
+def stepA(a,b):
+  state = State()
   state.a = a
   state.b = b
   state.u = a+b
@@ -35,7 +36,8 @@ def stepB(state,c):
   state.v = c*state.u
   return state
 
-process = lru_persistent_process_cache((stepA,dict(db=DIR)),(stepB,dict(db=DIR)))
+process = make_cache(stepA,db=DIR)
+process = make_cache(stepB,base=process,db=DIR)
 
 #--------------------------------------------------------------------------------------------------
 
@@ -52,13 +54,13 @@ def demo():
   import subprocess
   from sys import executable as python
   DEMOS = (
-      (simplefunc,('simplefunc(1,2)','simplefunc(1,y=2,z=3)')),
-      (process,('process(ARG(1,b=2),ARG(3)).v','process(ARG(1,2),ARG(4)).v')),
-      (longfunc,('longfunc(42,6)',)),
+      (simplefunc.cache,('simplefunc(1,2)','simplefunc(1,y=2,z=3)')),
+      (process,('process(ARG(ARG(1,b=2),3)).v','process(ARG(ARG(1,2),4)).v')),
+      (longfunc.cache,('longfunc(42,6)',)),
   )
   def cmd(t,L): return (python,__file__,str(t))+L
-  for f,L in DEMOS:
-    print(80*'-'); print('Clearing',f); f.clear()
+  for c,L in DEMOS:
+    print(80*'-'); print('Clearing',c); c.clear()
     for w in [subprocess.Popen(cmd(t,L)) for t in (0.,2.)]: w.wait()
     if not automatic:
       try: input('RET: continue; ^-C: stop')

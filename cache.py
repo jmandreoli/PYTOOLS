@@ -34,7 +34,7 @@ CREATE TABLE Cell (
   oid INTEGER PRIMARY KEY AUTOINCREMENT,
   hitdate TIMESTAMP DEFAULT ( datetime('now') ),
   block REFERENCES Block(oid) NOT NULL,
-  ckey PICKLE NOT NULL,
+  ckey BLOB NOT NULL,
   size INTEGER DEFAULT 0
   )
 
@@ -72,7 +72,7 @@ Instances of this class manage cache folders. There is at most one instance of t
 
 - ``oid``: a unique identifier of the cell, which also allows retrieval of the attached value;
 - ``block``: reference to another entry in the database (table ``Block``) describing the functor of the call event which produced the value;
-- ``ckey``: the argument of the call event which produced the value;
+- ``ckey``: the key of the call event which produced the value;
 - ``hitdate``: date of creation, or last reuse, of the cell.
 
 ``Block`` entries correspond to clusters of ``Cell`` entries (call events) sharing the same functor. They have the following fields
@@ -82,7 +82,7 @@ Instances of this class manage cache folders. There is at most one instance of t
 - ``hits``: number of call events with that functor where the argument had previously been seen; such a call does not generate a new ``Cell``, but reuses the existing one;
 - ``maxsize``: maximum number of cells attached to the block; when overflow occurs, the cells with the oldest ``hitdate`` are discarded (this amounts to the Least Recently Used policy, a.k.a. LRU, currently hardwired).
 
-Furthermore, a :class:`CacheDB` instance acts as a mapping object, where the keys are block identifiers (:class:`int`) and values are :class:`CacheBlock` objects for the corresponding blocks. Such :class:`CacheBlock` objects are normally deactivated (i.e. heir signatures do not support calls).
+Furthermore, a :class:`CacheDB` instance acts as a mapping object, where the keys are block identifiers (:class:`int`) and values are :class:`CacheBlock` objects for the corresponding blocks. Such :class:`CacheBlock` objects are normally deactivated (i.e. their signatures do not support calls).
 
 Finally, :class:`CacheDB` instances have an HTML ipython display.
 
@@ -200,13 +200,13 @@ Instances of this class implements blocks of cells sharing the same functor (sig
 :param clear: if :const:`True`, clears the block at initialisation
 :type clear: :class:`bool`
 
-A block object is callable. When a new call is submitted to a block, with positional arguments *a* and keyword arguments *ka*, the following sequence happens:
+A block object is callable. When a new call is submitted to a block with argument *arg*, the following sequence happens:
 
-- method :meth:`keyfunc` of the signature is invoked with the two arguments *a* and *ka*. It must return a pickable python object. The pickled result is used as ``ckey`` in the corresponding index database cell.
+- method :meth:`getkey` of the signature is invoked with argument *arg*. It must return a byte python object used as ``ckey`` in the corresponding index database cell.
 - Then a transaction is begun on the index database.
 - If there already exists a cell with the same ``ckey``, and its value has been computed, the transaction is immediately terminated and its value is unpickled and returned.
 - If there already exists a cell with the same ``ckey``, but its value is still being computed in another thread/process, the transaction is terminated, then the thread waits until completion of the other thread/process, then the obtained value is unpickled and returned. If the cell has been removed (e.g. when the other thread/process results in failure), an error is raised.
-- If there does not exist a cell with the same ``ckey``, a cell with this ``ckey`` is immediately created, then the transaction is terminated. Then method :meth:`valfunc` of the signature is invoked with *a* as positional arguments and *ka* as keyword arguments. The result is pickled. If an error occurs, a compensating transaction removes the created cell and the error is raised. Otherwise a new transaction informs the database cell that its result has been computed.
+- If there does not exist a cell with the same ``ckey``, a cell with this ``ckey`` is immediately created, then the transaction is terminated. Then method :meth:`getval` of the signature is invoked with argument *arg*. The result is stored. If an error occurs, a compensating transaction removes the created cell and the error is raised. Otherwise a new transaction informs the database cell that its result has been computed.
 
 Furthermore, a :class:`CacheBlock` object acts as a mapping where the keys are cell identifiers (:class:`int`) and values are triples ``hitdate``, ``ckey``, ``size``. When ``size`` is null, the value of the cell is still being computed, otherwise it represents the size in bytes of its pickle.
 
@@ -244,10 +244,10 @@ Returns information about this block. Available attributes:
     return typ(*row,currsize=sz)
 
 #--------------------------------------------------------------------------------------------------
-  def __call__(self,*a,**ka):
+  def __call__(self,arg):
 #--------------------------------------------------------------------------------------------------
-    ckey = pickle.dumps(self.sig.keyfunc(a,ka))
-    with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+    ckey = self.sig.getkey(arg)
+    with self.db.connect() as conn:
       conn.execute('BEGIN IMMEDIATE TRANSACTION')
       row = conn.execute('SELECT oid,size FROM Cell WHERE block=? AND ckey=?',(self.block,ckey,)).fetchone()
       if row is None:
@@ -261,7 +261,7 @@ Returns information about this block. Available attributes:
     if row is None:
       logger.info('%s MISS(%s)',self,cell)
       try:
-        cval = self.sig.valfunc(*a,**ka)
+        cval = self.sig.getval(arg)
         store.setval(cval)
       except:
         with self.db.connect() as conn:
@@ -304,14 +304,14 @@ Checks whether there is a cache overflow and applies the LRU policy.
 #--------------------------------------------------------------------------------------------------
 
   def __getitem__(self,cell):
-    with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
-      r = conn.execute('SELECT hitdate, ckey, size FROM Cell WHERE oid=? AND block=?',(cell,self.block)).fetchone()
+    with self.db.connect() as conn:
+      r = conn.execute('SELECT hitdate, ckey, size FROM Cell WHERE oid=?',(cell,)).fetchone()
     if r is None: raise KeyError(cell)
     return r
 
   def __delitem__(self,cell):
     with self.db.connect() as conn:
-      conn.execute('DELETE FROM Cell WHERE oid=? AND block=?',(cell,self.block))
+      conn.execute('DELETE FROM Cell WHERE oid=?',(cell,))
       if conn.total_changes==0: raise KeyError(cell)
 
   def __setitem__(self,cell,v):
@@ -326,7 +326,7 @@ Checks whether there is a cache overflow and applies the LRU policy.
       return conn.execute('SELECT count(*) FROM Cell WHERE block=?',(self.block,)).fetchone()[0]
 
   def items(self):
-    with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
+    with self.db.connect() as conn:
       for row in conn.execute('SELECT oid, hitdate, ckey, size FROM Cell WHERE block=?',(self.block,)):
         yield row[0],row[1:]
 
@@ -355,44 +355,53 @@ An instance of this class defines a functor attached to a python top-level funct
 
 The signature is entirely defined by the name of the function and of its module, as well as the sequence of argument names, marked if ignored. Hence, two functions (possibly in different processes at different times) sharing these components produce the same signature.
 
-The :meth:`keyfunc` method applied to a pair *a*, *ka*, where *a* is a list of positional arguments and *ka* a dict of keyword arguments, will match these arguments against the definition of the function and return the assignment of the argument names of the function in the order in which they appear in its definition, omitting the ignored ones. If an argument name is prefixed by \*\*, its assignment must be a dict, which is replaced by its sorted list of items.
+The :meth:`getkey` method applied to a pair *a*, *ka*, where *a* is a list of positional arguments and *ka* a dict of keyword arguments, will match these arguments against the definition of the function and return the assignment of the argument names of the function in the order in which they appear in its definition, omitting the ignored ones. If an argument name is prefixed by \*\*, its assignment must be a dict, which is replaced by its sorted list of items.
 
 Methods:
   """
 #--------------------------------------------------------------------------------------------------
   def __init__(self,func,ignore):
     func = inspect.unwrap(func)
-    self.valfunc = func
+    self.func = func
     self.name, self.params = '{}.{}'.format(func.__module__, func.__name__), tuple(getparams(func,ignore))
-  def keyfunc(self,a,ka):
-    d = inspect.getcallargs(self.valfunc,*a,**ka)
-    return tuple((p,(sorted(d[p].items()) if typ==2 else d[p])) for p,typ in self.params if typ!=-1)
+  def getkey(self,arg): return pickle.dumps(tuple(self.genkey(arg)))
+  def genkey(self,arg):
+    a,ka = arg
+    d = inspect.getcallargs(self.func,*a,**ka)
+    for p,typ in self.params:
+      if typ!=-1: yield p,(sorted(d[p].items()) if typ==2 else d[p])
+  def getval(self,arg):
+    a,ka = arg
+    return self.func(*a,**ka)
   def html(self,ckey):
     from lxml.builder import E
+    return E.DIV(*self.genhtml(pickle.loads(ckey)))
+  def genhtml(self,ckey):
+    from lxml.builder import E
     disp = (lambda k,v: E.DIV(E.B(k),'=',E.EM(repr(v)),style='display: inline; padding: 5px;'))
-    def h(ckey,dparams):
+    def h(ckey,dparams=dict(self.params)):
       for p,v in ckey:
         if dparams[p]==2: yield from map(disp,v)
         else: yield disp(p,v)
-    return E.DIV(*h(ckey,dict(self.params)))
+    return h(ckey)
   def __str__(self,mark={-1:'-',0:'',1:'*',2:'**'}): return '{}({})'.format(self.name,','.join(mark[typ]+p for p,typ in self.params))
   def __getstate__(self): return self.name, self.params
   def __setstate__(self,state): self.name, self.params = state
   def restore(self):
     r"""
-Attempts to restore the :attr:`valfunc` attribute from the other attributes. This is useful with instances obtained by unpickling, since the :attr:`valfunc` attribute is not automatically restored. This may be risky however, as the function may have changed since pickling time.
+Attempts to restore the :attr:`func` attribute from the other attributes. This is useful with instances obtained by unpickling, since the :attr:`func` attribute is not automatically restored. This may be risky however, as the function may have changed since pickling time.
     """
-    if hasattr(self,'valfunc'): return
+    if hasattr(self,'func'): return
     from importlib import import_module
     fmod,fname = self.name.rsplit('.',1)
-    valfunc = inspect.unwrap(getattr(import_module(fmod),fname))
+    func = inspect.unwrap(getattr(import_module(fmod),fname))
     ignore = tuple(p for p,typ in self.params if typ==-1)
-    params = tuple(getparams(valfunc,ignore))
+    params = tuple(getparams(func,ignore))
     if params != self.params: raise SignatureMismatchException(params,self.params)
-    self.valfunc = valfunc
+    self.func = func
 
 #--------------------------------------------------------------------------------------------------
-class ProcessSignature:
+class ProcessSignature (Signature):
   r"""
 An instance of this class defines a functor attached to a list of python top-level functions, executed in sequence, where the first argument of each call is the result of the previous call.
 
@@ -404,38 +413,27 @@ The signature is entirely defined by the components of :class:`Signature` applie
   """
 #--------------------------------------------------------------------------------------------------
 
-  def __init__(self,func,base):
-    func = inspect.unwrap(func)
-    self.func = func
+  def __init__(self,func,ignore,base):
+    super(ProcessSignature,self).__init__(func,ignore)
+    p,typ = self.params[0]
+    self.params = ((p,-1),)+self.params[1:]
     self.base = base
-    bnameS,bparamsS,self.keyfuncS  = (),(),(lambda *a: ())
-    if isinstance(self.base,CacheBlock):
-      bases = self.base.sig
-      bnameS,bparamsS,self.keyfuncS = bases.nameS, bases.paramsS, bases.keyfunc
-    self.nameS, self.paramsS = bnameS+('{}.{}'.format(func.__module__, func.__name__),), bparamsS+(tuple(getparams(func))[1:],)
-  def valfunc(self,*args):
-    obj = self.base(*args[:-1])
-    a,ka = args[-1]
-    return self.func(obj,*a,**ka)
-  def keyfunc(self,args,_=None):
-    a,ka = args[-1]
-    d = inspect.getcallargs(self.func,None,*a,**ka)
-    t = tuple((p,(sorted(d[p].items()) if typ==2 else d[p])) for p,typ in self.paramsS[-1])
-    return self.keyfuncS(args[:-1])+(t,)
-  def html(self,ckeyS):
+  def genkey(self,arg):
+    yield self.base.getkey(arg[0][0])
+    yield from super(ProcessSignature,self).genkey(arg)
+  def getval(self,args):
+    a,ka = args
+    return self.func(self.base.getval(a[0]),*a[1:],**ka)
+  def html(self,ckey):
     from lxml.builder import E
-    disp = (lambda k,v: E.DIV(E.B(k),'=',E.EM(repr(v)),style='display: inline; padding: 5px;'))
-    def h(ckey,dparams):
-      for p,v in ckey:
-        if dparams[p]==2: yield from map(disp,v)
-        else: yield disp(p,v)
-    def hS(ckeyS):
-      for params,ckey in zip(self.paramsS,ckeyS):
-        yield E.DIV(*h(ckey,dict(params)),style='border-bottom: thin dashed blue')
-    return E.DIV(*hS(ckeyS))
-  def __str__(self): return ''.join(name+';' for name in self.nameS)
-  def __getstate__(self): return self.nameS, self.paramsS
-  def __setstate__(self,state): self.nameS, self.paramsS = state
+    ckey = pickle.loads(ckey)
+    return E.DIV(self.base.html(ckey[0]),E.DIV(*self.genhtml(ckey[1:]),style='border-bottom: thin dashed blue'),style='padding:0')
+  def __str__(self): return '{};{}'.format(self.base,self.name)
+  def __getstate__(self): return self.name, self.params, self.base
+  def __setstate__(self,state): self.name, self.params, self.base = state
+  def restore(self):
+    super(ProcessSignature,self).restore()
+    self.base.restore()
 
 #==================================================================================================
 class Storage:
@@ -563,41 +561,49 @@ The *size* parameter has the following meaning:
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-def lru_persistent_cache(ignore=(),factory=CacheBlock,**ka):
+def lru_persistent_cache(ignore=(),**ka):
   r"""
 A decorator which applies to a function and replaces it by a persistently cached version. The function must be defined at the top-level of its module, to be compatible with :class:`Signature`.
 
 :param ignore: passed, together with the function, to the :class:`Signature` constructor
-:param ka: keyword arguments passed to *factory*
-:param factory: the block factory (normally :class:`CacheBlock`)
+:param ka: keyword arguments passed to :class:`CacheBlock`
   """
 #--------------------------------------------------------------------------------------------------
-  return lambda f: update_wrapper(factory(signature=Signature(f,ignore),**ka),f)
+  def transf(f):
+    c = CacheBlock(signature=Signature(f,ignore),**ka)
+    F = lambda *a,**ka: c((a,ka))
+    F.cache = c
+    return update_wrapper(F,f)
+  return transf
 
 #--------------------------------------------------------------------------------------------------
-class PCacheBlock (CacheBlock):
-#--------------------------------------------------------------------------------------------------
-  def clear(self,recursive=True):
-    super(PCacheBlock,self).clear()
-    if recursive and isinstance(self.sig.base,PCacheBlock): self.sig.base.clear()
-
-#--------------------------------------------------------------------------------------------------
-def lru_persistent_process_cache(*a,factory=PCacheBlock):
+def make_cache(f,ignore=(),base=None,factory=CacheBlock,**ka):
   r"""
-A function which takes a list of functions and returns a cache callable implementing their composition. All the functions must be defined at the top-level of their modules, to be compatible with :class:`ProcessSignature`.
+Basic cache factory.
 
-:param a: list of function cache specifiers
-:type a: list(pair(:class:`function`,\ :class:`dict`))
-:param factory: the block factory (normally :class:`CacheBlock`)
+:param f: a function
+:param ignore: passed, together with the function, to the signature constructor
+:param base: a cache (optional)
+:type base: :class:`CacheBlock`\|\ :class:`NoneType`
 
-A cache specifier is a pair consisting of a function (defined at the top-level of its module, to be compatible with :class:`ProcessSignature`) and a disctionary of arguments passed to *factory*.
+The signature of the returned cache is an instance of :class:`Signature` if *base* is :const:`None`, or an instance of :class:`ProcessSignature`, in which case, its base is a copy of the signature of *base* where :attr:`getval` is overridden by *base* itself.
   """
 #--------------------------------------------------------------------------------------------------
-  if a:
-    base = lru_persistent_process_cache(*a[:-1],factory=factory)
-    f,ka = a[-1]
-    return factory(signature=ProcessSignature(f,base),**ka)
-  else: return State
+  if base is None: sig = Signature(f,ignore)
+  elif isinstance(base,CacheBlock): sig = ProcessSignature(f,ignore,base=DerivedSignature(base))
+  else: raise TypeError('Cannot create a cache with base of type {} (not {})'.format(type(base),CacheBlock))
+  return factory(signature=sig,**ka)
+
+#--------------------------------------------------------------------------------------------------
+class DerivedSignature:
+#--------------------------------------------------------------------------------------------------
+  def __init__(self,cache): self.cache = cache
+  def getkey(self,ckey): return self.cache.sig.getkey(ckey)
+  def getval(self,arg): return self.cache(arg)
+  def html(self,ckey): return self.cache.sig.html(ckey)
+  def __str__(self): return str(self.cache.sig)
+  def __getstate__(self): return self.cache
+  def __setstate__(self,state): self.cache = state
 
 #--------------------------------------------------------------------------------------------------
 class State: pass
@@ -640,10 +646,10 @@ def html_table(irows,fmts,hdrs=None,title=None):
       yield E.TR(E.TH(str(ind)),*(E.TD(fmt(v)) for fmt,v in zip(fmts,row)))
   return E.TABLE(E.THEAD(*thead()),E.TBODY(*tbody()))
 #--------------------------------------------------------------------------------------------------
-def html_stack(*a):
+def html_stack(*a,**ka):
 #--------------------------------------------------------------------------------------------------
   from lxml.builder import E
-  return E.DIV(*(E.DIV(x) for x in a))
+  return E.DIV(*(E.DIV(x,**ka) for x in a))
 
 #--------------------------------------------------------------------------------------------------
 class WrongCacheFolderException (Exception):

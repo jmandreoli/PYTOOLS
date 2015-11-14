@@ -54,13 +54,14 @@ def demo():
   import subprocess
   from sys import executable as python
   DEMOS = (
-      (simplefunc.cache,('simplefunc(1,2)','simplefunc(1,y=2,z=3)')),
-      (process,('process(ARG(ARG(1,b=2),3)).v','process(ARG(ARG(1,2),4)).v')),
-      (longfunc.cache,('longfunc(42,6)',)),
+      ((simplefunc.cache,),('simplefunc(1,2)','simplefunc(1,y=2,z=3)')),
+      ((process,process.parent,),('process(ARG(ARG(1,b=2),3)).v','process(ARG(ARG(1,2),4)).v')),
+      ((longfunc.cache,),('longfunc(42,6)',)),
   )
   def cmd(t,L): return (python,__file__,str(t))+L
-  for c,L in DEMOS:
-    print(80*'-'); print('Clearing',c); c.clear()
+  for cs,L in DEMOS:
+    print(80*'-')
+    for c in cs: print('Clearing',c); c.clear()
     for w in [subprocess.Popen(cmd(t,L)) for t in (0.,2.)]: w.wait()
     if not automatic:
       try: input('RET: continue; ^-C: stop')

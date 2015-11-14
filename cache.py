@@ -355,7 +355,9 @@ An instance of this class defines a functor attached to a python top-level funct
 
 The signature is entirely defined by the name of the function and of its module, as well as the sequence of argument names, marked if ignored. Hence, two functions (possibly in different processes at different times) sharing these components produce the same signature.
 
-The :meth:`getkey` method applied to a pair *a*, *ka*, where *a* is a list of positional arguments and *ka* a dict of keyword arguments, will match these arguments against the definition of the function and return the assignment of the argument names of the function in the order in which they appear in its definition, omitting the ignored ones. If an argument name is prefixed by \*\*, its assignment must be a dict, which is replaced by its sorted list of items.
+The :meth:`getkey` method applied to a pair *a*, *ka*, where *a* is a list of positional arguments and *ka* a dict of keyword arguments, will match these arguments against the definition of *func* and return the assignment of the parameter names of the function in the order in which they appear in its definition, omitting the ignored ones. If a parameter name in *func* is prefixed by \*\* (hence its assignment is a dict), it is replaced by its sorted list of items.
+
+The :meth:`getval` method applied to a pair *a*, *ka* returns the value of *func* with positional argument list *a* and keyword argument dict *ka*.
 
 Methods:
   """
@@ -403,13 +405,12 @@ Attempts to restore the :attr:`func` attribute from the other attributes. This i
 #--------------------------------------------------------------------------------------------------
 class ProcessSignature (Signature):
   r"""
-An instance of this class defines a functor attached to a list of python top-level functions, executed in sequence, where the first argument of each call is the result of the previous call.
-
-The signature is entirely defined by the components of :class:`Signature` applied to each individual functions.
+An instance of this class defines a functor attached to a python top-level function and a base signature.
 
 :param func: a function, defined at the top-level of its module (hence pickable)
-:param base: a cache block with a signature which is an instance of :class:`ProcessSignature`, or a callable
-:type base: :class:`CacheBlock`\|\ callable
+:param base: a signature
+
+The :meth:`getkey` (resp. :meth:`getval`) method applied to a pair *a*, *ka* returns the same as the parent :meth:`getkey` (resp. :meth:`getval`) method, except the first argument in *a* is replaced by the result of applying to it the :meth:`getkey` (resp. :meth:`getval`) method of the base signature.
   """
 #--------------------------------------------------------------------------------------------------
 
@@ -427,10 +428,10 @@ The signature is entirely defined by the components of :class:`Signature` applie
   def html(self,ckey):
     from lxml.builder import E
     ckey = pickle.loads(ckey)
-    return E.DIV(self.base.html(ckey[0]),E.DIV(*self.genhtml(ckey[1:]),style='border-bottom: thin dashed blue'),style='padding:0')
-  def __str__(self): return '{};{}'.format(self.base,self.name)
-  def __getstate__(self): return self.name, self.params, self.base
-  def __setstate__(self,state): self.name, self.params, self.base = state
+    return E.DIV(self.base.html(ckey[0]),E.DIV(*self.genhtml(ckey[1:]),style='border-top: thin dashed blue'),style='padding:0')
+  def __str__(self): return '{};{}'.format(self.base,super(ProcessSignature,self).__str__())
+  def __getstate__(self): return super(ProcessSignature,self).__getstate__(), self.base
+  def __setstate__(self,state): state, self.base = state; super(ProcessSignature,self).__setstate__(state)
   def restore(self):
     super(ProcessSignature,self).restore()
     self.base.restore()
@@ -577,13 +578,28 @@ A decorator which applies to a function and replaces it by a persistently cached
   return transf
 
 #--------------------------------------------------------------------------------------------------
+class DerivedSignature:
+  r"""
+A signature to allow "stacked" caches.
+  """
+#--------------------------------------------------------------------------------------------------
+  def __init__(self,cache): self.getval = cache; self.alt = cache.sig
+  def getkey(self,ckey): return self.alt.getkey(ckey)
+  def getval(self,arg): return self.alt.cache(arg)
+  def html(self,ckey): return self.alt.html(ckey)
+  def __str__(self): return str(self.alt)
+  def __getstate__(self): return self.alt
+  def __setstate__(self,state): self.alt = state
+  def restore(self): self.alt.restore() # only partial
+
+#--------------------------------------------------------------------------------------------------
 def make_cache(f,ignore=(),base=None,factory=CacheBlock,**ka):
   r"""
 Basic cache factory.
 
 :param f: a function
 :param ignore: passed, together with the function, to the signature constructor
-:param base: a cache (optional)
+:param base: a cache block (optional)
 :type base: :class:`CacheBlock`\|\ :class:`NoneType`
 
 The signature of the returned cache is an instance of :class:`Signature` if *base* is :const:`None`, or an instance of :class:`ProcessSignature`, in which case, its base is a copy of the signature of *base* where :attr:`getval` is overridden by *base* itself.
@@ -592,18 +608,29 @@ The signature of the returned cache is an instance of :class:`Signature` if *bas
   if base is None: sig = Signature(f,ignore)
   elif isinstance(base,CacheBlock): sig = ProcessSignature(f,ignore,base=DerivedSignature(base))
   else: raise TypeError('Cannot create a cache with base of type {} (not {})'.format(type(base),CacheBlock))
-  return factory(signature=sig,**ka)
+  c = factory(signature=sig,**ka)
+  c.parent = base
+  return c
 
 #--------------------------------------------------------------------------------------------------
-class DerivedSignature:
+def make_process(base,*steps,**spec):
+  r"""
+Applies :func:`make_cache` recursively.
+
+:param base: the base cache block
+:type base: :class:`CacheBlock`\|\ :class:`NoneType`
+
+The *steps* must be a list of pairs where the first component is a string (step name) and the second component a function (step content). Function :func:`make_cache` is called on each step content with the result of the previous call used as base (initially the *base* argument). The keyword argument to each call is computed from the *spec* dict. If it contains step names as keys, the corresponding values must be dicts and they are removed and inserted into a dictionary *cfg*. Then, the keyword argument of the call for a given step is the remaining *spec* overridden by the value corresponding to the step name in *cfg* (if any).
+  """
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,cache): self.cache = cache
-  def getkey(self,ckey): return self.cache.sig.getkey(ckey)
-  def getval(self,arg): return self.cache(arg)
-  def html(self,ckey): return self.cache.sig.html(ckey)
-  def __str__(self): return str(self.cache.sig)
-  def __getstate__(self): return self.cache
-  def __setstate__(self,state): self.cache = state
+  cfg = dict((step,spec.pop(step,None)) for step,f in steps)
+  proc = base
+  for step,f in steps:
+    v = cfg.get(step)
+    if v is None: ka = spec
+    else: ka = spec.copy(); ka.update(v)
+    proc = make_cache(f,base=proc,**ka)
+  return proc
 
 #--------------------------------------------------------------------------------------------------
 class State: pass

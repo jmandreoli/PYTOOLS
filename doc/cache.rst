@@ -16,19 +16,14 @@ The following piece of code illustrates the use of this module.
 
 * Function :func:`longfunc` is also turned into a persistent cache. Unlike :func:`simplefunc`, it takes some time to complete. If a call is ongoing and a concurrent call sharing the same cache cell is invoked, the latter is suspended until the former completes.
 
-* Callable :const:`process` chains function :func:`stepA` and :func:`stepB`. Thus e.g.
+* Callable :const:`proc` chains function :func:`stepA` and :func:`stepB`. Thus e.g., the following are equivalent:
 
   .. code:: python
 
-    process(ARG(1,b=2),ARG(3))
+    proc(s_A=ARG(1,b=2,z=36),s_B=ARG(3,24))
+    stepB(stepA(1,b=2,z=36),3,24)
 
-  first creates an empty assignable object *o*, then calls, in sequence
-
-  .. code:: python
-
-    stepA(o,1,b=2) ; stepB(o,3)
-
-  and returns *o*. All the prefix chains (here :func:`stepA`; and :func:`stepA`;\ :func:`stepB`;) are cached.
+  All the prefix chains, here :func:`stepA` and :func:`stepA`;\ :func:`stepB`, are cached.
 
 Typical output:
 

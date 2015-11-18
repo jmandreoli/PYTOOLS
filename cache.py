@@ -16,6 +16,7 @@ from pathlib import Path
 from functools import update_wrapper
 from collections import namedtuple, defaultdict
 from collections.abc import MutableMapping
+from time import process_time, perf_counter
 from . import SQliteNew
 
 # Data associated with each cell is kept in a separate file
@@ -35,7 +36,9 @@ CREATE TABLE Cell (
   hitdate TIMESTAMP DEFAULT ( datetime('now') ),
   block REFERENCES Block(oid) NOT NULL,
   ckey BLOB NOT NULL,
-  size INTEGER DEFAULT 0
+  size INTEGER DEFAULT 0,
+  tprc REAL,
+  ttot REAL
   )
 
 CREATE VIEW Overflow AS
@@ -68,7 +71,7 @@ sqlite3.enable_callback_tracebacks(True)
 #==================================================================================================
 class CacheDB (MutableMapping):
   r"""
-Instances of this class manage cache folders. There is at most one instance of this class in a process for each absolute folder path. A cache folder contains a set of values stored in some form. Each value has meta information stored in an sqlite database named ``index.db`` in the folder. The index entry attached to a value is called a cell and describes the call event which obtained it. A ``Cell`` entry has the following fields:
+Instances of this class manage cache repositories. There is at most one instance of this class in a process for each normalised repository specification. A cache repository contains a set of values stored in some form. Each value has meta information stored in an index stored as a sqlite database. The index entry attached to a value is called a cell and describes the call event which obtained it. A ``Cell`` entry has the following fields:
 
 - ``oid``: a unique identifier of the cell, which also allows retrieval of the attached value;
 - ``block``: reference to another entry in the database (table ``Block``) describing the functor of the call event which produced the value;
@@ -88,13 +91,13 @@ Finally, :class:`CacheDB` instances have an HTML ipython display.
 
 Attributes:
 
-.. attribute:: path
+.. attribute:: spec
 
-   the path of the cache folder, as a :class:`pathlib.Path` instance
+   the normalised specification of this instance
 
 .. attribute:: dbpath
 
-   the path of the index path, as a string
+   the path of the sqlite database holding the index, as a string
 
 Methods:
 
@@ -107,27 +110,24 @@ Methods:
 Generates a :class:`CacheDB` object.
 
 :param spec: specification of the cache folder
-:type spec: :class:`CacheDB`\|\ :class:`pathlib.Path`\|\ :class:`str`
+
+The specification *spec* will be passed to method :meth:`parsespec` to obtain all the information needed about the repository.
     """
     if isinstance(spec,CacheDB): return spec
-    elif isinstance(spec,str): path = Path(spec)
-    elif isinstance(spec,Path): path = spec
-    else: raise TypeError('Expected: {}|{}|{}; Found: {}'.format(str,Path,CacheDB,type(spec)))
-    path = path.resolve()
+    spec,factory,dbpath,check = cls.parsespec(spec)
     with lock:
-      self = listing.get(path)
+      self = listing.get((cls,spec))
       if self is None:
         self = super(CacheDB,cls).__new__(cls)
-        self.path = path
-        self.dbpath = str(path/'index.db')
-        check = (lambda:'cannot create index in non empty folder') if any(path.iterdir()) else (lambda:None)
-        r = SQliteNew(self.dbpath,SCHEMA,check)
-        if r is not None: raise WrongCacheFolderException(path,r)
-        self.storage = Storage(self)
-        listing[path] = self
+        r = SQliteNew(dbpath,SCHEMA,check)
+        if r is not None: raise WrongCacheFolderException(spec,r)
+        self.spec = spec
+        self.dbpath = dbpath
+        self.storage = factory(spec)
+        listing[(cls,spec)] = self
     return self
-  
-  def __getnewargs__(self): return str(self.path),
+
+  def __getnewargs__(self): return self.spec,
 
   def connect(self,**ka):
     conn = sqlite3.connect(self.dbpath,**ka)
@@ -143,6 +143,36 @@ Generates a :class:`CacheDB` object.
         return conn.execute('INSERT INTO Block (signature) VALUES (?)',(sigp,)).lastrowid
       else:
         return row[0]
+
+#--------------------------------------------------------------------------------------------------
+# Initialisation for standard storage class
+#--------------------------------------------------------------------------------------------------
+
+  @staticmethod
+  def parsespec(spec):
+    r"""
+:param spec: the unnormalised specification of the repository
+:type spec: :class:`pathlib.Path`\|\ :class:`str`
+
+This static method is invoked when a new instance of :class:`CacheDB` must be constructed. It must return a quadruple with
+* the normalised specification of the repository (must be unique per repository of this class)
+* the storage factory
+* the location of the sqlite database holding the cache index
+* the check function, which is invoked with no parameter to perform a check immediately before creation of the cache index (when it does not already exist) and returns :const:`None` if passed, otherwise an error message
+
+The implementation in this class assumes that *spec* is a path (either as string or :class:`pathlib.Path`\).
+* the normalised specification of the repository is the resolved :class:`pathlib.Path` value of *spec*
+* the storage factory is the standard file-system based factory defined by class :class:`Storage`
+* the index location is the file ``index.db`` within the repository folder
+* the check function simply checks that the repository folder is empty (so the operation is aborted if the cache index does not exist but the repository folder is not empty)
+
+This method is typically overridden in subclasses, to allow a different allocation of the cache index and storage factory.
+    """
+    if isinstance(spec,str): path = Path(spec)
+    elif isinstance(spec,Path): path = spec
+    else: raise TypeError('Expected: {}|{}; Found: {}'.format(str,Path,type(spec)))
+    path = path.resolve()
+    return path,Storage,str(path/'index.db'),lambda p=path:'cannot create index in non empty folder' if len(tuple(p.iterdir()))>1 else None
 
 #--------------------------------------------------------------------------------------------------
 # CacheDB as Mapping
@@ -184,15 +214,14 @@ Generates a :class:`CacheDB` object.
     return tounicode(self.as_html())
   def as_html(self):
     return html_stack(*(v.as_html() for k,v in sorted(self.items())))
-  def __str__(self): return 'Cache<{}>'.format(self.path)
+  def __str__(self): return 'Cache<{}>'.format(self.spec)
 
 #==================================================================================================
 class CacheBlock (MutableMapping):
   r"""
 Instances of this class implements blocks of cells sharing the same functor (signature).
 
-:param db: specification of the cache where the block resides
-:type db: :class:`CacheDB`\|\ :class:`str`\|\ :class:`pathlib.Path`
+:param db: specification of the cache repository where the block resides
 :param signature: signature of the block, describing its functor
 :type signature: :class:`Signature`
 :param maxsize: if not :const:`None`, resizes the block at initialisation
@@ -202,13 +231,13 @@ Instances of this class implements blocks of cells sharing the same functor (sig
 
 A block object is callable. When a new call is submitted to a block with argument *arg*, the following sequence happens:
 
-- method :meth:`getkey` of the signature is invoked with argument *arg*. It must return a byte python object used as ``ckey`` in the corresponding index database cell.
+- method :meth:`getkey` of the signature is invoked with argument *arg*. It must return a python byte string used as ``ckey`` in the corresponding index database cell.
 - Then a transaction is begun on the index database.
-- If there already exists a cell with the same ``ckey``, and its value has been computed, the transaction is immediately terminated and its value is unpickled and returned.
-- If there already exists a cell with the same ``ckey``, but its value is still being computed in another thread/process, the transaction is terminated, then the thread waits until completion of the other thread/process, then the obtained value is unpickled and returned. If the cell has been removed (e.g. when the other thread/process results in failure), an error is raised.
+- If there already exists a cell with the same ``ckey``, and its value has been computed, the transaction is immediately terminated and its value is extracted and returned.
+- If there already exists a cell with the same ``ckey``, but its value is still being computed in another thread/process, the transaction is terminated, then the current thread waits until completion of the other thread/process, then the obtained value is extracted and returned. If the cell has been removed (e.g. when the other thread/process results in failure), an error is raised.
 - If there does not exist a cell with the same ``ckey``, a cell with this ``ckey`` is immediately created, then the transaction is terminated. Then method :meth:`getval` of the signature is invoked with argument *arg*. The result is stored. If an error occurs, a compensating transaction removes the created cell and the error is raised. Otherwise a new transaction informs the database cell that its result has been computed.
 
-Furthermore, a :class:`CacheBlock` object acts as a mapping where the keys are cell identifiers (:class:`int`) and values are triples ``hitdate``, ``ckey``, ``size``. When ``size`` is null, the value of the cell is still being computed, otherwise it represents the size in bytes of its pickle.
+Furthermore, a :class:`CacheBlock` object acts as a mapping where the keys are cell identifiers (:class:`int`) and values are triples ``hitdate``, ``ckey``, ``size``. When ``size`` is null, the value of the cell is still being computed, otherwise it represents its size in bytes.
 
 Finally, :class:`CacheBlock` instances have an HTML ipython display.
 
@@ -261,8 +290,10 @@ Returns information about this block. Available attributes:
     if row is None:
       logger.info('%s MISS(%s)',self,cell)
       try:
+        tm = process_time(),perf_counter()
         cval = self.sig.getval(arg)
         store.setval(cval)
+        tm = process_time()-tm[0],perf_counter()-tm[1]
       except:
         with self.db.connect() as conn:
           conn.execute('DELETE FROM Cell WHERE oid=?',(cell,))
@@ -273,7 +304,7 @@ Returns information about this block. Available attributes:
           logger.info('%s LOST(%s)',self,cell)
         else:
           size = store.commit()
-          conn.execute('UPDATE Cell SET size=?, hitdate=datetime(\'now\') WHERE oid=?',(size,cell))
+          conn.execute('UPDATE Cell SET size=?, tprc=?, ttot=?, hitdate=datetime(\'now\') WHERE oid=?',(size,tm[0],tm[1],cell))
       self.checkmax()
     else:
       if size==0:
@@ -305,7 +336,7 @@ Checks whether there is a cache overflow and applies the LRU policy.
 
   def __getitem__(self,cell):
     with self.db.connect() as conn:
-      r = conn.execute('SELECT hitdate, ckey, size FROM Cell WHERE oid=?',(cell,)).fetchone()
+      r = conn.execute('SELECT hitdate, ckey, size, tprc, ttot FROM Cell WHERE oid=?',(cell,)).fetchone()
     if r is None: raise KeyError(cell)
     return r
 
@@ -327,7 +358,7 @@ Checks whether there is a cache overflow and applies the LRU policy.
 
   def items(self):
     with self.db.connect() as conn:
-      for row in conn.execute('SELECT oid, hitdate, ckey, size FROM Cell WHERE block=?',(self.block,)):
+      for row in conn.execute('SELECT oid, hitdate, ckey, size, tprc, ttot FROM Cell WHERE block=?',(self.block,)):
         yield row[0],row[1:]
 
 #--------------------------------------------------------------------------------------------------
@@ -337,9 +368,9 @@ Checks whether there is a cache overflow and applies the LRU policy.
   def _repr_html_(self):
     from lxml.etree import tounicode
     return tounicode(self.as_html())
-  def as_html(self):
-    return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size'),fmts=(str,self.sig.html,str),title='{}: {}'.format(self.block,self.sig))
-  def __str__(self): return 'Cache<{}:{}>'.format(self.db.path,self.sig)      
+  def as_html(self,tfmt='{:.0f}'.format):
+    return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,self.sig.html,str,tfmt,tfmt),title='{}: {}'.format(self.block,self.sig))
+  def __str__(self): return 'Cache<{}:{}>'.format(self.db.spec,self.sig)      
 
 #==================================================================================================
 # Signatures
@@ -348,16 +379,16 @@ Checks whether there is a cache overflow and applies the LRU policy.
 #--------------------------------------------------------------------------------------------------
 class Signature:
   r"""
-An instance of this class defines a functor attached to a python top-level function. Arguments which do not influence the result can be specified (they will be ignored in the caching mechanism).
+An instance of this class defines a functor attached to a python top-level function. Parameters which do not influence the result can be specified (they will be ignored in the caching mechanism).
 
 :param func: a function, defined at the top-level of its module (hence pickable)
-:param ignore: a list of arguments among those of *func*
+:param ignore: a list of parameter names among those of *func*
 
-The signature is entirely defined by the name of the function and of its module, as well as the sequence of argument names, marked if ignored. Hence, two functions (possibly in different processes at different times) sharing these components produce the same signature.
+The signature is entirely defined by the name of the function and of its module, as well as the sequence of parameter names, marked if ignored. Hence, two functions (possibly in different processes at different times) sharing these components produce the same signature.
 
 The :meth:`getkey` method applied to a pair *a*, *ka*, where *a* is a list of positional arguments and *ka* a dict of keyword arguments, will match these arguments against the definition of *func* and return the assignment of the parameter names of the function in the order in which they appear in its definition, omitting the ignored ones. If a parameter name in *func* is prefixed by \*\* (hence its assignment is a dict), it is replaced by its sorted list of items.
 
-The :meth:`getval` method applied to a pair *a*, *ka* returns the value of *func* with positional argument list *a* and keyword argument dict *ka*.
+The :meth:`getval` method applied to a pair *a*, *ka* returns the value of calling *func* with positional argument list *a* and keyword argument dict *ka*.
 
 Methods:
   """
@@ -408,9 +439,10 @@ class ProcessSignature (Signature):
 An instance of this class defines a functor attached to a python top-level function and a base signature.
 
 :param func: a function, defined at the top-level of its module (hence pickable)
+:param ignore: a list of parameter names among those of *func*
 :param base: a signature
 
-The :meth:`getkey` (resp. :meth:`getval`) method applied to a pair *a*, *ka* returns the same as the parent :meth:`getkey` (resp. :meth:`getval`) method, except the first argument in *a* is replaced by the result of applying to it the :meth:`getkey` (resp. :meth:`getval`) method of the base signature.
+The :meth:`getkey` (resp. :meth:`getval`) method applied to a pair *a*, *ka* returns the same as their counterpart in class :class:`Signature`, except the first argument in *a* is replaced by the result of applying to it the :meth:`getkey` (resp. :meth:`getval`) method of the base signature.
   """
 #--------------------------------------------------------------------------------------------------
 
@@ -441,8 +473,8 @@ class Storage:
   r"""
 Instances of this class manage the storage of cell values of a cache.
 
-:param db: the cache to manage
-:type db: :class:`CacheDB`
+:param path: the folder to store cached values
+:type path: :class:`pathlib:Path`
 
 Method:
 
@@ -450,8 +482,8 @@ Method:
   """
 #==================================================================================================
 
-  def __init__(self,db):
-    self.path = db.path
+  def __init__(self,path):
+    self.path = path
     self.tracker = defaultdict(threading.Event)
     self.watch()
 
@@ -529,7 +561,7 @@ The *size* parameter has the following meaning:
     nt.daemon = True
     nt.start()
 
-  def watch_win32_clean(self): # does not seem to work
+  def watch_win32_clean(self): # nice but does not seem to work
     import win32file, win32con
     h = win32file.CreateFile(str(self.path),win32con.GENERIC_READ,win32con.FILE_SHARE_READ|win32con.FILE_SHARE_WRITE|win32con.FILE_SHARE_DELETE,None,win32con.OPEN_EXISTING,win32con.FILE_FLAG_BACKUP_SEMANTICS,None)
     def process():
@@ -538,7 +570,7 @@ The *size* parameter has the following meaning:
           if action == 2 or action == 5: self.untrack(name)
     threading.Thread(target=process,daemon=True).start()
 
-  def watch_win32(self):
+  def watch_win32(self): # ugly but seems to work
     import win32file, win32con, win32event
     D = dict((p.name,1) for p in self.path.iterdir())
     h = win32file.FindFirstChangeNotification(str(self.path),False,win32con.FILE_NOTIFY_CHANGE_FILE_NAME)
@@ -567,7 +599,7 @@ def lru_persistent_cache(ignore=(),**ka):
 A decorator which applies to a function and replaces it by a persistently cached version. The function must be defined at the top-level of its module, to be compatible with :class:`Signature`.
 
 :param ignore: passed, together with the function, to the :class:`Signature` constructor
-:param ka: keyword arguments passed to :class:`CacheBlock`
+:param ka: keyword argument dict passed to :class:`CacheBlock`
   """
 #--------------------------------------------------------------------------------------------------
   def transf(f):
@@ -579,9 +611,6 @@ A decorator which applies to a function and replaces it by a persistently cached
 
 #--------------------------------------------------------------------------------------------------
 class DerivedSignature:
-  r"""
-A signature to allow "stacked" caches.
-  """
 #--------------------------------------------------------------------------------------------------
   def __init__(self,cache): self.getval = cache; self.alt = cache.sig
   def getkey(self,ckey): return self.alt.getkey(ckey)
@@ -593,16 +622,16 @@ A signature to allow "stacked" caches.
   def restore(self): self.alt.restore() # only partial
 
 #--------------------------------------------------------------------------------------------------
-def make_cache(f,ignore=(),base=None,factory=CacheBlock,**ka):
+def make_process_step(base,f,ignore=(),factory=CacheBlock,**ka):
   r"""
-Basic cache factory.
+Basic process cache factory (invoked to cache each process step).
 
+:param base: a cache block
+:type base: :class:`CacheBlock`\|\ :class:`NoneType`
 :param f: a function
 :param ignore: passed, together with the function, to the signature constructor
-:param base: a cache block (optional)
-:type base: :class:`CacheBlock`\|\ :class:`NoneType`
 
-The signature of the returned cache is an instance of :class:`Signature` if *base* is :const:`None`, or an instance of :class:`ProcessSignature`, in which case, its base is a copy of the signature of *base* where :attr:`getval` is overridden by *base* itself.
+The signature of the returned cache is an instance of :class:`Signature` if *base* is :const:`None`, otherwise an instance of :class:`ProcessSignature`, in which case, its base is a copy of the signature of *base* where :attr:`getval` is overridden by *base* itself. This is what enables the "stacked cache" effect of processes.
   """
 #--------------------------------------------------------------------------------------------------
   if base is None: sig = Signature(f,ignore)
@@ -615,25 +644,43 @@ The signature of the returned cache is an instance of :class:`Signature` if *bas
 #--------------------------------------------------------------------------------------------------
 def make_process(base,*steps,**spec):
   r"""
-Applies :func:`make_cache` recursively.
+Basic process factory.
 
-:param base: the base cache block
+:param base: the base cache block, which must be a process cache (optional, defaults to :const:`None`\)
 :type base: :class:`CacheBlock`\|\ :class:`NoneType`
+:param steps: list of steps
+:type steps: list(\ :class:`ARG`\)
 
-The *steps* must be a list of pairs where the first component is a string (step name) and the second component a function (step content). Function :func:`make_cache` is called on each step content with the result of the previous call used as base (initially the *base* argument). The keyword argument to each call is computed from the *spec* dict. If it contains step names as keys, the corresponding values must be dicts and they are removed and inserted into a dictionary *cfg*. Then, the keyword argument of the call for a given step is the remaining *spec* overridden by the value corresponding to the step name in *cfg* (if any).
+In each step, the first positional argument must be a string (step name), which is removed. If it is a key in *spec*, the value must be a dict, removed from *spec* and inserted into a config dict. The keyword arguments of each step is updated first by the remainder of *spec* and then by the corresponding config value. Then function :func:`make_process_step` is called for each step with the result of the previous call used as base (initially the *base* argument), and the (modified) step as other arguments. The returned value is a function using the cache thus obtained (accessible through its attribute :attr:`cache`\). An example is given by::
+
+   p= make_process(ARG('s_A',fA,ignore=('z',)),ARG('s_B',fB),clear=True,db=DIR,s_A=dict(clear=False))
+
+The cache of the outer process 's_B' is cleared, but not that of the inner process 's_A'. Then the following expressions are equivalent::
+
+   p(s_A=ARG(3,z=22),s_B=ARG(4,u=5))
+   fB(fA(3,z=22),4,u=5)
+
+where both the inner expression `fA()` and the outer expression `fB()` are persistently cached.
   """
 #--------------------------------------------------------------------------------------------------
-  cfg = dict((step,spec.pop(step,None)) for step,f in steps)
+  def setdflt(ka,v): ka.update(spec); ka.update(v); return ka
+  if isinstance(base,ARG): steps = (base,)+steps; base = None
+  cfg = [(a[0],a[1:],ka,spec.pop(a[0],())) for a,ka in steps]
+  steps,cfg = zip(*((step,(a,setdflt(ka.copy(),v))) for step,a,ka,v in cfg))
   proc = base
-  for step,f in steps:
-    v = cfg.get(step)
-    if v is None: ka = spec
-    else: ka = spec.copy(); ka.update(v)
-    proc = make_cache(f,base=proc,**ka)
-  return proc
+  for a,ka in cfg: proc = make_process_step(proc,*a,**ka)
+  if base is not None: steps = base.steps+steps
+  proc.steps = steps
+  dflt = ARG()
+  def F(**args):
+    arg = args.get(steps[0],dflt)
+    for step in steps[1:]:
+      a,ka = args.get(step,dflt)
+      arg = ARG(arg,*a,**ka)
+    return proc(arg)
+  F.cache = proc
+  return F
 
-#--------------------------------------------------------------------------------------------------
-class State: pass
 #--------------------------------------------------------------------------------------------------
 class ARG (tuple):
   r"""
@@ -652,7 +699,7 @@ Returns a variant of *self* where *a* is appended to the positional arguments an
     a0,ka0 = self
     a = a0+a
     ka1 = ka0.copy(); ka1.update(ka); ka = ka1
-    return ARG(*a,**ka1)
+    return ARG(*a,**ka)
 
 #--------------------------------------------------------------------------------------------------
 def getparams(func,ignore=(),code={inspect.Parameter.VAR_POSITIONAL:1,inspect.Parameter.VAR_KEYWORD:2}):
@@ -692,3 +739,7 @@ Exception raised when restoring a passive signature fails.
   """
 #--------------------------------------------------------------------------------------------------
   pass
+#--------------------------------------------------------------------------------------------------
+class State: pass
+#--------------------------------------------------------------------------------------------------
+

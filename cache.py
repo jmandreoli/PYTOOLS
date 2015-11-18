@@ -17,7 +17,7 @@ from functools import update_wrapper
 from collections import namedtuple, defaultdict
 from collections.abc import MutableMapping
 from time import process_time, perf_counter
-from . import SQliteNew
+from . import SQliteNew, size_fmt, time_fmt
 
 # Data associated with each cell is kept in a separate file
 # in the same folder as the database
@@ -155,12 +155,14 @@ The specification *spec* will be passed to method :meth:`parsespec` to obtain al
 :type spec: :class:`pathlib.Path`\|\ :class:`str`
 
 This static method is invoked when a new instance of :class:`CacheDB` must be constructed. It must return a quadruple with
-* the normalised specification of the repository (must be unique per repository of this class)
+
+* the normalised specification of the repository (must be unique per repository for this method's class)
 * the storage factory
 * the location of the sqlite database holding the cache index
 * the check function, which is invoked with no parameter to perform a check immediately before creation of the cache index (when it does not already exist) and returns :const:`None` if passed, otherwise an error message
 
-The implementation in this class assumes that *spec* is a path (either as string or :class:`pathlib.Path`\).
+The implementation in this class assumes that *spec* is a path (either as string or :class:`pathlib.Path`\) to an existing folder.
+
 * the normalised specification of the repository is the resolved :class:`pathlib.Path` value of *spec*
 * the storage factory is the standard file-system based factory defined by class :class:`Storage`
 * the index location is the file ``index.db`` within the repository folder
@@ -368,8 +370,8 @@ Checks whether there is a cache overflow and applies the LRU policy.
   def _repr_html_(self):
     from lxml.etree import tounicode
     return tounicode(self.as_html())
-  def as_html(self,tfmt='{:.0f}'.format):
-    return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,self.sig.html,str,tfmt,tfmt),title='{}: {}'.format(self.block,self.sig))
+  def as_html(self):
+    return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,self.sig.html,size_fmt,time_fmt,time_fmt),title='{}: {}'.format(self.block,self.sig))
   def __str__(self): return 'Cache<{}:{}>'.format(self.db.spec,self.sig)      
 
 #==================================================================================================
@@ -474,7 +476,7 @@ class Storage:
 Instances of this class manage the storage of cell values of a cache.
 
 :param path: the folder to store cached values
-:type path: :class:`pathlib:Path`
+:type path: :class:`pathlib.Path`
 
 Method:
 
@@ -651,34 +653,39 @@ Basic process factory.
 :param steps: list of steps
 :type steps: list(\ :class:`ARG`\)
 
-In each step, the first positional argument must be a string (step name), which is removed. If it is a key in *spec*, the value must be a dict, removed from *spec* and inserted into a config dict. The keyword arguments of each step is updated first by the remainder of *spec* and then by the corresponding config value. Then function :func:`make_process_step` is called for each step with the result of the previous call used as base (initially the *base* argument), and the (modified) step as other arguments. The returned value is a function using the cache thus obtained (accessible through its attribute :attr:`cache`\). An example is given by::
+In each step, the first positional argument must be a string (step name), which is removed. If it is a key in *spec*, the value must be a dict, removed from *spec* and inserted into a config dict. The keyword arguments of each step is updated first by the remainder of *spec* and then by the corresponding config value. Then function :func:`make_process_step` is called for each step with the result of the previous call used as base (initially the *base* argument), and the (modified) step as other arguments. The returned value is a function using the cache thus obtained (accessible through its attribute :attr:`cache`\). Thus the following two lines are equivalent::
 
    p= make_process(ARG('s_A',fA,ignore=('z',)),ARG('s_B',fB),clear=True,db=DIR,s_A=dict(clear=False))
+   p= make_process(ARG('s_A',fA,ignore=('z',),clear=False,db=DIR),ARG('s_B',fB,clear=True,db=DIR))
 
-The cache of the outer process 's_B' is cleared, but not that of the inner process 's_A'. Then the following expressions are equivalent::
+They lead to the same cache construction::
 
-   p(s_A=ARG(3,z=22),s_B=ARG(4,u=5))
+   make_process_step(make_process_step(None,fA,ignore=('z',),clear=False,db=DIR),fB,clear=True,db=DIR)
+
+Then the following expressions are equivalent::
+
+   p(s_A=ARG(3,z=22),s_B=ARG(4,u=5),...)
    fB(fA(3,z=22),4,u=5)
 
-where both the inner expression `fA()` and the outer expression `fB()` are persistently cached.
+where both the inner expression ``fA()`` and the outer expression ``fB()`` are independently persistently cached.
   """
 #--------------------------------------------------------------------------------------------------
   def setdflt(ka,v): ka.update(spec); ka.update(v); return ka
   if isinstance(base,ARG): steps = (base,)+steps; base = None
   cfg = [(a[0],a[1:],ka,spec.pop(a[0],())) for a,ka in steps]
   steps,cfg = zip(*((step,(a,setdflt(ka.copy(),v))) for step,a,ka,v in cfg))
-  proc = base
-  for a,ka in cfg: proc = make_process_step(proc,*a,**ka)
+  cache = base
+  for a,ka in cfg: cache = make_process_step(cache,*a,**ka)
   if base is not None: steps = base.steps+steps
-  proc.steps = steps
+  cache.steps = steps
   dflt = ARG()
   def F(**args):
     arg = args.get(steps[0],dflt)
     for step in steps[1:]:
       a,ka = args.get(step,dflt)
       arg = ARG(arg,*a,**ka)
-    return proc(arg)
-  F.cache = proc
+    return cache(arg)
+  F.cache = cache
   return F
 
 #--------------------------------------------------------------------------------------------------

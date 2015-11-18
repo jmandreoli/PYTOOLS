@@ -517,3 +517,36 @@ Returns the :class:`datetime` instance for which the :meth:`datetime.isocalendar
   year_jan1 = year_jan4-timedelta(days=year_jan4.isoweekday()-1)
   return year_jan1+timedelta(days=isoday-1,weeks=isoweek-1)
 
+#==================================================================================================
+def size_fmt(size,suffix='B'):
+  r"""
+:param size: a number representing a size
+:type size: :class:`int`
+
+Returns the representation of *size* with IEC binary prefix and 1 digit after the comma.
+  """
+#==================================================================================================
+  if size<1024: return str(size)+suffix
+  size /= 1024.
+  for unit in ['Ki','Mi','Gi','Ti','Pi','Ei','Zi']:
+    if size < 1024.: return '{:3.1f}{}{}'.format(size,unit,suffix)
+    size /= 1024.
+  return '{:.1f}{}{}'.format(size,'Yi',suffix) # :-)
+
+#==================================================================================================
+def time_fmt(time):
+  r"""
+:param time: a number representing a time in seconds
+:type time: :class:`int`\|\ :class:`float`
+
+Returns the representation of *time* in one of days,hours,minutes,seconds (depending on magnitude).
+  """
+#==================================================================================================
+  if time < 60.: return '{:.0f}sec'.format(time)
+  time /= 60.
+  if time < 60.: return '{:.1f}min'.format(time)
+  time /= 60.
+  if time < 24.: return '{:.1f}hr'.format(time)
+  time /= 24.
+  return '{:.1f}day'.format(time)
+

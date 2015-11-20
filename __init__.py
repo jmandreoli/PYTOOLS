@@ -335,9 +335,9 @@ prints pairs *school*, *L* where *L* is a list of pairs *age*, *height*.
     return SQliteStack.contents.pop
 
 #==================================================================================================
-def SQliteNew(path,schema,check=lambda:None):
+def SQliteNew(path,schema):
   r"""
-Makes sure the file at *path* is a SQlite3 database with schema exactly equal to *schema*. Returns :const:`None` if successful, otherwise a :class:`str` instance describing the problem. If *check* is present, it must be a callable with no argument, invoked just before the creation of the database (when it does not already exist). If it returns anything but :const:`None`, the creation is aborted.
+Makes sure the file at *path* is a SQlite3 database with schema exactly equal to *schema*.
   """
 #==================================================================================================
   import sqlite3
@@ -345,10 +345,8 @@ Makes sure the file at *path* is a SQlite3 database with schema exactly equal to
   with sqlite3.connect(path,isolation_level='EXCLUSIVE') as conn:
     S = list(sql for sql, in conn.execute('SELECT sql FROM sqlite_master WHERE name NOT LIKE \'sqlite%\''))
     if S:
-      return None if S==schema else 'index has a version conflict'
+      if S!=schema: raise Exception('database has a version conflict')
     else:
-      c = check()
-      if c is not None: return c
       for sql in schema: conn.execute(sql)
 
 #==================================================================================================

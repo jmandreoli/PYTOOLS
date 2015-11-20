@@ -12,15 +12,16 @@ def clock(module,v):
 def fordoc(module):
   prefix = str(DIR.parent)
   pout = (DIR/module).with_suffix('.out')
-  if pout.with_suffix('.dir').exists():
-    for f in list(pout.with_suffix('.dir').iterdir()):
+  pdir = pout.with_suffix('.dir')
+  if pdir.exists():
+    for f in list(pdir.iterdir()):
       if f.is_file(): f.unlink()
   mod = importlib.import_module('myutil.demo.'+module)
   mod.automatic = True
   Thread(target=clock,args=(module,os.fdopen(os.dup(1),'w'),),daemon=True).start()
   with pout.open('w') as v:
-    os.close(1); os.close(2)
-    os.dup2(v.fileno(),1); os.dup2(v.fileno(),2)
+    n = v.fileno()
+    for m in 1,2: os.close(m);os.dup2(n,m)
     print('python',module,flush=True)
     mod.demo()
   with pout.open('r') as u: r = u.read()

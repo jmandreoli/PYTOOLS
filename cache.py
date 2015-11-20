@@ -71,12 +71,13 @@ sqlite3.enable_callback_tracebacks(True)
 #==================================================================================================
 class CacheDB (MutableMapping):
   r"""
-Instances of this class manage cache repositories. There is at most one instance of this class in a process for each normalised repository specification. A cache repository contains a set of values stored in some form. Each value has meta information stored in an index stored as a sqlite database. The index entry attached to a value is called a cell and describes the call event which obtained it. A ``Cell`` entry has the following fields:
+Instances of this class manage cache repositories. There is at most one instance of this class in a process for each normalised repository specification path. A cache repository contains a set of values stored in some form. Each value has meta information stored in an index stored as a sqlite database. The index entry attached to a value is called a cell and describes the call event which obtained it. A ``Cell`` entry has the following fields:
 
 - ``oid``: a unique identifier of the cell, which also allows retrieval of the attached value;
 - ``block``: reference to another entry in the database (table ``Block``) describing the functor of the call event which produced the value;
 - ``ckey``: the key of the call event which produced the value;
-- ``hitdate``: date of creation, or last reuse, of the cell.
+- ``hitdate``: date of creation, or last reuse, of the cell;
+- ``size``, ``tprc``, ``ttot``: size (in bytes) of the value and process and total time (in sec) of its computation.
 
 ``Block`` entries correspond to clusters of ``Cell`` entries (call events) sharing the same functor. They have the following fields
 
@@ -91,13 +92,13 @@ Finally, :class:`CacheDB` instances have an HTML ipython display.
 
 Attributes:
 
-.. attribute:: spec
+.. attribute:: path
 
-   the normalised specification of this instance
+   the normalised path of this instance, as a :class:`pathlib.Path`
 
 .. attribute:: dbpath
 
-   the path of the sqlite database holding the index, as a string
+   the path to the sqlite database holding the index, as a string
 
 Methods:
 
@@ -110,24 +111,36 @@ Methods:
 Generates a :class:`CacheDB` object.
 
 :param spec: specification of the cache folder
+:type spec: :class:`CacheDB`\|\ :class:`pathlib.Path`\|\ :class:`str`
 
-The specification *spec* will be passed to method :meth:`parsespec` to obtain all the information needed about the repository.
+* If *spec* is a :class:`CacheDB` instance, that instance is returned
+* If *spec* is a path to a directory, returns a :class:`CacheDB` instance whose storage is an instance of :class:`Storage` pointing to that directory
+* Otherwise, *spec* must be a path to a file, returns a :class:`CacheDB` instance whose storage is unpickled from the file at *spec*.
+
+Note that this constructor is locally cached on the resolved path *spec*.
     """
     if isinstance(spec,CacheDB): return spec
-    spec,factory,dbpath,check = cls.parsespec(spec)
+    if isinstance(spec,str): path = Path(spec)
+    elif isinstance(spec,Path): path = spec
+    else: raise TypeError('Expected: {}|{}|{}; Found: {}'.format(CacheDB,str,Path,type(spec)))
+    path = path.resolve()
     with lock:
-      self = listing.get((cls,spec))
+      self = listing.get(path)
       if self is None:
+        if path.is_dir(): storage = Storage(path)
+        elif path.is_file():
+          with path.open('rb') as u: storage = pickle.loads(u)
+        else: raise Exception('Cache repository specification path must be directory or file')
+        dbpath = str(storage.dbpath)
+        SQliteNew(dbpath,SCHEMA)
         self = super(CacheDB,cls).__new__(cls)
-        r = SQliteNew(dbpath,SCHEMA,check)
-        if r is not None: raise WrongCacheFolderException(spec,r)
-        self.spec = spec
+        self.path = path
         self.dbpath = dbpath
-        self.storage = factory(spec)
-        listing[(cls,spec)] = self
+        self.storage = storage
+        listing[path] = self
     return self
 
-  def __getnewargs__(self): return self.spec,
+  def __getnewargs__(self): return self.path,
 
   def connect(self,**ka):
     conn = sqlite3.connect(self.dbpath,**ka)
@@ -143,38 +156,6 @@ The specification *spec* will be passed to method :meth:`parsespec` to obtain al
         return conn.execute('INSERT INTO Block (signature) VALUES (?)',(sigp,)).lastrowid
       else:
         return row[0]
-
-#--------------------------------------------------------------------------------------------------
-# Initialisation for standard storage class
-#--------------------------------------------------------------------------------------------------
-
-  @staticmethod
-  def parsespec(spec):
-    r"""
-:param spec: the unnormalised specification of the repository
-:type spec: :class:`pathlib.Path`\|\ :class:`str`
-
-This static method is invoked when a new instance of :class:`CacheDB` must be constructed. It must return a quadruple with
-
-* the normalised specification of the repository (must be unique per repository for this method's class)
-* the storage factory
-* the location of the sqlite database holding the cache index
-* the check function, which is invoked with no parameter to perform a check immediately before creation of the cache index (when it does not already exist) and returns :const:`None` if passed, otherwise an error message
-
-The implementation in this class assumes that *spec* is a path (either as string or :class:`pathlib.Path`\) to an existing folder.
-
-* the normalised specification of the repository is the resolved :class:`pathlib.Path` value of *spec*
-* the storage factory is the standard file-system based factory defined by class :class:`Storage`
-* the index location is the file ``index.db`` within the repository folder
-* the check function simply checks that the repository folder is empty (so the operation is aborted if the cache index does not exist but the repository folder is not empty)
-
-This method is typically overridden in subclasses, to allow a different allocation of the cache index and storage factory.
-    """
-    if isinstance(spec,str): path = Path(spec)
-    elif isinstance(spec,Path): path = spec
-    else: raise TypeError('Expected: {}|{}; Found: {}'.format(str,Path,type(spec)))
-    path = path.resolve()
-    return path,Storage,str(path/'index.db'),lambda p=path:'cannot create index in non empty folder' if len(tuple(p.iterdir()))>1 else None
 
 #--------------------------------------------------------------------------------------------------
 # CacheDB as Mapping
@@ -216,7 +197,7 @@ This method is typically overridden in subclasses, to allow a different allocati
     return tounicode(self.as_html())
   def as_html(self):
     return html_stack(*(v.as_html() for k,v in sorted(self.items())))
-  def __str__(self): return 'Cache<{}>'.format(self.spec)
+  def __str__(self): return 'Cache<{}>'.format(self.path)
 
 #==================================================================================================
 class CacheBlock (MutableMapping):
@@ -293,20 +274,18 @@ Returns information about this block. Available attributes:
       logger.info('%s MISS(%s)',self,cell)
       try:
         tm = process_time(),perf_counter()
-        cval = self.sig.getval(arg)
-        store.setval(cval)
+        try: cval = self.sig.getval(arg)
+        except: store.abort(); raise
+        size = store.setval(cval)
         tm = process_time()-tm[0],perf_counter()-tm[1]
       except:
         with self.db.connect() as conn:
           conn.execute('DELETE FROM Cell WHERE oid=?',(cell,))
         raise
       with self.db.connect() as conn:
-        conn.execute('BEGIN IMMEDIATE TRANSACTION')
-        if conn.execute('SELECT oid FROM Cell WHERE oid=?',(cell,)).fetchone() is None:
-          logger.info('%s LOST(%s)',self,cell)
-        else:
-          size = store.commit()
-          conn.execute('UPDATE Cell SET size=?, tprc=?, ttot=?, hitdate=datetime(\'now\') WHERE oid=?',(size,tm[0],tm[1],cell))
+        conn.execute('UPDATE Cell SET size=?, tprc=?, ttot=?, hitdate=datetime(\'now\') WHERE oid=?',(size,tm[0],tm[1],cell))
+        if conn.total_changes: store.commit()
+        else: logger.info('%s LOST(%s)',self,cell)
       self.checkmax()
     else:
       if size==0:
@@ -372,7 +351,7 @@ Checks whether there is a cache overflow and applies the LRU policy.
     return tounicode(self.as_html())
   def as_html(self):
     return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,self.sig.html,size_fmt,time_fmt,time_fmt),title='{}: {}'.format(self.block,self.sig))
-  def __str__(self): return 'Cache<{}:{}>'.format(self.db.spec,self.sig)      
+  def __str__(self): return 'Cache<{}:{}>'.format(self.db.path,self.sig)      
 
 #==================================================================================================
 # Signatures
@@ -471,26 +450,26 @@ The :meth:`getkey` (resp. :meth:`getval`) method applied to a pair *a*, *ka* ret
     self.base.restore()
 
 #==================================================================================================
-class Storage:
+class FileStorage:
   r"""
-Instances of this class manage the storage of cell values of a cache.
+Instances of this class manage the persistent storage of cache values using a filesystem directory.
 
-:param path: the folder to store cached values
+:param path: the directory to store cached values
 :type path: :class:`pathlib.Path`
 
-Method:
+Methods:
 
 .. automethod:: __call__
   """
 #==================================================================================================
 
+  timeout = 864000. # 10 days!
+
   def __init__(self,path):
     self.path = path
-    self.tracker = defaultdict(threading.Event)
-    self.watch()
 
 #--------------------------------------------------------------------------------------------------
-  def __call__(self,cell,size,typ=namedtuple('StoreAPI',('waitval','getval','setval','commit'))):
+  def __call__(self,cell,size,typ=namedtuple('StoreAPI',('waitval','getval','setval','abort','commit'))):
     r"""
 Returns an incarnation of the API to manipulate the value of *cell* (see below).
 
@@ -503,36 +482,45 @@ The API to manipulate the value of a cell consists of:
 
 - :func:`waitval` invoked (possibly concurrently) to wait for the value of *cell* to be computed.
 - :func:`getval` invoked (possibly concurrently) to obtain the value of *cell*.
-- :func:`setval` invoked with an argument *val* to pre-assign the value of *cell* to *val*. Invoked only once, but *cell* may have disappeared from the cache when invoked, or may disappear while executing, so the assignment may have to later be rollbacked.
-- :func:`commit` invoked to confirm a pre-assignment made by :func:`setval`. The size of the assigned value (positive number) must be returned. The cache is frozen during execution, and no other cell value operations can happen.
+- :func:`setval` invoked with an argument *val* to assign the value of *cell* to *val*. Invoked only once, but *cell* may have disappeared from the cache when invoked, or may disappear while executing, so the assignment may have to later be rollbacked.
+- :func:`abort` invoked to abort assigning a value to *cell*. Also invoked when :func:`setval` fails.
+- :func:`commit` invoked after :func:`setval` when cell has not been removed.
 
 The *size* parameter has the following meaning:
 
-- When *size* is :const:`None`, the cell has just been created by the current thread, which will compute its value and invoke :func:`setval` and :func:`commit` to store it.
+- When *size* is :const:`None`, the cell has just been created by the current thread, which will compute its value and invoke :func:`setval` to store it and :func:`commit` if confirmed, or :func:`abort` if the computation or storage fails.
 - When *size* is :const:`0`, the cell is currently being computed by another thread (possibly in another process) and the current thread will invoke :func:`waitval` to wait until the value is available, then :func:`getval` to get its value.
 - Otherwise, the cell has been computed in the past and the current thread will invoke :func:`getval` to get its value.
     """
 #--------------------------------------------------------------------------------------------------
     tpath,rpath = self.getpaths(cell)
     def getval():
-      val = pickle.load(tfile)
-      tfile.close()
-      return val
+      try: return pickle.load(vfile)
+      finally: vfile.close()
     def setval(val):
-      pickle.dump(val,tfile)
-      tfile.close()
-    def commit():
-      tpath.rename(rpath)
-      return rpath.stat().st_size
-    def waitval(): evt.wait()
-    if size is None: tfile = tpath.open('wb')
-    elif size==0: tfile = tpath.open('rb'); evt = self.tracker[tpath.stem]
-    else: tfile = rpath.open('rb')
-    return typ(waitval,getval,setval,commit)
+      try: pickle.dump(val,vfile); return vfile.tell()
+      except: vfile.seek(0); vfile.truncate(); raise
+      finally: vfile.close(); conn.close()
+    def waitval():
+      try: conn.execute('BEGIN IMMEDIATE TRANSACTION')
+      except: pass
+      finally: conn.close()
+    def abort(): vfile.close(); conn.close()
+    def commit(): tpath.unlink()
+    if size is None:
+      vfile = rpath.open('wb')
+      conn = sqlite3.connect(str(tpath))
+      conn.execute('BEGIN IMMEDIATE TRANSACTION')
+    else:
+      vfile = rpath.open('rb')
+      if size==0: conn = sqlite3.connect(str(tpath),timeout=self.timeout)
+    return typ(waitval,getval,setval,abort,commit)
 
   def remove(self,cell,r):
     tpath,rpath = self.getpaths(cell)
-    try: (rpath if r else tpath).unlink()
+    try:
+      rpath.unlink()
+      if not r: tpath.unlink()
     except: pass
 
   def getpaths(self,cell):
@@ -541,62 +529,30 @@ The *size* parameter has the following meaning:
     rpath = vpath.with_suffix('.pck')
     return tpath,rpath
 
-  def untrack(self,path):
-    evt = self.tracker.pop(Path(path).stem,None)
-    if evt is not None: evt.set()
+#==================================================================================================
+class Storage (FileStorage):
+  r"""
+The default storage class for a cache repository. Stores the index database in the same directory as the values, with name ``index.db``.
 
-  def watch_darwin(self):
-    import fsevents
-    def process(e):
-      if e.mask&(fsevents.IN_DELETE|fsevents.IN_MOVED_TO): self.untrack(e.name)
-    ob = fsevents.Observer()
-    ob.schedule(fsevents.Stream(process,str(self.path),file_events=True))
-    ob.daemon = True
-    ob.start()
+Attributes:
 
-  def watch_linux(self):
-    import pyinotify
-    def process(e): self.untrack(e.name)
-    wm = pyinotify.WatchManager()
-    wm.add_watch(str(self.path),pyinotify.IN_DELETE|pyinotify.IN_MOVED_TO)
-    nt = pyinotify.ThreadedNotifier(wm,default_proc_fun=process)
-    nt.daemon = True
-    nt.start()
+.. attribute:: dbpath
 
-  def watch_win32_clean(self): # nice but does not seem to work
-    import win32file, win32con
-    h = win32file.CreateFile(str(self.path),win32con.GENERIC_READ,win32con.FILE_SHARE_READ|win32con.FILE_SHARE_WRITE|win32con.FILE_SHARE_DELETE,None,win32con.OPEN_EXISTING,win32con.FILE_FLAG_BACKUP_SEMANTICS,None)
-    def process():
-      while True:
-        for action,name in win32file.ReadDirectoryChangesW(h,4096,False,win32con.FILE_NOTIFY_CHANGE_FILE_NAME):
-          if action == 2 or action == 5: self.untrack(name)
-    threading.Thread(target=process,daemon=True).start()
-
-  def watch_win32(self): # ugly but seems to work
-    import win32file, win32con, win32event
-    D = dict((p.name,1) for p in self.path.iterdir())
-    h = win32file.FindFirstChangeNotification(str(self.path),False,win32con.FILE_NOTIFY_CHANGE_FILE_NAME)
-    def process():
-      while True:
-        r = win32event.WaitForSingleObject(h,win32event.INFINITE)
-        assert r == win32con.WAIT_OBJECT_0
-        DD = D.copy()
-        for p in self.path.iterdir():
-          if DD.pop(p.name,None) is None: D[p.name]=1
-        for name in DD: del D[name]; self.untrack(name)
-        win32file.FindNextChangeNotification(h)
-    threading.Thread(target=process,daemon=True).start()
-
-  from sys import platform
-  watch = locals()['watch_'+platform]
-  del platform
+   The :class:`pathlib.Path` to the sqlite database holding the index
+  """
+#==================================================================================================
+  def __init__(self,path):
+    super(Storage,self).__init__(path)
+    self.dbpath = path/'index.db'
+    if not self.dbpath.is_file() and any(path.iterdir()):
+      raise Exception('Cannot create new index in non empty directory')
 
 #==================================================================================================
 # Utilities
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-def lru_persistent_cache(ignore=(),**ka):
+def lru_persistent_cache(ignore=(),factory=CacheBlock,**ka):
   r"""
 A decorator which applies to a function and replaces it by a persistently cached version. The function must be defined at the top-level of its module, to be compatible with :class:`Signature`.
 
@@ -605,7 +561,7 @@ A decorator which applies to a function and replaces it by a persistently cached
   """
 #--------------------------------------------------------------------------------------------------
   def transf(f):
-    c = CacheBlock(signature=Signature(f,ignore),**ka)
+    c = factory(signature=Signature(f,ignore),**ka)
     F = lambda *a,**ka: c((a,ka))
     F.cache = c
     return update_wrapper(F,f)
@@ -640,7 +596,7 @@ The signature of the returned cache is an instance of :class:`Signature` if *bas
   elif isinstance(base,CacheBlock): sig = ProcessSignature(f,ignore,base=DerivedSignature(base))
   else: raise TypeError('Cannot create a cache with base of type {} (not {})'.format(type(base),CacheBlock))
   c = factory(signature=sig,**ka)
-  c.parent = base
+  c.base = base
   return c
 
 #--------------------------------------------------------------------------------------------------
@@ -653,18 +609,19 @@ Basic process factory.
 :param steps: list of steps
 :type steps: list(\ :class:`ARG`\)
 
-In each step, the first positional argument must be a string (step name), which is removed. If it is a key in *spec*, the value must be a dict, removed from *spec* and inserted into a config dict. The keyword arguments of each step is updated first by the remainder of *spec* and then by the corresponding config value. Then function :func:`make_process_step` is called for each step with the result of the previous call used as base (initially the *base* argument), and the (modified) step as other arguments. The returned value is a function using the cache thus obtained (accessible through its attribute :attr:`cache`\). Thus the following two lines are equivalent::
+Each step is defined by a :class:`ARG` object whose first positional argument must be a string representing the step name, the rest being called the step configuration. The *spec* dict is used to customise the configuration of each step. First, each *spec* item whose key is not a step name is used to update the keyword argument of all the steps. Then, each *spec* item whose key is a step name must have a dict value, which is used to update the keyword argument of that step. Thus the following expressions are equivalent::
 
-   p= make_process(ARG('s_A',fA,ignore=('z',)),ARG('s_B',fB),clear=True,db=DIR,s_A=dict(clear=False))
-   p= make_process(ARG('s_A',fA,ignore=('z',),clear=False,db=DIR),ARG('s_B',fB,clear=True,db=DIR))
+   F= make_process(ARG('s_A',fA,ignore=('z',)),ARG('s_B',fB),clear=True,db=DIR,s_A=dict(clear=False))
+   F= make_process(ARG('s_A',fA,ignore=('z',),clear=False,db=DIR),ARG('s_B',fB,clear=True,db=DIR))
 
-They lead to the same cache construction::
+Then function :func:`make_process_step` is called for each step with the result of the previous call used as base (initially the *base* argument), and the updated step configuration as other arguments. In the above example, this leads to the following cache construction::
 
    make_process_step(make_process_step(None,fA,ignore=('z',),clear=False,db=DIR),fB,clear=True,db=DIR)
 
-Then the following expressions are equivalent::
+Finally, the returned value is a function using the cache thus obtained (accessible through the attribute :attr:`cache` of the function). The function must be invoked with keyword arguments only, assigning to each step name a :class:`ARG` object called the step instantiation. Except for the first step, the positional argument of each step instantiation is prepended with the step instantiation of the previous step. The updated instantiation of the last step is then submitted to the cache. Thus, in the above example, the following expressions are equivalent::
 
-   p(s_A=ARG(3,z=22),s_B=ARG(4,u=5),...)
+   F(s_A=ARG(3,z=22),s_B=ARG(4,u=5),...)
+   F.cache(ARG(ARG(3,z=22),4,u=5))
    fB(fA(3,z=22),4,u=5)
 
 where both the inner expression ``fA()`` and the outer expression ``fB()`` are independently persistently cached.
@@ -691,7 +648,7 @@ where both the inner expression ``fA()`` and the outer expression ``fB()`` are i
 #--------------------------------------------------------------------------------------------------
 class ARG (tuple):
   r"""
-Instances of this (immutable) class hold arbitrary call arguments (both positional and keyword).
+Instances of this (immutable) class are pairs of a tuple of positional arguments and a dict of keyword arguments. Useful to manipulate function invocation arguments without making the invocation.
 
 Methods:
   """
@@ -732,13 +689,6 @@ def html_stack(*a,**ka):
   from lxml.builder import E
   return E.DIV(*(E.DIV(x,**ka) for x in a))
 
-#--------------------------------------------------------------------------------------------------
-class WrongCacheFolderException (Exception):
-  r"""
-Exception raised when the :class:`CacheDB` constructor is called with inappropriate arguments.
-  """
-#--------------------------------------------------------------------------------------------------
-  pass
 #--------------------------------------------------------------------------------------------------
 class SignatureMismatchException (Exception):
   """

@@ -54,7 +54,7 @@ def demo():
   from sys import executable as python
   DEMOS = (
       ((simplefunc.cache,),'simplefunc(1,2) ; simplefunc(1,y=2,z=3)'),
-      ((proc.cache,proc.cache.parent,),'proc(s_A=ARG(1,b=2,z=36),s_B=ARG(3)).v ; proc(s_A=ARG(1,2),s_B=ARG(3,1)).v'),
+      ((proc.cache,proc.cache.base,),'proc(s_A=ARG(1,b=2,z=36),s_B=ARG(3)).v ; proc(s_A=ARG(1,2),s_B=ARG(3,1)).v'),
       ((longfunc.cache,),'longfunc(42,6)'),
   )
   for caches,tests in DEMOS:

@@ -23,6 +23,7 @@ def simplefunc(x,y=3,z=8): return x,y
 def longfunc(x,delay=10):
   from time import sleep
   sleep(delay)
+  if x is None: raise Exception('longfunc error')
   return x
 
 def stepA(a,b,z=None):
@@ -47,7 +48,9 @@ def demo_(t,*L):
   time.sleep(float(t))
   for x in L:
     logger.info('Computing: %s',x)
-    logger.info('Result: %s = %s',x,eval(x))
+    try: v = eval(x)
+    except Exception as e: v = 'raised[{}]'.format(e)
+    logger.info('Result: %s = %s',x,v)
 
 def demo():
   import subprocess
@@ -55,7 +58,7 @@ def demo():
   DEMOS = (
       ((simplefunc.cache,),'simplefunc(1,2) ; simplefunc(1,y=2,z=3)'),
       ((proc.cache,proc.cache.base,),'proc(s_A=ARG(1,b=2,z=36),s_B=ARG(3)).v ; proc(s_A=ARG(1,2),s_B=ARG(3,1)).v'),
-      ((longfunc.cache,),'longfunc(42,6)'),
+      ((longfunc.cache,),'longfunc(42,6) ; longfunc(None,4)'),
   )
   for caches,tests in DEMOS:
     print(80*'-')

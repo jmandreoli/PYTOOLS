@@ -144,7 +144,7 @@ Note that this constructor is locally cached on the resolved path *spec*.
 
   def connect(self,**ka):
     conn = sqlite3.connect(self.dbpath,**ka)
-    conn.create_function('cellrm',2,lambda cell,size,s=self.storage: s.remove(cell,size>0))
+    conn.create_function('cellrm',2,lambda cell,size,s=self.storage: s.remove(cell,size))
     return conn
 
   def getblock(self,sig):
@@ -272,21 +272,21 @@ Returns information about this block. Available attributes:
       store = self.db.storage(cell,size)
     if row is None:
       logger.info('%s MISS(%s)',self,cell)
-      try:
-        tm = process_time(),perf_counter()
-        try: cval = self.sig.getval(arg)
-        except: store.abort(); raise
-        size = store.setval(cval)
-        tm = process_time()-tm[0],perf_counter()-tm[1]
+      tm = process_time(),perf_counter()
+      try: cval = self.sig.getval(arg)
+      except Exception as e: cval = e; size = -1
+      else: size = 1
+      tm = process_time()-tm[0],perf_counter()-tm[1]
+      try: size *= store.setval(cval)
       except:
         with self.db.connect() as conn:
           conn.execute('DELETE FROM Cell WHERE oid=?',(cell,))
         raise
       with self.db.connect() as conn:
         conn.execute('UPDATE Cell SET size=?, tprc=?, ttot=?, hitdate=datetime(\'now\') WHERE oid=?',(size,tm[0],tm[1],cell))
-        if conn.total_changes: store.commit()
-        else: logger.info('%s LOST(%s)',self,cell)
+        if not conn.total_changes: logger.info('%s LOST(%s)',self,cell)
       self.checkmax()
+      if size<0: raise cval
     else:
       if size==0:
         logger.info('%s WAIT(%s)',self,cell)
@@ -295,6 +295,7 @@ Returns information about this block. Available attributes:
       logger.info('%s HIT(%s)',self,cell)
       with self.db.connect() as conn:
         conn.execute('UPDATE Cell SET hitdate=datetime(\'now\') WHERE oid=?',(cell,))
+      if isinstance(cval,Exception): raise cval
     return cval
 
 #--------------------------------------------------------------------------------------------------
@@ -469,7 +470,7 @@ Methods:
     self.path = path
 
 #--------------------------------------------------------------------------------------------------
-  def __call__(self,cell,size,typ=namedtuple('StoreAPI',('waitval','getval','setval','abort','commit'))):
+  def __call__(self,cell,size,typ=namedtuple('StoreAPI',('waitval','getval','setval'))):
     r"""
 Returns an incarnation of the API to manipulate the value of *cell* (see below).
 
@@ -483,30 +484,27 @@ The API to manipulate the value of a cell consists of:
 - :func:`waitval` invoked (possibly concurrently) to wait for the value of *cell* to be computed.
 - :func:`getval` invoked (possibly concurrently) to obtain the value of *cell*.
 - :func:`setval` invoked with an argument *val* to assign the value of *cell* to *val*. Invoked only once, but *cell* may have disappeared from the cache when invoked, or may disappear while executing, so the assignment may have to later be rollbacked.
-- :func:`abort` invoked to abort assigning a value to *cell*. Also invoked when :func:`setval` fails.
-- :func:`commit` invoked after :func:`setval` when cell has not been removed.
 
 The *size* parameter has the following meaning:
 
-- When *size* is :const:`None`, the cell has just been created by the current thread, which will compute its value and invoke :func:`setval` to store it and :func:`commit` if confirmed, or :func:`abort` if the computation or storage fails.
+- When *size* is :const:`None`, the cell has just been created by the current thread, which will compute its value and invoke :func:`setval` to store it.
 - When *size* is :const:`0`, the cell is currently being computed by another thread (possibly in another process) and the current thread will invoke :func:`waitval` to wait until the value is available, then :func:`getval` to get its value.
 - Otherwise, the cell has been computed in the past and the current thread will invoke :func:`getval` to get its value.
     """
 #--------------------------------------------------------------------------------------------------
     tpath,rpath = self.getpaths(cell)
+    def setval(val):
+      try: pickle.dump(val,vfile); s = vfile.tell()
+      except: vfile.seek(0); vfile.truncate(); s = 1
+      vfile.close(); conn.close()
+      return s
     def getval():
       try: return pickle.load(vfile)
       finally: vfile.close()
-    def setval(val):
-      try: pickle.dump(val,vfile); return vfile.tell()
-      except: vfile.seek(0); vfile.truncate(); raise
-      finally: vfile.close(); conn.close()
     def waitval():
       try: conn.execute('BEGIN IMMEDIATE TRANSACTION')
       except: pass
       finally: conn.close()
-    def abort(): vfile.close(); conn.close()
-    def commit(): tpath.unlink()
     if size is None:
       vfile = rpath.open('wb')
       conn = sqlite3.connect(str(tpath))
@@ -514,13 +512,11 @@ The *size* parameter has the following meaning:
     else:
       vfile = rpath.open('rb')
       if size==0: conn = sqlite3.connect(str(tpath),timeout=self.timeout)
-    return typ(waitval,getval,setval,abort,commit)
+    return typ(waitval,getval,setval)
 
-  def remove(self,cell,r):
+  def remove(self,cell,size):
     tpath,rpath = self.getpaths(cell)
-    try:
-      rpath.unlink()
-      if not r: tpath.unlink()
+    try: rpath.unlink(); tpath.unlink()
     except: pass
 
   def getpaths(self,cell):
@@ -609,7 +605,7 @@ Basic process factory.
 :param steps: list of steps
 :type steps: list(\ :class:`ARG`\)
 
-Each step is defined by a :class:`ARG` object whose first positional argument must be a string representing the step name, the rest being called the step configuration. The *spec* dict is used to customise the configuration of each step. First, each *spec* item whose key is not a step name is used to update the keyword argument of all the steps. Then, each *spec* item whose key is a step name must have a dict value, which is used to update the keyword argument of that step. Thus the following expressions are equivalent::
+Each step is defined by a :class:`ARG` object whose first positional argument must be a string representing the step name, the rest being called the step configuration. The *spec* dict is used to customise the configuration of each step. First, each *spec* item whose key is not a step name is used to update the keyword argument of the configuration of all the steps. Then, each *spec* item whose key is a step name must have a dict value, which is used to update the keyword argument of that step's configuration. Thus the following expressions are equivalent::
 
    F= make_process(ARG('s_A',fA,ignore=('z',)),ARG('s_B',fB),clear=True,db=DIR,s_A=dict(clear=False))
    F= make_process(ARG('s_A',fA,ignore=('z',),clear=False,db=DIR),ARG('s_B',fB,clear=True,db=DIR))

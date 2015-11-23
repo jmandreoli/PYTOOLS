@@ -511,9 +511,9 @@ Returns the :class:`datetime` instance for which the :meth:`datetime.isocalendar
 #==================================================================================================
   from datetime import date,timedelta
   isoyear,isoweek,isoday = iso
-  year_jan4 = date(isoyear,1,4)
-  year_jan1 = year_jan4-timedelta(days=year_jan4.isoweekday()-1)
-  return year_jan1+timedelta(days=isoday-1,weeks=isoweek-1)
+  jan4 = date(isoyear,1,4)
+  iso1 = jan4-timedelta(days=jan4.weekday())
+  return iso1+timedelta(days=isoday-1,weeks=isoweek-1)
 
 #==================================================================================================
 def size_fmt(size,suffix='B'):

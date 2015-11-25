@@ -494,8 +494,9 @@ The *size* parameter has the following meaning:
 #--------------------------------------------------------------------------------------------------
     tpath,rpath = self.getpaths(cell)
     def setval(val):
-      try: pickle.dump(val,vfile); s = vfile.tell()
-      except: vfile.seek(0); vfile.truncate(); s = 1
+      try: pickle.dump(val,vfile)
+      except Exception as e: vfile.seek(0); vfile.truncate(); pickle.dump(e,vfile)
+      s = vfile.tell()
       vfile.close(); conn.close()
       return s
     def getval():

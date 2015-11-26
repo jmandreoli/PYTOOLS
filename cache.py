@@ -239,7 +239,12 @@ Methods:
     if maxsize is not None: self.resize(maxsize)
     if clear: self.clear()
 
+#==================================================================================================
   def clear_error(self):
+    r"""
+Clears all the cells from this block which cache an exception.
+    """
+#==================================================================================================  
     with self.db.connect() as conn:
       conn.execute('DELETE FROM Cell WHERE block=? AND size<0',(self.block,))
 

@@ -363,8 +363,8 @@ Checks whether there is a cache overflow and applies the LRU policy.
   def _repr_html_(self):
     from lxml.etree import tounicode
     return tounicode(self.as_html())
-  def as_html(self):
-    return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,self.sig.html,size_fmt,time_fmt,time_fmt),title='{}: {}'.format(self.block,self.sig))
+  def as_html(self,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz))):
+    return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,self.sig.html,size_fmt_,time_fmt,time_fmt),title='{}: {}'.format(self.block,self.sig))
   def __str__(self): return 'Cache<{}:{}>'.format(self.db.path,self.sig)      
 
 #==================================================================================================

@@ -188,6 +188,10 @@ Note that this constructor is locally cached on the resolved path *spec*.
       for block,sig in conn.execute('SELECT oid,signature FROM Block'):
         yield block, CacheBlock(db=self,signature=sig,block=block)
 
+  def clear(self):
+    with self.connect() as conn:
+      conn.execute('DELETE FROM Block')
+
 #--------------------------------------------------------------------------------------------------
 # Display
 #--------------------------------------------------------------------------------------------------
@@ -235,9 +239,9 @@ Methods:
     if maxsize is not None: self.resize(maxsize)
     if clear: self.clear()
 
-  def clear(self):
+  def clear_error(self):
     with self.db.connect() as conn:
-      conn.execute('DELETE FROM Cell WHERE block=?',(self.block,))
+      conn.execute('DELETE FROM Cell WHERE block=? AND size<0',(self.block,))
 
   def resize(self,n):
     assert isinstance(n,int) and n>=1
@@ -274,7 +278,7 @@ Returns information about this block. Available attributes:
       logger.info('%s MISS(%s)',self,cell)
       tm = process_time(),perf_counter()
       try: cval = self.sig.getval(arg)
-      except Exception as e: cval = e; size = -1
+      except BaseException as e: cval = e; size = -1
       else: size = 1
       tm = process_time()-tm[0],perf_counter()-tm[1]
       try: size *= store.setval(cval)
@@ -295,7 +299,7 @@ Returns information about this block. Available attributes:
       logger.info('%s HIT(%s)',self,cell)
       with self.db.connect() as conn:
         conn.execute('UPDATE Cell SET hitdate=datetime(\'now\') WHERE oid=?',(cell,))
-      if isinstance(cval,Exception): raise cval
+      if isinstance(cval,BaseException): raise cval
     return cval
 
 #--------------------------------------------------------------------------------------------------
@@ -342,6 +346,10 @@ Checks whether there is a cache overflow and applies the LRU policy.
     with self.db.connect() as conn:
       for row in conn.execute('SELECT oid, hitdate, ckey, size, tprc, ttot FROM Cell WHERE block=?',(self.block,)):
         yield row[0],row[1:]
+
+  def clear(self):
+    with self.db.connect() as conn:
+      conn.execute('DELETE FROM Cell WHERE block=?',(self.block,))
 
 #--------------------------------------------------------------------------------------------------
 # Display
@@ -569,7 +577,7 @@ class DerivedSignature:
 #--------------------------------------------------------------------------------------------------
   def __init__(self,cache): self.getval = cache; self.alt = cache.sig
   def getkey(self,ckey): return self.alt.getkey(ckey)
-  def getval(self,arg): return self.alt.cache(arg)
+  def getval(self,arg): return self.alt.cache(arg) # overridden at instance level unless unpickled
   def html(self,ckey): return self.alt.html(ckey)
   def __str__(self): return str(self.alt)
   def __getstate__(self): return self.alt
@@ -625,21 +633,26 @@ where both the inner expression ``fA()`` and the outer expression ``fB()`` are i
   """
 #--------------------------------------------------------------------------------------------------
   def setdflt(ka,v): ka.update(spec); ka.update(v); return ka
+  def caller(steps,cache,dflt=ARG()):
+    def F(**args):
+      arg = args.get(steps[0],dflt)
+      for step in steps[1:]:
+        a,ka = args.get(step,dflt)
+        arg = ARG(arg,*a,**ka)
+      return cache(arg)
+    return F
   if isinstance(base,ARG): steps = (base,)+steps; base = None
   cfg = [(a[0],a[1:],ka,spec.pop(a[0],())) for a,ka in steps]
-  steps,cfg = zip(*((step,(a,setdflt(ka.copy(),v))) for step,a,ka,v in cfg))
+  cfg = [(step,a,setdflt(ka.copy(),v)) for step,a,ka,v in cfg]
   cache = base
-  for a,ka in cfg: cache = make_process_step(cache,*a,**ka)
-  if base is not None: steps = base.steps+steps
-  cache.steps = steps
-  dflt = ARG()
-  def F(**args):
-    arg = args.get(steps[0],dflt)
-    for step in steps[1:]:
-      a,ka = args.get(step,dflt)
-      arg = ARG(arg,*a,**ka)
-    return cache(arg)
-  F.cache = cache
+  bases,steps = ((),()) if cache is None else (cache.bases,cache.steps)
+  for step,a,ka in cfg:
+    cache = make_process_step(cache,*a,**ka)
+    cache.base,base = base,cache
+    bases = cache.bases = bases+(cache,)
+    steps = cache.steps = steps+(step,)
+    F = cache.caller = caller(steps,cache)
+    F.cache = cache
   return F
 
 #--------------------------------------------------------------------------------------------------

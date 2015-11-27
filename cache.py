@@ -278,7 +278,7 @@ Returns information about this block. Available attributes:
       else:
         cell,size = row
         conn.execute('UPDATE Block SET hits=hits+1 WHERE oid=?',(self.block,))
-      store = self.db.storage(cell,size)
+      store = self.db.storage(cell,size,self.sig.timeout)
     if row is None:
       logger.info('%s MISS(%s)',self,cell)
       tm = process_time(),perf_counter()
@@ -378,30 +378,38 @@ An instance of this class defines a functor attached to a python top-level funct
 
 :param func: a function, defined at the top-level of its module (hence pickable)
 :param ignore: a list of parameter names among those of *func*
+:param timeout: an upper bound estimate of the execution time in secs of the function
 
 The signature is entirely defined by the name of the function and of its module, as well as the sequence of parameter names, marked if ignored. Hence, two functions (possibly in different processes at different times) sharing these components produce the same signature.
-
-The :meth:`getkey` method applied to a pair *a*, *ka*, where *a* is a list of positional arguments and *ka* a dict of keyword arguments, will match these arguments against the definition of *func* and return the assignment of the parameter names of the function in the order in which they appear in its definition, omitting the ignored ones. If a parameter name in *func* is prefixed by \*\* (hence its assignment is a dict), it is replaced by its sorted list of items.
-
-The :meth:`getval` method applied to a pair *a*, *ka* returns the value of calling *func* with positional argument list *a* and keyword argument dict *ka*.
 
 Methods:
   """
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,func,ignore):
+  def __init__(self,func,ignore,timeout):
     func = inspect.unwrap(func)
-    self.func = func
     self.name, self.params = '{}.{}'.format(func.__module__, func.__name__), tuple(getparams(func,ignore))
-  def getkey(self,arg): return pickle.dumps(tuple(self.genkey(arg)))
+    self.func = func
+    self.timeout = timeout
+  def getkey(self,arg):
+    r"""
+Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are matched against the definition of :attr:`func`. Returns the pickled representation of the resulting assignment of the parameter names of the function in the order in which they appear in its definition, omitting the ignored ones. If a parameter name in :attr:`func` is prefixed by \*\* (hence its assignment is a dict), it is replaced by its sorted list of items.
+    """
+    return pickle.dumps(tuple(self.genkey(arg)))
   def genkey(self,arg):
     a,ka = arg
     d = inspect.getcallargs(self.func,*a,**ka)
     for p,typ in self.params:
       if typ!=-1: yield p,(sorted(d[p].items()) if typ==2 else d[p])
   def getval(self,arg):
+    r"""
+Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. Returns the value of calling attribute :attr:`func` with that positional argument list and keyword argument dict. Note that this attribute is not restored when the signature is obtained by unpickling, so invcation of this method fails.
+    """
     a,ka = arg
     return self.func(*a,**ka)
   def html(self,ckey):
+    r"""
+Argument *ckey* must have been obtained by invocation of method :meth:`getkey`. Returns an HTML formatted representation of the argument of that invocation.
+    """
     from lxml.builder import E
     return E.DIV(*self.genhtml(pickle.loads(ckey)))
   def genhtml(self,ckey):
@@ -415,18 +423,6 @@ Methods:
   def __str__(self,mark={-1:'-',0:'',1:'*',2:'**'}): return '{}({})'.format(self.name,','.join(mark[typ]+p for p,typ in self.params))
   def __getstate__(self): return self.name, self.params
   def __setstate__(self,state): self.name, self.params = state
-  def restore(self):
-    r"""
-Attempts to restore the :attr:`func` attribute from the other attributes. This is useful with instances obtained by unpickling, since the :attr:`func` attribute is not automatically restored. This may be risky however, as the function may have changed since pickling time.
-    """
-    if hasattr(self,'func'): return
-    from importlib import import_module
-    fmod,fname = self.name.rsplit('.',1)
-    func = inspect.unwrap(getattr(import_module(fmod),fname))
-    ignore = tuple(p for p,typ in self.params if typ==-1)
-    params = tuple(getparams(func,ignore))
-    if params != self.params: raise SignatureMismatchException(params,self.params)
-    self.func = func
 
 #--------------------------------------------------------------------------------------------------
 class ProcessSignature (Signature):
@@ -435,14 +431,18 @@ An instance of this class defines a functor attached to a python top-level funct
 
 :param func: a function, defined at the top-level of its module (hence pickable)
 :param ignore: a list of parameter names among those of *func*
+:param timeout: an upper bound estimate of the execution time in secs
 :param base: a signature
 
-The :meth:`getkey` (resp. :meth:`getval`) method applied to a pair *a*, *ka* returns the same as their counterpart in class :class:`Signature`, except the first argument in *a* is replaced by the result of applying to it the :meth:`getkey` (resp. :meth:`getval`) method of the base signature.
+.. method:: getkey(arg)
+.. method:: getval(arg)
+
+   Method :meth:`getkey` (resp. :meth:`getval`) applied to a pair *a*, *ka* returns the same as their counterpart in class :class:`Signature`, except the first positional argument in *a* is replaced by the result of applying to it the :meth:`getkey` (resp. :meth:`getval`) method of the base signature.
   """
 #--------------------------------------------------------------------------------------------------
 
-  def __init__(self,func,ignore,base):
-    super(ProcessSignature,self).__init__(func,ignore)
+  def __init__(self,func,ignore,timeout,base):
+    super(ProcessSignature,self).__init__(func,ignore,timeout)
     p,typ = self.params[0]
     self.params = ((p,-1),)+self.params[1:]
     self.base = base
@@ -459,9 +459,6 @@ The :meth:`getkey` (resp. :meth:`getval`) method applied to a pair *a*, *ka* ret
   def __str__(self): return '{};{}'.format(self.base,super(ProcessSignature,self).__str__())
   def __getstate__(self): return super(ProcessSignature,self).__getstate__(), self.base
   def __setstate__(self,state): state, self.base = state; super(ProcessSignature,self).__setstate__(state)
-  def restore(self):
-    super(ProcessSignature,self).restore()
-    self.base.restore()
 
 #==================================================================================================
 class FileStorage:
@@ -477,13 +474,11 @@ Methods:
   """
 #==================================================================================================
 
-  timeout = 864000. # 10 days!
-
   def __init__(self,path):
     self.path = path
 
 #--------------------------------------------------------------------------------------------------
-  def __call__(self,cell,size,typ=namedtuple('StoreAPI',('waitval','getval','setval'))):
+  def __call__(self,cell,size,timeout,typ=namedtuple('StoreAPI',('waitval','getval','setval'))):
     r"""
 Returns an incarnation of the API to manipulate the value of *cell* (see below).
 
@@ -491,6 +486,7 @@ Returns an incarnation of the API to manipulate the value of *cell* (see below).
 :type cell: :class:`int`
 :param size: size status of the cell
 :type size: :class:`int`\|\ :class:`NoneType`
+:param timeout: max waiting time when cell is being computed in another thread/process
 
 The API to manipulate the value of a cell consists of:
 
@@ -525,7 +521,7 @@ The *size* parameter has the following meaning:
       conn.execute('BEGIN IMMEDIATE TRANSACTION')
     else:
       vfile = rpath.open('rb')
-      if size==0: conn = sqlite3.connect(str(tpath),timeout=self.timeout)
+      if size==0: conn = sqlite3.connect(str(tpath),timeout)
     return typ(waitval,getval,setval)
 
   def remove(self,cell,size):
@@ -562,16 +558,16 @@ Attributes:
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-def lru_persistent_cache(ignore=(),factory=CacheBlock,**ka):
+def lru_persistent_cache(ignore=(),timeout=86400.,factory=CacheBlock,**ka):
   r"""
 A decorator which applies to a function and replaces it by a persistently cached version. The function must be defined at the top-level of its module, to be compatible with :class:`Signature`.
 
-:param ignore: passed, together with the function, to the :class:`Signature` constructor
+:param ignore,timeout: passed, together with the function, to the :class:`Signature` constructor
 :param ka: keyword argument dict passed to :class:`CacheBlock`
   """
 #--------------------------------------------------------------------------------------------------
   def transf(f):
-    c = factory(signature=Signature(f,ignore),**ka)
+    c = factory(signature=Signature(f,ignore,timeout),**ka)
     F = lambda *a,**ka: c((a,ka))
     F.cache = c
     return update_wrapper(F,f)
@@ -587,23 +583,22 @@ class DerivedSignature:
   def __str__(self): return str(self.alt)
   def __getstate__(self): return self.alt
   def __setstate__(self,state): self.alt = state
-  def restore(self): self.alt.restore() # only partial
 
 #--------------------------------------------------------------------------------------------------
-def make_process_step(base,f,ignore=(),factory=CacheBlock,**ka):
+def make_process_step(base,f,ignore=(),timeout=86400.,factory=CacheBlock,**ka):
   r"""
 Basic process cache factory (invoked to cache each process step).
 
 :param base: a cache block
 :type base: :class:`CacheBlock`\|\ :class:`NoneType`
 :param f: a function
-:param ignore: passed, together with the function, to the signature constructor
+:param ignore,timeout: passed, together with the function, to the signature constructor
 
 The signature of the returned cache is an instance of :class:`Signature` if *base* is :const:`None`, otherwise an instance of :class:`ProcessSignature`, in which case, its base is a copy of the signature of *base* where :attr:`getval` is overridden by *base* itself. This is what enables the "stacked cache" effect of processes.
   """
 #--------------------------------------------------------------------------------------------------
-  if base is None: sig = Signature(f,ignore)
-  elif isinstance(base,CacheBlock): sig = ProcessSignature(f,ignore,base=DerivedSignature(base))
+  if base is None: sig = Signature(f,ignore,timeout)
+  elif isinstance(base,CacheBlock): sig = ProcessSignature(f,ignore,timeout,base=DerivedSignature(base))
   else: raise TypeError('Cannot create a cache with base of type {} (not {})'.format(type(base),CacheBlock))
   c = factory(signature=sig,**ka)
   c.base = base

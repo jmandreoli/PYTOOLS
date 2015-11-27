@@ -35,9 +35,14 @@ class OpenWeatherFlow (PollingFlow):
     Formatter.Field(r'\.main\.(humidity)'),
   )
   def source(self):
-    import requests
+    import requests, re
     url = 'http://api.openweathermap.org/data/2.5/weather?units=metric&q='+self.location
     s = requests.Session()
+    # First hack the example key
+    m = re.search('appid=(\w+)',s.get('http://openweathermap.org/current').text)
+    if m is None: raise Exception('Cannot hack example key')
+    url += '&appid='+m.group(1)
+    # then download the data
     while True: yield s.get(url).json()
 
 class ProcFlow (PollingFlow):
@@ -60,7 +65,7 @@ proc_c = ChronoBlock(flow=ProcFlow(period=3),db=DIR)
 #--------------------------------------------------------------------------------------------------
 
 def demo():
-  for chrono in weather_c,proc_c:
+  for chrono in proc_c,weather_c:
     print(80*'-'); print('Clear',chrono); chrono.clear()
     if automatic:
       import threading, _thread; threading.Timer(10,_thread.interrupt_main).start()

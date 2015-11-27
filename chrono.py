@@ -138,12 +138,12 @@ Generates a :class:`ChronoDB` object.
     with lock:
       self = listing.get(path)
       if self is None:
+        dbpath = path/'index.db'
+        if not dbpath.is_file() and any(path.iterdir()):
+          raise Exception('Cannot create new index in non empty directory')
+        SQliteNew(str(dbpath),SCHEMA)
         self = super(ChronoDB,cls).__new__(cls)
         self.path = path
-        dbpath = str(path/'index.db')
-        check = (lambda:'cannot create index in non empty folder') if any(path.iterdir()) else (lambda:None)
-        r = SQliteNew(dbpath,SCHEMA,check)
-        if r is not None: raise WrongCacheFolderException(path,r)
         listing[path] = self
     return self
   

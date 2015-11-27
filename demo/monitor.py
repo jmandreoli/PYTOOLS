@@ -41,6 +41,7 @@ def display_monitor(env,initf:callable,updatef:callable,**figargs):
   background = fig.canvas.copy_from_bbox(ax.bbox)
   while True:
     for a in updatef(env,artists): ax.draw_artist(a)
+    show(False)
     fig.canvas.blit(ax.bbox)
     yield
     fig.canvas.restore_region(background)

@@ -516,20 +516,26 @@ Returns the :class:`datetime` instance for which the :meth:`datetime.isocalendar
   return iso1+timedelta(days=isoday-1,weeks=isoweek-1)
 
 #==================================================================================================
-def size_fmt(size,suffix='B'):
+def size_fmt(size,binary=True,precision=4,suffix='B'):
   r"""
-:param size: a number representing a size
+:param size: a positive number representing a size
 :type size: :class:`int`
+:param binary: whether to use IEC binary or decimal convention
+:type binary: :class:`bool`
+:param precision: number of digits displayed (at least 4)
+:type precision: :class:`int`
 
-Returns the representation of *size* with IEC binary prefix and 1 digit after the comma.
+Returns the representation of *size* with IEC prefix. Each prefix is ``K`` times the previous one for some constant ``K`` which depends on the convention: ``K``\ =1024 with the binary convention (marked with an ``i`` before the prefix); ``K``\ =1000 with the decimal convention.
   """
 #==================================================================================================
-  if size<1024: return str(size)+suffix
-  size /= 1024.
-  for unit in ['Ki','Mi','Gi','Ti','Pi','Ei','Zi']:
-    if size < 1024.: return '{:3.1f}{}{}'.format(size,unit,suffix)
-    size /= 1024.
-  return '{:.1f}{}{}'.format(size,'Yi',suffix) # :-)
+  thr,mark = (1024.,'i') if binary else (1000.,'')
+  fmt = '{{:.{}g}}{{}}{}{}'.format(precision,mark,suffix).format
+  if size<thr: return str(size)+suffix
+  size /= thr
+  for prefix in 'KMGTPEZ':
+    if size < thr: return fmt(size,prefix)
+    size /= thr
+  return fmt(size,'Y') # :-)
 
 #==================================================================================================
 def time_fmt(time):

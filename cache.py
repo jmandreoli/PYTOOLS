@@ -365,7 +365,7 @@ Checks whether there is a cache overflow and applies the LRU policy.
     return tounicode(self.as_html())
   def as_html(self,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz))):
     return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,self.sig.html,size_fmt_,time_fmt,time_fmt),title='{}: {}'.format(self.block,self.sig))
-  def __str__(self): return 'Cache<{}:{}>'.format(self.db.path,self.sig)      
+  def __str__(self): return 'Cache<{}:{}>'.format(self.db.path,self.sig)
 
 #==================================================================================================
 # Signatures
@@ -417,7 +417,7 @@ Argument *ckey* must have been obtained by invocation of method :meth:`getkey`. 
     disp = (lambda k,v: E.DIV(E.B(k),'=',E.EM(repr(v)),style='display: inline; padding: 5px;'))
     def h(ckey,dparams=dict(self.params)):
       for p,v in ckey:
-        if dparams[p]==2: yield from map(disp,v)
+        if dparams[p]==2: yield from (disp(k,vk) for k,vk in v)
         else: yield disp(p,v)
     return h(ckey)
   def __str__(self,mark={-1:'-',0:'',1:'*',2:'**'}): return '{}({})'.format(self.name,','.join(mark[typ]+p for p,typ in self.params))

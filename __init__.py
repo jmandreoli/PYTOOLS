@@ -64,6 +64,26 @@ Objects of this class act as dict objects, except their keys are also attributes
   def __repr__(self): return repr(self.__dict__)
 
 #==================================================================================================
+class ARG (tuple):
+  r"""
+Instances of this (immutable) class are pairs of a tuple of positional arguments and a dict of keyword arguments. Useful to manipulate function invocation arguments without making the invocation.
+
+Methods:
+  """
+#==================================================================================================
+  def __new__(cls,*a,**ka):
+    return super(ARG,cls).__new__(cls,(a,ka))
+
+  def variant(self,*a,**ka):
+    r"""
+Returns a variant of *self* where *a* is appended to the positional arguments and *ka* is updated into the keyword arguments.
+    """
+    a0,ka0 = self
+    a = a0+a
+    ka1 = ka0.copy(); ka1.update(ka); ka = ka1
+    return ARG(*a,**ka)
+
+#==================================================================================================
 def zipaxes(L,fig,sharex=False,sharey=False,**ka):
   r"""
 :param fig: a figure

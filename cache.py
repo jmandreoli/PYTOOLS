@@ -17,7 +17,7 @@ from functools import update_wrapper
 from collections import namedtuple, defaultdict
 from collections.abc import MutableMapping
 from time import process_time, perf_counter
-from . import SQliteNew, size_fmt, time_fmt
+from . import ARG, SQliteNew, size_fmt, time_fmt
 
 # Data associated with each cell is kept in a separate file
 # in the same folder as the database
@@ -654,26 +654,6 @@ where both the inner expression ``fA()`` and the outer expression ``fB()`` are i
     F = cache.caller = caller(steps,cache)
     F.cache = cache
   return F
-
-#--------------------------------------------------------------------------------------------------
-class ARG (tuple):
-  r"""
-Instances of this (immutable) class are pairs of a tuple of positional arguments and a dict of keyword arguments. Useful to manipulate function invocation arguments without making the invocation.
-
-Methods:
-  """
-#--------------------------------------------------------------------------------------------------
-  def __new__(cls,*a,**ka):
-    return super(ARG,cls).__new__(cls,(a,ka))
-
-  def variant(self,*a,**ka):
-    r"""
-Returns a variant of *self* where *a* is appended to the positional arguments and *ka* is updated into the keyword arguments.
-    """
-    a0,ka0 = self
-    a = a0+a
-    ka1 = ka0.copy(); ka1.update(ka); ka = ka1
-    return ARG(*a,**ka)
 
 #--------------------------------------------------------------------------------------------------
 def getparams(func,ignore=(),code={inspect.Parameter.VAR_POSITIONAL:1,inspect.Parameter.VAR_KEYWORD:2}):

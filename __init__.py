@@ -83,6 +83,35 @@ Returns a variant of *self* where *a* is appended to the positional arguments an
     ka1 = ka0.copy(); ka1.update(ka); ka = ka1
     return ARG(*a,**ka)
 
+  def __repr__(self):
+    a,ka = self
+    a = ','.join(repr(v) for v in a) if a else ''
+    ka = ','.join('{}={}'.format(k,repr(v)) for k,v in ka.items()) if ka else ''
+    sep = ',' if a and ka else ''
+    return 'ARG({}{}{})'.format(a,sep,ka)
+
+  def __str__(self):
+    return self.__repr__()
+
+#==================================================================================================
+def ARGgrid(*a,**ka):
+  r"""
+Generates a grid of :class:`ARG` instances. Each positional argument in *a* and keyword argument in *ka* must be assigned a list of alternative values.
+  """
+#==================================================================================================
+  def g(c,a):
+    if not a: yield c; return
+    for cc in g(c,a[:-1]):
+      for v in a[-1]:
+        yield cc+(v,)
+  if ka:
+    keys,vals = zip(*ka.items())
+    kal = [dict(zip(keys,valc)) for valc in g((),vals)]
+  else: kal = [{}]
+  for ac in g((),a):
+    for kac in kal:
+      yield ARG(*ac,**kac)
+
 #==================================================================================================
 def zipaxes(L,fig,sharex=False,sharey=False,**ka):
   r"""

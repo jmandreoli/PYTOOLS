@@ -167,7 +167,7 @@ Methods:
 Displays a widget for nagigating this tree.
     """
     from IPython.display import display
-    from ipywidgets.widgets import HBox, VBox, Button, Text, HTML
+    from ipywidgets.widgets import HBox, VBox, Button, HTML
     def lines(node,pre):
       s = exp.get(pre)
       if s is None: s = exp[pre] = [False]; s.append(HBox(children=tuple(getline(node,pre,s))))

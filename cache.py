@@ -262,7 +262,7 @@ Returns information about this block. Available attributes:
     with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
       sz = conn.execute('SELECT count(*) FROM Cell WHERE block=?',(self.block,)).fetchone()[0]
       row = conn.execute('SELECT signature, hits, misses, maxsize FROM Block WHERE oid=?',(self.block,)).fetchone()
-    return typ(*row,currsize=sz)
+    return typ(row[0].info(),*row[1:],currsize=sz)
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self,arg):
@@ -420,6 +420,7 @@ Argument *ckey* must have been obtained by invocation of method :meth:`getkey`. 
         if dparams[p]==2: yield from (disp(k,vk) for k,vk in v)
         else: yield disp(p,v)
     return h(ckey)
+  def info(self): return self.name
   def __str__(self,mark={-1:'-',0:'',1:'*',2:'**'}): return '{}({})'.format(self.name,','.join(mark[typ]+p for p,typ in self.params))
   def __getstate__(self): return self.name, self.params
   def __setstate__(self,state): self.name, self.params = state
@@ -456,6 +457,7 @@ An instance of this class defines a functor attached to a python top-level funct
     from lxml.builder import E
     ckey = pickle.loads(ckey)
     return E.DIV(self.base.html(ckey[0]),E.DIV(*self.genhtml(ckey[1:]),style='border-top: thin dashed blue'),style='padding:0')
+  def info(self): return super(ProcessSignature,self).info(),self.base.info()
   def __str__(self): return '{};{}'.format(self.base,super(ProcessSignature,self).__str__())
   def __getstate__(self): return super(ProcessSignature,self).__getstate__(), self.base
   def __setstate__(self,state): state, self.base = state; super(ProcessSignature,self).__setstate__(state)
@@ -580,6 +582,7 @@ class DerivedSignature:
   def getkey(self,ckey): return self.alt.getkey(ckey)
   def getval(self,arg): return self.alt.cache(arg) # overridden at instance level unless unpickled
   def html(self,ckey): return self.alt.html(ckey)
+  def info(self): return self.alt.info()
   def __str__(self): return str(self.alt)
   def __getstate__(self): return self.alt
   def __setstate__(self,state): self.alt = state

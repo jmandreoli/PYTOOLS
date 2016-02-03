@@ -545,7 +545,7 @@ Assumes that *pkgname* is the name of a python package contained in a git reposi
       r.remote().pull()
     if r.commit() != rr.commit(): raise Exception('Unsuccessful git synching')
   p = PathFinder.find_spec(pkgname)
-  for path in p.submodule_search_locations._path:
+  for path in p.submodule_search_locations:
     c = check(path)
     if c is not None: return c
 

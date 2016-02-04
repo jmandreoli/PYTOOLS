@@ -346,22 +346,6 @@ Returns an HTML safe representation of *x*.
   return x._repr_html_() if hasattr(x,'_repr_html_') else str(x).replace('<','&lt;').replace('>','&gt;')
 
 #==================================================================================================
-class SQliteHandler (logging.Handler):
-  r"""
-:param conn: a connection to the database
-
-A logging handler class which writes the log messages into a SQLite database.
-  """
-#==================================================================================================
-  def __init__(self,conn,*a,**ka):
-    self.conn = conn
-    super(SQliteHandler,self).__init__(*a,**ka)
-  def emit(self,rec):
-    self.format(rec)
-    self.conn.execute('INSERT INTO Log (level,created,module,funcName,message) VALUES (?,?,?,?,?)',(rec.levelno,rec.created,rec.module,rec.funcName,rec.message))
-    self.conn.commit()
-
-#==================================================================================================
 class SQliteStack:
   r"""
 Objects of this class are aggregation functions which simply collect results in a list, for use with a SQlite database. Example::
@@ -549,6 +533,98 @@ Assumes that *pkgname* is the name of a python package contained in a git reposi
     c = check(path)
     if c is not None: return c
 
+#==================================================================================================
+def SQLinit(engine,schema):
+  r"""
+:param engine: a sqlalchemy engine (or its url)
+:param schema: a function with one argument and a ``status`` attribute (dictionary of strings)
+
+* When the database is empty, function *schema* is invoked with an empty :class:`sqlalchemy.MetaData` instance, and expected to fill it with the definition of the database. Furthermore, the ``status`` attribute of *schema* is used to populate a table ``Status`` with a single row.
+
+* When the database is not empty, it must contain a ``Status`` table with a single row matching exactly the ``status`` attribute of *schema*, otherwise an exception is raised.
+  """
+#==================================================================================================
+  from datetime import datetime
+  from sqlalchemy import MetaData, Table, Column, create_engine
+  from sqlalchemy.types import DateTime, Text, Integer
+  from sqlalchemy.sql import select, insert, update, delete, and_
+  if isinstance(engine,str): engine = create_engine(engine)
+  meta = MetaData(engine)
+  meta.reflect()
+  if meta.tables:
+    try:
+      status_table = meta.tables['Status']
+      status = dict(engine.execute(select((status_table.c))).fetchone())
+      del status['created']
+    except: raise SQLinitStatusException()
+    if status != dict((k,str(v)) for k,v in schema.status.items()):
+      raise SQLinitMismatchException(schema.status,status)
+  else:
+    status_table = Table(
+      'Status',meta,
+      Column('created',DateTime()),
+      *(Column(key,Text()) for key in schema.status)
+    )
+    schema(meta)
+    meta.create_all()
+    engine.execute(insert(status_table).values(created=datetime.now(),**schema.status))
+  meta.remove(status_table)
+  return engine,meta.tables
+
+class SQLinitMismatchException (Exception): pass
+class SQLinitStatusException (Exception): pass
+
+#==================================================================================================
+class SQLHandler (logging.Handler):
+  r"""
+:param engine: a sqlalchemy engine
+:param label: a text label 
+
+A logging handler class which writes the log messages into a database.
+  """
+#==================================================================================================
+  def __init__(self,engine,label,*a,**ka):
+    from datetime import datetime
+    from sqlalchemy.sql import select, insert, update, delete, and_
+    engine,tables = SQLinit(engine,SQLHandlerSchema)
+    session_table = tables['Session']
+    log_table = tables['Log']
+    with engine.begin() as conn:
+      if engine.dialect.name == 'sqlite': conn.execute('PRAGMA foreign_keys = 1')
+      conn.execute(delete(session_table).where(session_table.c.label==label))
+      c = conn.execute(insert(session_table).values(label=label,started=datetime.now()))
+      session = c.inserted_primary_key[0]
+      c.close()
+    def dbrecord(rec,log_table=log_table,session=session):
+      with engine.begin() as conn:
+        conn.execute(insert(log_table).values(session=session,level=rec.levelno,created=datetime.fromtimestamp(rec.created),module=rec.module,funcName=rec.funcName,message=rec.message))
+    self.dbrecord = dbrecord
+    super(SQLHandler,self).__init__(*a,**ka)
+
+  def emit(self,rec):
+    self.format(rec)
+    self.dbrecord(rec)
+
+def SQLHandlerSchema(meta):
+  from sqlalchemy import Table, Column, ForeignKey
+  from sqlalchemy.types import DateTime, Text, Integer
+  Table(
+    'Session',meta,
+    Column('oid',Integer(),primary_key=True,autoincrement=True),
+    Column('started',DateTime()),
+    Column('label',Text(),index=True,unique=True,nullable=False),
+    )
+  Table(
+    'Log',meta,
+    Column('oid',Integer(),primary_key=True,autoincrement=True),
+    Column('session',ForeignKey('Session.oid',ondelete='CASCADE'),index=True,nullable=False),
+    Column('level',Integer(),nullable=False),
+    Column('created',DateTime(),nullable=False),
+    Column('module',Text(),index=True,nullable=False),
+    Column('funcName',Text(),nullable=False),
+    Column('message',Text(),nullable=False),
+    )
+SQLHandlerSchema.status = dict(origin=__name__+'.SQLHandler',version=1)
 
 #==================================================================================================
 def iso2date(iso):

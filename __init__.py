@@ -93,24 +93,6 @@ Returns a variant of *self* where *a* is appended to the positional arguments an
   def __str__(self):
     return self.__repr__()
 
-#==================================================================================================
-def ARGgrid(*a,**ka):
-  r"""
-Generates a grid of :class:`ARG` instances. Each positional argument in *a* and keyword argument in *ka* must be assigned a list of alternative values.
-  """
-#==================================================================================================
-  def g(c,a):
-    if not a: yield c; return
-    for cc in g(c,a[:-1]):
-      for v in a[-1]:
-        yield cc+(v,)
-  if ka:
-    keys,vals = zip(*ka.items())
-    kal = [dict(zip(keys,valc)) for valc in g((),vals)]
-  else: kal = [{}]
-  for ac in g((),a):
-    for kac in kal:
-      yield ARG(*ac,**kac)
 
 #==================================================================================================
 def zipaxes(L,fig,sharex=False,sharey=False,**ka):
@@ -205,7 +187,7 @@ Displays a widget for nagigating this tree.
     display(next(wdgs))
 
 #==================================================================================================
-class ObjTree (Tree):
+class otree (Tree):
   r"""
 Objects of this class are :class:`Tree` instances which represent arbitrary objects as trees.
 
@@ -224,7 +206,7 @@ Methods:
 
 Registers a function as a hook. Use as decorator. Example::
 
-  @ObjTree.register('numpy.ndarray')
+  @otree.register('numpy.ndarray')
   def get_children(obj): ...
 
 will replace the default :attr:`get_children` function attribute at creation time, whenever the argument *obj* is of class :class:`numpy.ndarray` (only if module :mod:`numpy` is already loaded). Note that it is important to keep :attr:`get_children` as a function and not set the :attr:`children` attribute directly, so offspring computation is done only on demand (otherwise, it may loop).
@@ -247,10 +229,10 @@ will replace the default :attr:`get_children` function attribute at creation tim
   @staticmethod
   def get_children(obj):
     r"""
-Returns the offspring of an arbitrary object *obj* as an iterator of pairs, each with a string label and a :class:`Tree` instance. By default, returns the sorted content of the attribute dictionary of *obj* (if any), where each value is encapsulated in an :class:`ObjTree` instance. Can be overriden by subclassing, or by registering a hook using :meth:`register`.
+Returns the offspring of an arbitrary object *obj* as an iterator of pairs, each with a string label and a :class:`Tree` instance. By default, returns the sorted content of the attribute dictionary of *obj* (if any), where each value is encapsulated in an :class:`otree` instance. Can be overriden by subclassing, or by registering a hook using :meth:`register`.
     """
     if hasattr(obj,'__dict__'):
-      for k,x in sorted(obj.__dict__.items()): yield k,ObjTree(x)
+      for k,x in sorted(obj.__dict__.items()): yield k,otree(x)
 
   @staticmethod
   def get_summary(obj):
@@ -271,28 +253,28 @@ Returns the description of an arbitrary object *obj* as an iterator of pairs, ea
     t = '{0.__module__}.{0.__qualname__}'.format(type(self.obj))
     return (t,)+tuple(self.get_summary(self.obj))
 
-@ObjTree.register('numbers.Number')
+@otree.register('numbers.Number')
 def get_children(obj): return ()
-@ObjTree.register('numbers.Number')
+@otree.register('numbers.Number')
 def get_summary(obj): yield 'value',obj
 
-@ObjTree.register('pandas.core.base.PandasObject')
+@otree.register('pandas.core.base.PandasObject')
 def get_children(obj):
   if hasattr(obj,'columns'):
-    for c in obj.columns: yield c,ObjTree(obj[c])
-@ObjTree.register('pandas.core.base.PandasObject')
+    for c in obj.columns: yield c,otree(obj[c])
+@otree.register('pandas.core.base.PandasObject')
 def get_summary(obj):
   if hasattr(obj,'shape'): yield 'shape', obj.shape
   if hasattr(obj,'dtype'): yield 'dtype', obj.dtype
 
-@ObjTree.register('numpy.ndarray')
+@otree.register('numpy.ndarray')
 def get_children(obj): return ()
-@ObjTree.register('numpy.ndarray')
+@otree.register('numpy.ndarray')
 def get_summary(obj): yield 'shape',obj.shape; yield 'dtype',obj.dtype
 
-@ObjTree.register('scipy.sparse.base.spmatrix')
+@otree.register('scipy.sparse.base.spmatrix')
 def get_children(obj): return ()
-@ObjTree.register('scipy.sparse.base.spmatrix')
+@otree.register('scipy.sparse.base.spmatrix')
 def get_summary(obj):
   n = 1
   for d in obj.shape: n *= d

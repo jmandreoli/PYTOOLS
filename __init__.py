@@ -493,45 +493,26 @@ Declares a module :mod:`pyqt` in the package of this file equivalent to :mod:`Py
   return mod
 
 #==================================================================================================
-def set_gitexecutable(*exes):
-  r"""
-:param exes: possible git executable paths
-:type exes: tuple(\ :class:`str`)
-
-Sets the git executable path in module :mod:`git` to the first existing path from *exes*.
-  """
-#==================================================================================================
-  from git.cmd import Git
-  import os
-  for ex in exes:
-    if os.path.exists(ex):
-      Git.GIT_PYTHON_GIT_EXECUTABLE = ex
-      return ex
-#==================================================================================================
 def gitcheck(pkgname):
   r"""
 :param pkgname: full name of a package
 :type pkgname: :class:`str`
 
-Assumes that *pkgname* is the name of a python package contained in a git repository which is a local, passive copy of a remote repository. Checks that the package is up-to-date, and updates it if needed using the git pull operation. Call before loading the package...
+Assumes that *pkgname* is the name of a python package contained in a git repository which is a local, passive copy of a remote repository. Checks that the package is up-to-date, and updates it if needed using the git pull operation. Call before loading the package... Use the ``GIT_PYTHON_GIT_EXECUTABLE`` environment variable to set the Git executable if it is not the default ``/usr/bin/git``.
   """
 #==================================================================================================
-  from git import Repo, InvalidGitRepositoryError
+  from git import Repo
   from importlib.machinery import PathFinder
-  def check(path):
-    try: r = Repo(path)
-    except InvalidGitRepositoryError: return
-    if r.is_dirty(): return 'target', r
+  for path in PathFinder.find_spec(pkgname).submodule_search_locations:
+    r = Repo(path)
+    if r.is_dirty(): raise GitException('target-dirty',r,None)
     rr = Repo(r.remote().url)
-    if rr.is_dirty(): return 'source', rr
+    if rr.is_dirty(): raise GitException('source-dirty',r,rr)
     if r.commit() != rr.commit():
       logger.info('Synching (git pull) %s ...',r)
       r.remote().pull()
-    if r.commit() != rr.commit(): raise Exception('Unsuccessful git synching')
-  p = PathFinder.find_spec(pkgname)
-  for path in p.submodule_search_locations:
-    c = check(path)
-    if c is not None: return c
+    if r.commit() != rr.commit(): raise GitException('synch-failed',r,rr)
+class GitException (Exception): pass
 
 #==================================================================================================
 def SQLinit(engine,schema):

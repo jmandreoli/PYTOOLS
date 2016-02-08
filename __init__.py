@@ -485,15 +485,22 @@ Assumes that *pkgname* is the name of a python package contained in a git reposi
 #==================================================================================================
   from git import Repo
   from importlib.machinery import PathFinder
+  from importlib import reload
+  from sys import modules
   for path in PathFinder.find_spec(pkgname).submodule_search_locations:
-    r = Repo(path)
-    if r.is_dirty(): raise GitException('target-dirty',r,None)
-    rr = Repo(r.remote().url)
-    if rr.is_dirty(): raise GitException('source-dirty',r,rr)
-    if r.commit() != rr.commit():
-      logger.info('Synching (git pull) %s ...',r)
-      r.remote().pull()
+    try: r = Repo(path)
+    except OSError: continue
+  if r.is_dirty(): raise GitException('target-dirty',r)
+  rr = Repo(r.remote().url)
+  if rr.is_dirty(): raise GitException('source-dirty',r,rr)
+  if r.commit() != rr.commit():
+    logger.info('Synching (git pull) %s ...',r)
+    r.remote().pull()
     if r.commit() != rr.commit(): raise GitException('synch-failed',r,rr)
+    m = modules.get(pkgname)
+    if m is not None:
+      logger.warn('Reloading %s ...',pkgname)
+      reload(m)
 class GitException (Exception): pass
 
 #==================================================================================================

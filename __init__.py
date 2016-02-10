@@ -490,6 +490,9 @@ Assumes that *pkgname* is the name of a python package contained in a git reposi
   for path in PathFinder.find_spec(pkgname).submodule_search_locations:
     try: r = Repo(path)
     except OSError: continue
+    break
+  else:
+    raise GitException('target-not-found')
   if r.is_dirty(): raise GitException('target-dirty',r)
   rr = Repo(r.remote().url)
   if rr.is_dirty(): raise GitException('source-dirty',r,rr)

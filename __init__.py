@@ -96,12 +96,24 @@ Returns a variant of *self* where *a* is appended to the positional arguments an
 #==================================================================================================
 class Synchroniser:
   r"""
-Objects of this class implement a robust event-based synchronisation mechanism. Supports context manager interface.
+Objects of this class implement robust event-based synchronisation mechanisms.
+Typical use on the master side (used as context manager)::
 
-:param path: a path in the filesystem
+  s = Synchroniser('/path/to/hbDB',90)
+  with s.open():
+    # some (long) computation here
+
+Typical use on the client side::
+
+  s = Synchroniser('/path/to/hbDB',90)
+  s.wait() # blocks until master computation is over
+
+:param path: a path in the filesystem to the heartbeat sqlite3 database
 :type path: :class:`str`\|\ :class:`pathlib.Path`
 :param hbperiod: the period of the heartbeat (in sec)
 :type hbperiod: :class:`float`
+
+It is important that the heartbeat period be identical on the master and on the clients. Client waiting can be bounded, but only by a whole number of heartbeat periods.
 
 Methods:
   """
@@ -113,14 +125,21 @@ Methods:
 
   def open(self,reset=False):
     r"""
-Must be invoked only once, by a master process/thread, expected to perform some (long) computation. The :attr:`path` attribute must point to a non existent file. This method creates a sqlite3 DB at that path. It also starts a heartbeat loop on a daemon thread, which logs its activity in that DB, so clients can know the master is still working.
+Must be invoked only once, by a master process/thread, expected to perform some (long) computation. The :attr:`path` attribute must point to a non existent file, or a completed heartbeat log. This method creates a sqlite3 DB at that path. It also starts a heartbeat loop on a daemon thread, which logs its activity in that DB, so clients can know the master is still working.
+
+:param reset: whether opening is allowed in case of incomplete heartbeat log
+:type reset: :class:`bool`
     """
     from threading import Thread, Lock
     import sqlite3
     with sqlite3.connect(self.path) as conn:
+      conn.execute('BEGIN EXCLUSIVE TRANSACTION')
       conn.execute('CREATE TABLE IF NOT EXISTS Status (hb INTEGER)')
-      if reset: conn.execute('DELETE FROM Status')
-      conn.execute('INSERT INTO Status (hb) VALUES (1)')
+      row = conn.execute('SELECT hb FROM Status').fetchone()
+      if row is None: conn.execute('INSERT INTO Status (hb) VALUES (1)')
+      else:
+        if row[0]>0 and not reset: raise Exception('Synchroniser already opened')
+        conn.execute('UPDATE Status SET hb=1')
     self.lock = Lock()
     self.lock.acquire()
     Thread(target=self.heartbeat,daemon=True).start()
@@ -145,19 +164,23 @@ Must be invoked only once, by the master process/thread when its computation is 
         else: conn.execute('UPDATE Status SET hb = hb+1')
       time.sleep(.1)
 
-  def wait(self):
+  def wait(self,timeout=None):
     r"""
-Invoked by clients to block until the master's computation ends.
-Polls the heartbeat loop. If the master fails, the heartbeat loop freezes and an error is raised.
+Invoked by clients to wait until the master's computation ends. The amount of waiting is unbounded if *timeout* is :const:`None` otherwise it is bounded by *timeout* heartbeat periods. If the master fails, the heartbeat loop freezes and an error is raised.
+
+:param timeout: number of heartbeat periods to wait for (at most)
+:type timeout: :class:`int`\|\ :class:`NoneType`
+:returns: :const:`None` if timeout was reached, else total number of heartbeat by master
     """
     import sqlite3,time
-    sref = -1
+    sp = -1; t = -1
     while True:
-      with sqlite3.connect(self.path,timeout=self.hbperiod+10.) as conn:
+      with sqlite3.connect(self.path,timeout=2*self.hbperiod) as conn:
         s, = conn.execute('SELECT hb FROM Status').fetchone()
       if s<0: return -s
-      if s <= sref: raise Exception('No heartbeat progress')
-      sref = s
+      if s <= sp: raise Exception('Synchroniser frozen')
+      sp = s; t += 1
+      if timeout is not None and t>=timeout: return
       time.sleep(1.)
 
 #==================================================================================================

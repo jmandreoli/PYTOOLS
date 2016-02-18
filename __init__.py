@@ -93,6 +93,72 @@ Returns a variant of *self* where *a* is appended to the positional arguments an
   def __str__(self):
     return self.__repr__()
 
+#==================================================================================================
+class Synchroniser:
+  r"""
+Objects of this class implement a robust event-based synchronisation mechanism. Supports context manager interface.
+
+:param path: a path in the filesystem
+:type path: :class:`str`\|\ :class:`pathlib.Path`
+:param hbperiod: the period of the heartbeat (in sec)
+:type hbperiod: :class:`float`
+
+Methods:
+  """
+#==================================================================================================
+
+  def __init__(self,path,hbperiod=60.):
+    self.path = str(path)
+    self.hbperiod = hbperiod
+
+  def open(self,reset=False):
+    r"""
+Must be invoked only once, by a master process/thread, expected to perform some (long) computation. The :attr:`path` attribute must point to a non existent file. This method creates a sqlite3 DB at that path. It also starts a heartbeat loop on a daemon thread, which logs its activity in that DB, so clients can know the master is still working.
+    """
+    from threading import Thread, Lock
+    import sqlite3
+    with sqlite3.connect(self.path) as conn:
+      conn.execute('CREATE TABLE IF NOT EXISTS Status (hb INTEGER)')
+      if reset: conn.execute('DELETE FROM Status')
+      conn.execute('INSERT INTO Status (hb) VALUES (1)')
+    self.lock = Lock()
+    self.lock.acquire()
+    Thread(target=self.heartbeat,daemon=True).start()
+    return self
+
+  def close(self):
+    r"""
+Must be invoked only once, by the master process/thread when its computation is finished.
+    """
+    self.lock.release()
+
+  def __enter__(self): return self
+  def __exit__(self,*a): self.close()
+
+  def heartbeat(self):
+    import sqlite3,time
+    while True:
+      with sqlite3.connect(self.path) as conn:
+        conn.execute('BEGIN EXCLUSIVE TRANSACTION')
+        if self.lock.acquire(timeout=self.hbperiod):
+          conn.execute('UPDATE Status SET hb=-hb'); return
+        else: conn.execute('UPDATE Status SET hb = hb+1')
+      time.sleep(.1)
+
+  def wait(self):
+    r"""
+Invoked by clients to block until the master's computation ends.
+Polls the heartbeat loop. If the master fails, the heartbeat loop freezes and an error is raised.
+    """
+    import sqlite3,time
+    sref = -1
+    while True:
+      with sqlite3.connect(self.path,timeout=self.hbperiod+10.) as conn:
+        s, = conn.execute('SELECT hb FROM Status').fetchone()
+      if s<0: return -s
+      if s <= sref: raise Exception('No heartbeat progress')
+      sref = s
+      time.sleep(1.)
 
 #==================================================================================================
 def zipaxes(L,fig,sharex=False,sharey=False,**ka):

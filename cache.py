@@ -17,7 +17,7 @@ from functools import update_wrapper
 from collections import namedtuple, defaultdict
 from collections.abc import MutableMapping
 from time import process_time, perf_counter
-from . import ARG, SQliteNew, size_fmt, time_fmt
+from . import ARG, SQliteNew, Synchroniser, size_fmt, time_fmt
 
 # Data associated with each cell is kept in a separate file
 # in the same folder as the database
@@ -278,7 +278,7 @@ Returns information about this block. Available attributes:
       else:
         cell,size = row
         conn.execute('UPDATE Block SET hits=hits+1 WHERE oid=?',(self.block,))
-      store = self.db.storage(cell,size,self.sig.timeout)
+      store = self.db.storage(cell,size)
     if row is None:
       logger.info('%s MISS(%s)',self,cell)
       tm = process_time(),perf_counter()
@@ -378,18 +378,16 @@ An instance of this class defines a functor attached to a python top-level funct
 
 :param func: a function, defined at the top-level of its module (hence pickable)
 :param ignore: a list of parameter names among those of *func*
-:param timeout: an upper bound estimate of the execution time in secs of the function
 
 The signature is entirely defined by the name of the function and of its module, as well as the sequence of parameter names, marked if ignored. Hence, two functions (possibly in different processes at different times) sharing these components produce the same signature.
 
 Methods:
   """
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,func,ignore,timeout):
+  def __init__(self,func,ignore):
     func = inspect.unwrap(func)
     self.name, self.params = '{}.{}'.format(func.__module__, func.__name__), tuple(getparams(func,ignore))
     self.func = func
-    self.timeout = timeout
   def getkey(self,arg):
     r"""
 Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are matched against the definition of :attr:`func`. Returns the pickled representation of the resulting assignment of the parameter names of the function in the order in which they appear in its definition, omitting the ignored ones. If a parameter name in :attr:`func` is prefixed by \*\* (hence its assignment is a dict), it is replaced by its sorted list of items.
@@ -432,7 +430,6 @@ An instance of this class defines a functor attached to a python top-level funct
 
 :param func: a function, defined at the top-level of its module (hence pickable)
 :param ignore: a list of parameter names among those of *func*
-:param timeout: an upper bound estimate of the execution time in secs
 :param base: a signature
 
 .. method:: getkey(arg)
@@ -442,8 +439,8 @@ An instance of this class defines a functor attached to a python top-level funct
   """
 #--------------------------------------------------------------------------------------------------
 
-  def __init__(self,func,ignore,timeout,base):
-    super(ProcessSignature,self).__init__(func,ignore,timeout)
+  def __init__(self,func,ignore,base):
+    super(ProcessSignature,self).__init__(func,ignore)
     p,typ = self.params[0]
     self.params = ((p,-1),)+self.params[1:]
     self.base = base
@@ -480,7 +477,7 @@ Methods:
     self.path = path
 
 #--------------------------------------------------------------------------------------------------
-  def __call__(self,cell,size,timeout,typ=namedtuple('StoreAPI',('waitval','getval','setval'))):
+  def __call__(self,cell,size,typ=namedtuple('StoreAPI',('waitval','getval','setval'))):
     r"""
 Returns an incarnation of the API to manipulate the value of *cell* (see below).
 
@@ -488,7 +485,6 @@ Returns an incarnation of the API to manipulate the value of *cell* (see below).
 :type cell: :class:`int`
 :param size: size status of the cell
 :type size: :class:`int`\|\ :class:`NoneType`
-:param timeout: max waiting time when cell is being computed in another thread/process
 
 The API to manipulate the value of a cell consists of:
 
@@ -508,23 +504,19 @@ The *size* parameter has the following meaning:
       try: pickle.dump(val,vfile)
       except Exception as e: vfile.seek(0); vfile.truncate(); pickle.dump(e,vfile)
       s = vfile.tell()
-      vfile.close(); conn.close()
+      vfile.close()
+      synch.close()
       return s
     def getval():
       try: return pickle.load(vfile)
       finally: vfile.close()
-    def waitval():
-      try: conn.execute('BEGIN IMMEDIATE TRANSACTION')
-      except: pass
-      finally: conn.close()
+    synch = Synchroniser(tpath)
     if size is None:
       vfile = rpath.open('wb')
-      conn = sqlite3.connect(str(tpath))
-      conn.execute('BEGIN IMMEDIATE TRANSACTION')
+      synch.open()
     else:
       vfile = rpath.open('rb')
-      if size==0: conn = sqlite3.connect(str(tpath),timeout)
-    return typ(waitval,getval,setval)
+    return typ(synch.wait,getval,setval)
 
   def remove(self,cell,size):
     tpath,rpath = self.getpaths(cell)
@@ -560,16 +552,16 @@ Attributes:
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-def lru_persistent_cache(ignore=(),timeout=86400.,factory=CacheBlock,**ka):
+def lru_persistent_cache(ignore=(),factory=CacheBlock,**ka):
   r"""
 A decorator which applies to a function and replaces it by a persistently cached version. The function must be defined at the top-level of its module, to be compatible with :class:`Signature`.
 
-:param ignore,timeout: passed, together with the function, to the :class:`Signature` constructor
+:param ignore: passed, together with the function, to the :class:`Signature` constructor
 :param ka: keyword argument dict passed to :class:`CacheBlock`
   """
 #--------------------------------------------------------------------------------------------------
   def transf(f):
-    c = factory(signature=Signature(f,ignore,timeout),**ka)
+    c = factory(signature=Signature(f,ignore),**ka)
     F = lambda *a,**ka: c((a,ka))
     F.cache = c
     return update_wrapper(F,f)
@@ -588,20 +580,20 @@ class DerivedSignature:
   def __setstate__(self,state): self.alt = state
 
 #--------------------------------------------------------------------------------------------------
-def make_process_step(base,f,ignore=(),timeout=86400.,factory=CacheBlock,**ka):
+def make_process_step(base,f,ignore=(),factory=CacheBlock,**ka):
   r"""
 Basic process cache factory (invoked to cache each process step).
 
 :param base: a cache block
 :type base: :class:`CacheBlock`\|\ :class:`NoneType`
 :param f: a function
-:param ignore,timeout: passed, together with the function, to the signature constructor
+:param ignore: passed, together with the function, to the signature constructor
 
 The signature of the returned cache is an instance of :class:`Signature` if *base* is :const:`None`, otherwise an instance of :class:`ProcessSignature`, in which case, its base is a copy of the signature of *base* where :attr:`getval` is overridden by *base* itself. This is what enables the "stacked cache" effect of processes.
   """
 #--------------------------------------------------------------------------------------------------
-  if base is None: sig = Signature(f,ignore,timeout)
-  elif isinstance(base,CacheBlock): sig = ProcessSignature(f,ignore,timeout,base=DerivedSignature(base))
+  if base is None: sig = Signature(f,ignore)
+  elif isinstance(base,CacheBlock): sig = ProcessSignature(f,ignore,base=DerivedSignature(base))
   else: raise TypeError('Cannot create a cache with base of type {} (not {})'.format(type(base),CacheBlock))
   c = factory(signature=sig,**ka)
   c.base = base

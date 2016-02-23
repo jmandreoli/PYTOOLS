@@ -17,7 +17,7 @@ from functools import update_wrapper
 from collections import namedtuple, defaultdict
 from collections.abc import MutableMapping
 from time import process_time, perf_counter
-from . import ARG, SQliteNew, Synchroniser, size_fmt, time_fmt
+from . import ARG, SQliteNew, size_fmt, time_fmt
 
 # Data associated with each cell is kept in a separate file
 # in the same folder as the database
@@ -473,6 +473,8 @@ Methods:
   """
 #==================================================================================================
 
+  timeout = 600.
+
   def __init__(self,path):
     self.path = path
 
@@ -499,7 +501,6 @@ The *size* parameter has the following meaning:
 - Otherwise, the cell has been computed in the past and the current thread will invoke :func:`getval` to get its value.
     """
 #--------------------------------------------------------------------------------------------------
-    tpath,rpath = self.getpaths(cell)
     def setval(val):
       try: pickle.dump(val,vfile)
       except Exception as e: vfile.seek(0); vfile.truncate(); pickle.dump(e,vfile)
@@ -510,13 +511,22 @@ The *size* parameter has the following meaning:
     def getval():
       try: return pickle.load(vfile)
       finally: vfile.close()
-    synch = Synchroniser(tpath)
+    def waitval():
+      while True:
+        if tpath.exists():
+          try: synch.execute('BEGIN IMMEDIATE TRANSACTION')
+          except sqlite3.OperationalError: pass
+          else: synch.close(); break
+        else: synch.close(); raise Exception('synch file removed')
+    tpath,rpath = self.getpaths(cell)
     if size is None:
       vfile = rpath.open('wb')
-      synch.open()
+      synch = sqlite3.connect(str(tpath))
+      synch.execute('BEGIN EXCLUSIVE TRANSACTION')
     else:
       vfile = rpath.open('rb')
-    return typ(synch.wait,getval,setval)
+      synch = sqlite3.connect(str(tpath),timeout=self.timeout) if size==0 else None
+    return typ(waitval,getval,setval)
 
   def remove(self,cell,size):
     tpath,rpath = self.getpaths(cell)

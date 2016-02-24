@@ -599,6 +599,28 @@ def SQLHandlerSchema(meta):
 SQLHandlerSchema.status = dict(origin=__name__+'.SQLHandler',version=1)
 
 #==================================================================================================
+def sparkinit(**ka):
+  r"""
+By default, creates a :class:`pyspark.context.SparkContext` instance with keyword arguments *ka*, stores it as attribute :attr:`currentContext` in that class and returns it. Should be called only once.
+
+If a resource ``spark/pyspark.py`` exists in an XDG configuration file, that resource is executed (locally) and should define a function :func:`sparkinit`. That function is then invoked instead of the default one (above), with the default one as first positional argument.
+  """
+#==================================================================================================
+  from xdg.BaseDirectory import load_first_config
+  def F(**ka):
+    import atexit
+    from pyspark.context import SparkContext
+    sc = SparkContext(**ka)
+    atexit.register(sc.stop)
+    SparkContext.currentContext = sc
+    return sc
+  p = load_first_config('spark/pyspark.py')
+  if p is None: return F(**ka)
+  d = {}
+  with open(p) as u: exec(u.read(),d)
+  return d['sparkinit'](F,**ka)
+
+#==================================================================================================
 def iso2date(iso):
   r'''
 :param iso: triple as returned by :meth:`datetime.isocalendar`

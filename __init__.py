@@ -3,6 +3,27 @@ import logging
 logger = logging.getLogger(__name__)
 
 #==================================================================================================
+class Singleton(type):
+  r"""
+A metaclass for singleton pattern. Example::
+
+   class c (metaclass=Singleton):
+     def __init__(self,a): self.att = a
+   x = c(3); y = c()
+   y is x
+   #>>> True
+   z = c(3)
+   #>>> Error
+  """
+#==================================================================================================
+  _instances = {}
+  def __call__(cls, *a, **ka):
+    x = cls._instances.get(cls)
+    if x is None: cls._instances[cls] = x = super(Singleton, cls).__call__(*a,**ka)
+    else: assert not a and not ka, 'Singleton class instance can only be created once'
+    return x
+
+#==================================================================================================
 class ondemand (object):
   r"""
 Use as a decorator to declare, in a class, a computable attribute which is computed only once (its value is then cached). Example::
@@ -599,26 +620,28 @@ def SQLHandlerSchema(meta):
 SQLHandlerSchema.status = dict(origin=__name__+'.SQLHandler',version=1)
 
 #==================================================================================================
-def sparkinit(**ka):
+class spark (metaclass=Singleton):
   r"""
-By default, creates a :class:`pyspark.context.SparkContext` instance with keyword arguments *ka*, stores it as attribute :attr:`currentContext` in that class and returns it. Should be called only once.
+When method :meth:`init` is invoked on the (unique) instance of this singleton class, it creates a :class:`pyspark.context.SparkContext` instance with the same keyword arguments as the invocation, and stores it as attribute :attr:`sc`.
 
-If a resource ``spark/pyspark.py`` exists in an XDG configuration file, that resource is executed (locally) and should define a function :func:`sparkinit`. That function is then invoked instead of the default one (above), with the default one as first positional argument.
+By default, method :meth:`__init__` of this class is identical to method :meth:`init`. If a resource ``spark/pyspark.py`` exists in an XDG configuration file, that resource is executed (locally) and should define a function :func:`init` used as method :meth:`__init__` instead. The defined function can of course use method :meth:`init`.
   """
 #==================================================================================================
-  from xdg.BaseDirectory import load_first_config
-  def F(**ka):
+  def init(self,**ka):
     import atexit
     from pyspark.context import SparkContext
-    sc = SparkContext(**ka)
+    self.sc = sc = SparkContext(**ka)
     atexit.register(sc.stop)
-    SparkContext.currentContext = sc
-    return sc
-  p = load_first_config('spark/pyspark.py')
-  if p is None: return F(**ka)
-  d = {}
-  with open(p) as u: exec(u.read(),d)
-  return d['sparkinit'](F,**ka)
+
+  def config():
+    from xdg.BaseDirectory import load_first_config
+    p = load_first_config('spark/pyspark.py')
+    if p is None: return
+    d = {}
+    with open(p) as u: exec(u.read(),d)
+    return d['init']
+  __init__ = config() or init
+  del config
 
 #==================================================================================================
 def iso2date(iso):

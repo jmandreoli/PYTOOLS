@@ -16,7 +16,6 @@ Contents:
    mplext.rst
    monitor.rst
    chrono.rst
-   docstack.rst
    taskmanager.rst
 
 Available types and functions

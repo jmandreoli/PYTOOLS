@@ -42,7 +42,7 @@ Attributes:
 
 .. attribute:: grid
 
-   :const:`None` or an array of instances of :class:`Cell`
+   :const:`None` or an instance of :class:`matplotlib.gridspec.GridSpecFromSubplotSpec`
    (see method :meth:`make_grid`)
 
 .. attribute:: callbacks
@@ -74,7 +74,8 @@ Methods:
     from matplotlib.gridspec import GridSpecFromSubplotSpec
     import numpy
     self.grid = GridSpecFromSubplotSpec(rows,cols,self.sps,**ka)
-    self.offspring = numpy.zeros((rows,cols),object)
+    self.shape = shape = rows,cols
+    self.offspring = numpy.zeros(shape,object)
     self.offspring[...] = None
     return self.grid
 
@@ -89,9 +90,9 @@ Methods:
     """
 (only when :attr:`grid` is not :const:`None`). Lazily accesses the cell at row *i*, col *j*. The argument must be a tuple *i,j* where *i* and *j* can be numbers (type :class:`int`) or ranges (type :class:`slice`).
     """
+    assert self.grid is not None
     def start(i): return (0 if i.start is None else i.start) if isinstance(i,slice) else i
     i,j = ij
-    assert self.grid is not None
     i0 = start(i)
     j0 = start(j)
     c = self.offspring[i0,j0]
@@ -136,7 +137,7 @@ Returns a context manager which clears *self* on enter and redraws :attr:`figure
     self.figure.canvas.draw()
 
   @staticmethod
-  def new(fig=None,sps={},**ka):
+  def create(fig=None,sps={},**ka):
     """
 Factory of :class:`Cell` objects.
 
@@ -155,6 +156,8 @@ If *fig* is :const:`None`, a matplotlib figure in a new window is created, using
       assert isinstance(fig,Figure) and not ka
     from matplotlib.gridspec import GridSpec
     return Cell(fig,GridSpec(1,1,**sps)[0,0])
+
+  new = create # legacy
 
 #------------------------------------------------------------------------------
 # class Timer

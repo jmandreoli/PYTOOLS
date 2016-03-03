@@ -319,6 +319,49 @@ Returns a subclass of :class:`list` with an IPython pretty printer for columns. 
   return t
 
 #==================================================================================================
+def ipysetup(D,helpers={},types={},_hstyle='display: inline; padding-left: 3mm; vertical-align: middle',**buttons):
+  r"""
+Sets values in a dictionary through an interface.
+
+:param D: target dictionary
+:type D: :class:`dict`
+:param helpers: dictionary of helpers (same keys as target dictionary)
+:param types: dictionary of vtypes (same keys as target dictionary)
+
+A helper is any string. A vtype is either a python type in :class:`bool`, :class:`str`, :class:`int`, :class:`float`, or a tuple of 
+  """
+#==================================================================================================
+  from ipywidgets.widgets import HTML, Text, IntText, FloatText, IntSlider, FloatSlider, Dropdown, Checkbox, Button, HBox, VBox
+  from functools import partial
+  def upd(ev):
+    w = ev['owner']; D[w.description] = w.value
+  def reset(b):
+    for w in W: w.value = b.data[w.description]
+  def ClickButton(label,action,data):
+    b = Button(description=label); b.on_click(action); b.data = data; return b
+  def row():
+    for k,v in sorted(D.items()):
+      typ = types.get(k,type(v))
+      if typ is bool: F = Checkbox
+      elif typ is str: F = Text
+      elif typ is int: F = IntText
+      elif typ is float: F = FloatText
+      elif isinstance(typ,slice):
+        slider = IntSlider if isinstance(v,int) else FloatSlider
+        F = partial(slider,min=(typ.start or 0),max=typ.stop,step=(typ.step or 0))
+      elif isinstance(typ,tuple) or isinstance(typ,list):
+        F = partial(Dropdown,options=typ)
+      else: raise TypeError('Key: {}'.format(k))
+      w = F(description=k,value=v)
+      W.append(w)
+      w.observe(upd, 'value')
+      yield HBox(children=(w,HTML(description='help',value='<div style="{}">{}</div>'.format(_hstyle,helpers.get(k,'')))))
+    if buttons:
+      yield HBox(children=[ClickButton(label,reset,data) for label,data in sorted(buttons.items())])
+  W = []
+  return VBox(children=list(row()))
+
+#==================================================================================================
 def htmlsafe(x):
   r"""
 Returns an HTML safe representation of *x*.

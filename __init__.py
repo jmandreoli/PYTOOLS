@@ -327,16 +327,20 @@ Sets values in a dictionary through an interface.
 :type D: :class:`dict`
 :param helpers: dictionary of helpers (same keys as target dictionary)
 :param types: dictionary of vtypes (same keys as target dictionary)
+:param buttons: a dictionary of dictionaries with same keys as the target (see below)
+:type buttons: :class:`dict`
 
-A helper is any string. A vtype is either a python type in :class:`bool`, :class:`str`, :class:`int`, :class:`float`, or a tuple of 
+A helper is any string. A vtype is either a python basic type (\ :class:`bool`, :class:`str`, :class:`int`, :class:`float`), or a tuple of strings, or an instance of :class:`slice` (possibly with float arguments). When a button is specified by a key and a dict value, a button labeled with that key is displayed, which, when clicked, updates the target dictionary with its value.
   """
 #==================================================================================================
   from ipywidgets.widgets import HTML, Text, IntText, FloatText, IntSlider, FloatSlider, Dropdown, Checkbox, Button, HBox, VBox
   from functools import partial
   def upd(ev):
     w = ev['owner']; D[w.description] = w.value
-  def reset(b):
-    for w in W: w.value = b.data[w.description]
+  def upda(b):
+    for w in W:
+      x = b.data.get(w.description)
+      if x is not None: w.value = x
   def ClickButton(label,action,data):
     b = Button(description=label); b.on_click(action); b.data = data; return b
   def row():
@@ -357,7 +361,7 @@ A helper is any string. A vtype is either a python type in :class:`bool`, :class
       w.observe(upd, 'value')
       yield HBox(children=(w,HTML(description='help',value='<div style="{}">{}</div>'.format(_hstyle,helpers.get(k,'')))))
     if buttons:
-      yield HBox(children=[ClickButton(label,reset,data) for label,data in sorted(buttons.items())])
+      yield HBox(children=[ClickButton(label,upda,data) for label,data in sorted(buttons.items())])
   W = []
   return VBox(children=list(row()))
 
@@ -574,6 +578,8 @@ def SQLinit(engine,schema):
     except: raise SQLinitStatusException()
     if status != dict((k,str(v)) for k,v in schema.status.items()):
       raise SQLinitMismatchException(schema.status,status)
+    meta.clear()
+    schema(meta)
   else:
     status_table = Table(
       'Status',meta,
@@ -583,7 +589,7 @@ def SQLinit(engine,schema):
     schema(meta)
     meta.create_all()
     engine.execute(insert(status_table).values(created=datetime.now(),**schema.status))
-  meta.remove(status_table)
+    meta.remove(status_table)
   return engine,meta.tables
 
 class SQLinitMismatchException (Exception): pass

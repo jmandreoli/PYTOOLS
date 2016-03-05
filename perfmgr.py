@@ -12,6 +12,7 @@ import os, sys, subprocess, logging, threading
 from collections.abc import MutableMapping
 from functools import partial
 from datetime import datetime
+from socket import gethostname
 from sqlalchemy.engine import Engine
 from sqlalchemy.sql import select, insert, delete, func
 from . import odict, SQLinit
@@ -30,6 +31,7 @@ def schema(meta):
     Column('oid',Integer(),primary_key=True),
     Column('version',DateTime(),nullable=False),
     Column('testbed',Text(),nullable=False),
+    Column('tests',Text(),nullable=False),
     Index('session_idx','testbed','version'),
   )
   Table(
@@ -49,44 +51,10 @@ def schema(meta):
     Column('size',Float()),
     Column('meter',Float()),
   )
-schema.status = dict(module=__name__,version=2)
-
-#--------------------------------------------------------------------------------------------------
-class TableMixin:
-#--------------------------------------------------------------------------------------------------
-
-  def __getitem__(self,oid):
-    with self.connect() as conn:
-      r = conn.execute(select([self.table]).where(self.table.c.oid==oid)).fetchone()
-    if r is None: raise KeyError(oid)
-    return self.tableR(**r)
-
-  def __delitem__(self,oid):
-    with self.connect() as conn:
-      n = conn.execute(self.table.delete().where(self.table.c.oid==oid)).rowcount
-    if n==0: raise KeyError(oid)
-
-  def __setitem__(self,oid,v):
-    raise Exception('Direct create/update not permitted on {}'.format(self))
-
-  def __iter__(self):
-    with self.connect() as conn:
-      yield from (oid for oid, in conn.execute(select([self.table.c.oid])))
-
-  def __len__(self):
-    with self.connect() as conn:
-      return conn.execute(select([func.count(self.table.c.oid)])).fetchone()[0]
-
-  def items(self):
-    with self.connect() as conn:
-      for r in conn.execute(select([self.table])): yield r.oid,self.tableR(**r)
-
-  def clear(self):
-    with self.connect() as conn:
-      conn.execute(self.table.delete())
+schema.status = dict(module=__name__,version=3)
 
 #==================================================================================================
-class PerfManager (TableMixin,MutableMapping):
+class PerfManager (MutableMapping):
 #==================================================================================================
 
   def __new__(cls,spec,listing={},lock=threading.Lock()):
@@ -98,13 +66,10 @@ class PerfManager (TableMixin,MutableMapping):
       if self is None:
         self = super(PerfManager,cls).__new__(cls)
         self.engine,meta = SQLinit(engine,schema)
-        self.table = self.session_t = meta['Session']
-        self.tableR = partial(PerfSession,self)
+        self.session_t = meta['Session']
         self.experiment_t = meta['Experiment']
         self.perf_t = meta['Perf']
-        self.session = None
         self.history = []
-        self.config = None
     return self
 
   def __del__(self):
@@ -119,13 +84,50 @@ class PerfManager (TableMixin,MutableMapping):
 
   def getsession(self,initf):
     with open(initf) as u: x = u.read()
-    exec(x,{}) # checks syntax
-    t = os.stat(initf).st_mtime
+    t = {}
+    exec(x,t) # checks syntax
+    t = ' '.join(k for k in t if not k.startswith('_'))
+    v = os.stat(initf).st_mtime
     with self.connect() as conn:
-      oid = conn.execute(select([self.session_t.c.oid]).where((self.session_t.c.version==t)&(self.session_t.c.testbed==x))).fetchone()
-      if oid is None:
-        oid = conn.execute(self.session_t.insert().values(version=datetime.fromtimestamp(t),testbed=x)).inserted_primary_key[0]
-    return self[oid]
+      r = conn.execute(select([self.session_t]).where((self.session_t.c.version==v)&(self.session_t.c.testbed==x))).fetchone()
+      if r is None:
+        r = dict(version=datetime.fromtimestamp(v),testbed=x,tests=t)
+        r['oid'] = conn.execute(self.session_t.insert().values(**r)).inserted_primary_key[0]
+    return PerfSession(self,**r)
+
+#--------------------------------------------------------------------------------------------------
+# PerfManager as mapping
+#--------------------------------------------------------------------------------------------------
+
+  def __getitem__(self,oid):
+    with self.connect() as conn:
+      r = conn.execute(select([self.session_t]).where(self.session_t.c.oid==oid)).fetchone()
+      if r is None: raise KeyError(oid)
+      return PerfSession(self,**r)
+
+  def __delitem__(self,oid):
+    with self.connect() as conn:
+      n = conn.execute(self.session_t.delete().where(self.session_t.c.oid==oid)).rowcount
+    if n==0: raise KeyError(oid)
+
+  def __setitem__(self,oid,v):
+    raise Exception('Direct create/update not permitted on {}'.format(self))
+    
+  def __iter__(self):
+    with self.connect() as conn:
+      yield from (oid for oid, in conn.execute(select([self.session_t.c.oid])))
+
+  def __len__(self):
+    with self.connect() as conn:
+      return conn.execute(select([func.count(self.session_t.c.oid)])).fetchone()[0]
+
+  def items(self):
+    with self.connect() as conn:
+      for r in conn.execute(select([self.session_t])): yield r.oid,PerfSession(self,**r)
+
+  def clear(self):
+    with self.connect() as conn:
+      conn.execute(self.session_t.delete())
 
 #--------------------------------------------------------------------------------------------------
 # Display
@@ -139,12 +141,12 @@ class PerfManager (TableMixin,MutableMapping):
   def __str__(self): return 'PerfManager<{}>'.format(self.engine.url)
 
 #==================================================================================================
-class PerfSession (TableMixin):
+class PerfSession (MutableMapping):
 #==================================================================================================
 
   def __init__(self,mgr,**ka):
     self.__dict__.update(ka)
-    self.experiment_t = self.table = mgr.experiment_t
+    self.experiment_t = mgr.experiment_t
     self.perf_t = mgr.perf_t
     self.connect = mgr.connect
     self.url = mgr.engine.url
@@ -158,7 +160,7 @@ class PerfSession (TableMixin):
       if isinstance(r,Exception): raise Exception('Exception in executor') from r
       return r
     with self.connect() as conn:
-      exp = conn.execute(self.experiment_t.insert().values(session=self.oid,created=datetime.now(),name=name,host=(host or os.environ['HOST']),exc=exc,args=ka,tmax=tmax)).inserted_primary_key[0]
+      exp = conn.execute(self.experiment_t.insert().values(session=self.oid,created=datetime.now(),name=name,host=(host or gethostname()),exc=exc,args=ka,tmax=tmax)).inserted_primary_key[0]
     n = 0
     logger.info('Experiment %s:  %s (executor: %s, tmax: %.2fs)',exp,name,exc,tmax)
     try:
@@ -188,8 +190,40 @@ class PerfSession (TableMixin):
       e.result = array(list(map(tuple,conn.execute(select([self.perf_t.c.size,self.perf_t.c.meter]).where(self.perf_t.c.exper==self.oid)))))
     return e
 
-  tableR = report
+#--------------------------------------------------------------------------------------------------
+# PerfSession as mapping
+#--------------------------------------------------------------------------------------------------
 
+  def __getitem__(self,oid):
+    with self.connect() as conn:
+      r = conn.execute(select([self.experiment_t]).where((self.experiment_t.c.oid==oid)&(self.experiment_t.c.session==self.oid))).fetchone()
+      if r is None: raise KeyError(oid)
+      return self.report(**r)
+    
+  def __delitem__(self,oid):
+    with self.connect() as conn:
+      n = conn.execute(self.experiment_t.delete().where((self.experiment_t.c.oid==oid)&(self.experiment_t.c.session==self.oid))).rowcount
+    if n==0: raise KeyError(oid)
+
+  def __setitem__(self,oid,v):
+    raise Exception('Direct create/update not permitted on {}'.format(self))
+    
+  def __iter__(self):
+    with self.connect() as conn:
+      yield from (oid for oid, in conn.execute(select([self.experiment_t.c.oid]).where(self.experiment_t.c.session==self.oid)))
+
+  def __len__(self):
+    with self.connect() as conn:
+      return conn.execute(select([func.count(self.experiment_t.c.oid)]).where(self.experiment_t.c.session==self.oid)).fetchone()[0]
+    
+  def items(self):
+    with self.connect() as conn:
+      for r in conn.execute(select([self.experiment_t]).where(self.experiment_t.c.session==self.oid)): yield r.oid,self.report(**r)
+
+  def clear(self):
+    with self.connect() as conn:
+      conn.execute(self.self.experiment_t.delete())
+  
 #--------------------------------------------------------------------------------------------------
 # Display
 #--------------------------------------------------------------------------------------------------
@@ -200,8 +234,8 @@ class PerfSession (TableMixin):
   def as_html(self):
     H = [h for h in self.experiment_t.c.keys() if h != 'oid' and h!='session']
     L = list((k,[v[h] for h in H]) for k,v in sorted(self.items()))
-    return html_table(L,[str for h in H],hdrs=H,title='Session {} ')
-  def __str__(self): return 'PerfSession<{}.{}>'.format(self.url,self.oid)
+    return html_table(L,[str for h in H],hdrs=H,title='Session {}: {{{}}} [{}]'.format(self.oid,self.tests,self.version))
+  def __str__(self): return 'PerfSession<{}:{}>'.format(self.url,self.oid)
 
 #==================================================================================================
 # Utilities

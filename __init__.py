@@ -576,8 +576,9 @@ def SQLinit(engine,schema):
       status = dict(engine.execute(select((status_table.c))).fetchone())
       del status['created']
     except: raise SQLinitStatusException()
-    if status != dict((k,str(v)) for k,v in schema.status.items()):
-      raise SQLinitMismatchException(schema.status,status)
+    for k,v in schema.status.items():
+      if status.get(k) != str(v):
+        raise SQLinitMismatchException('{}[expected:{},found:{}]',k,v,status.get(k))
     meta.clear()
     schema(meta)
   else:

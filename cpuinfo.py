@@ -42,7 +42,9 @@ def makebase(engine,hosts=None):
   if hosts is None: hosts = knownhosts()
   for host in hosts:
     logger.info('Examining host: %s',host)
-    p = subprocess.run(('ssh','-q','-n','-x','-T',host,'cat','/proc/cpuinfo'),stdout=subprocess.PIPE,universal_newlines=True)
+    cmd = [] if host is None else ['ssh','-q','-n','-x','-T',host]
+    cmd += 'cat','/proc/cpuinfo'
+    p = subprocess.run(cmd,stdout=subprocess.PIPE,universal_newlines=True)
     L,D = [],[]
     for y in p.stdout.split('\n'):
       y = y.strip()

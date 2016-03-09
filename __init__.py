@@ -553,48 +553,51 @@ Assumes that *pkgname* is the name of a python package contained in a git reposi
 class GitException (Exception): pass
 
 #==================================================================================================
-def SQLinit(engine,schema):
+def SQLinit(engine,meta):
   r"""
-:param engine: a sqlalchemy engine (or its url)
-:param schema: a function with one argument and a ``status`` attribute (dictionary of strings)
+:param engine: a sqlalchemy engine (or its url) or :const:`None` if *meta* is already bound
+:param meta: a sqlalchemy metadata structure
 
-* When the database is empty, function *schema* is invoked with an empty :class:`sqlalchemy.MetaData` instance, and expected to fill it with the definition of the database. Furthermore, the ``status`` attribute of *schema* is used to populate a table ``Status`` with a single row.
+* When the database is empty, is is populated using *meta*
 
-* When the database is not empty, it must contain a ``Status`` table with a single row matching exactly the ``status`` attribute of *schema*, otherwise an exception is raised.
+* When the database is not empty, it must contain a ``Metainfo`` table with a single row matching exactly the ``info`` attribute of *meta*, otherwise an exception is raised.
   """
 #==================================================================================================
   from datetime import datetime
-  from sqlalchemy import MetaData, Table, Column, create_engine
+  from sqlalchemy import MetaData, Table, Column, create_engine, event
   from sqlalchemy.types import DateTime, Text, Integer
   from sqlalchemy.sql import select, insert, update, delete, and_
-  if isinstance(engine,str): engine = create_engine(engine)
-  meta = MetaData(engine)
-  meta.reflect()
-  if meta.tables:
+  if isinstance(engine,str):
+    engine = create_engine(engine)
+    if engine.name == 'sqlite':
+      @event.listens_for(engine,'connect')
+      def do_connect(conn,rec): conn.isolation_level = None
+      @event.listens_for(engine,'begin')
+      def do_begin(conn): conn.execute('BEGIN')
+  meta_ = MetaData(bind=engine)
+  meta_.reflect()
+  if meta_.tables:
     try:
-      status_table = meta.tables['Status']
-      status = dict(engine.execute(select((status_table.c))).fetchone())
-      del status['created']
-    except: raise SQLinitStatusException()
-    for k,v in schema.status.items():
-      if status.get(k) != str(v):
-        raise SQLinitMismatchException('{}[expected:{},found:{}]',k,v,status.get(k))
-    meta.clear()
-    schema(meta)
+      metainfo_table = meta_.tables['Metainfo']
+      metainfo = dict(engine.execute(select((metainfo_table.c))).fetchone())
+      del metainfo['created']
+    except: raise SQLinitMetainfoException()
+    for k,v in meta.info.items():
+      if metainfo.get(k) != str(v):
+        raise SQLinitMismatchException('{}[expected:{},found:{}]'.format(k,v,metainfo.get(k)))
   else:
-    status_table = Table(
-      'Status',meta,
+    metainfo_table = Table(
+      'Metainfo',meta_,
       Column('created',DateTime()),
-      *(Column(key,Text()) for key in schema.status)
+      *(Column(key,Text()) for key in meta.info)
     )
-    schema(meta)
-    meta.create_all()
-    engine.execute(insert(status_table).values(created=datetime.now(),**schema.status))
-    meta.remove(status_table)
-  return engine,meta.tables
+    meta_.create_all()
+    engine.execute(insert(metainfo_table).values(created=datetime.now(),**meta.info))
+    meta.create_all(bind=engine)
+  return engine
 
 class SQLinitMismatchException (Exception): pass
-class SQLinitStatusException (Exception): pass
+class SQLinitMetainfoException (Exception): pass
 
 #==================================================================================================
 class SQLHandler (logging.Handler):
@@ -608,9 +611,10 @@ A logging handler class which writes the log messages into a database.
   def __init__(self,engine,label,*a,**ka):
     from datetime import datetime
     from sqlalchemy.sql import select, insert, update, delete, and_
-    engine,tables = SQLinit(engine,SQLHandlerSchema)
-    session_table = tables['Session']
-    log_table = tables['Log']
+    meta = SQLHandlerMeta()
+    engine = SQLinit(engine,meta)
+    session_table = meta.tables['Session']
+    log_table = meta.tables['Log']
     with engine.begin() as conn:
       if engine.dialect.name == 'sqlite': conn.execute('PRAGMA foreign_keys = 1')
       conn.execute(delete(session_table).where(session_table.c.label==label))
@@ -627,9 +631,10 @@ A logging handler class which writes the log messages into a database.
     self.format(rec)
     self.dbrecord(rec)
 
-def SQLHandlerSchema(meta):
-  from sqlalchemy import Table, Column, ForeignKey
+def SQLHandlerMetadata(info=dict(origin=__name__+'.SQLHandler',version=1)):
+  from sqlalchemy import Table, Column, ForeignKey, MetaData
   from sqlalchemy.types import DateTime, Text, Integer
+  meta = MetaData(info=info)
   Table(
     'Session',meta,
     Column('oid',Integer(),primary_key=True,autoincrement=True),
@@ -646,7 +651,63 @@ def SQLHandlerSchema(meta):
     Column('funcName',Text(),nullable=False),
     Column('message',Text(),nullable=False),
     )
-SQLHandlerSchema.status = dict(origin=__name__+'.SQLHandler',version=1)
+  return meta
+
+#==================================================================================================
+class ormsroot (MutableMapping):
+#==================================================================================================
+
+  cache = {}
+  target = None
+
+  def __init__(self,s):
+    self.session = s
+    s.listing = self
+
+  def __getitem__(self,k):
+    r = self.session.query(self.target).filter_by(oid=k).first()
+    if r is None: raise KeyError(k)
+    self.session.add(r)
+    return r
+
+  def __delitem__(self,k):
+    with self.session.begin_nested(): self.session.delete(self[k])
+
+  def __setitem__(self,k,v):
+    raise Exception('Direct create/update not permitted on {} instance'.format(self.__class__))
+
+  def __iter__(self):
+    with self.session.begin_nested():
+      yield from (r[0] for r in self.session.query(self.target.oid))
+
+  def __len__(self):
+    return self.session.query(self.target).count()
+
+  def items(self):
+    with self.session.begin_nested():
+      yield from self.session.query(self.target.oid,self.target)
+
+  def clear(self):
+    with self.session.begin_nested():
+      for r in self.session.query(self.target): self.session.delete(r)
+
+  def _repr_html_(self):
+    from lxml.etree import tounicode
+    return tounicode(self.as_html())
+  def as_html(self):
+    return html_stack(*(v.as_html() for k,v in sorted(self.items())))
+
+  @classmethod
+  def sessionmaker(cls,url,*a,**ka):
+    from sqlalchemy.orm import sessionmaker
+    engine = cls.cache.get(url)
+    if engine is None: cls.cache[url] = engine = SQLinit(url,cls.target.metadata)
+    Session_ = sessionmaker(engine,*a,**ka)
+    def Session(**x):
+      s = Session_(**x)
+      cls(s)
+      return s
+    return Session
 
 #==================================================================================================
 class spark:

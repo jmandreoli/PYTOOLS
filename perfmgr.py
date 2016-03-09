@@ -8,150 +8,40 @@
 # *** Xerox Research Centre Europe - Grenoble ***
 #
 
-import os, sys, subprocess, logging, threading
-from collections.abc import MutableMapping
-from functools import partial
+import os, sys, subprocess, logging
 from datetime import datetime
 from socket import gethostname
-from sqlalchemy.engine import Engine
-from sqlalchemy.sql import select, insert, delete, func
-from . import odict, SQLinit
+from collections import defaultdict
+from sqlalchemy import Column, Index, ForeignKey
+from sqlalchemy.types import Text, Integer, Float, DateTime, PickleType
+from sqlalchemy.ext.declarative import as_declarative, declared_attr
+from sqlalchemy.orm import relationship
+from . import SQLinit, zipaxes, ormsroot
 
 logger = logging.getLogger(__name__)
 
 SPATH = os.path.splitext(os.path.abspath(__file__))[0]+'_.py'
 
-#==================================================================================================
-def schema(meta):
-#==================================================================================================
-  from sqlalchemy import Table, Column, ForeignKey, Index
-  from sqlalchemy.types import Text, Integer, Float, DateTime, PickleType
-  Table(
-    'Session',meta,
-    Column('oid',Integer(),primary_key=True),
-    Column('version',DateTime(),nullable=False),
-    Column('testbed',Text(),nullable=False),
-    Column('tests',Text(),nullable=False),
-    Index('session_idx','testbed','version'),
-  )
-  Table(
-    'Experiment',meta,
-    Column('oid',Integer(),primary_key=True),
-    Column('session',Integer(),ForeignKey('Session.oid',ondelete='CASCADE')),
-    Column('created',DateTime(),nullable=False),
-    Column('host',Text(),nullable=False),
-    Column('name',Text(),nullable=False),
-    Column('args',PickleType(),nullable=False),
-    Column('exc',Text(),nullable=False),
-    Column('tmax',Float(),nullable=False),
-  )
-  Table(
-    'Perf',meta,
-    Column('exper',Integer(),ForeignKey('Experiment.oid',ondelete='CASCADE')),
-    Column('size',Float()),
-    Column('meter',Float()),
-  )
-schema.status = dict(module=__name__,version=3)
+@as_declarative(name=__name__+'.Base')
+class Base:
+  @declared_attr
+  def __tablename__(cls): return cls.__name__
+  oid = Column(Integer(),primary_key=True)
+
+Base.metadata.info.update(origin=__name__,version=1)
 
 #==================================================================================================
-class PerfManager (MutableMapping):
+class Context (Base):
 #==================================================================================================
+  version = Column(DateTime(),nullable=False)
+  testbed = Column(Text(),nullable=False)
+  tests = Column(Text(),nullable=False)
 
-  def __new__(cls,spec,listing={},lock=threading.Lock()):
-    if isinstance(spec,PerfManager): return spec
-    elif isinstance(spec,Engine) or isinstance(spec,str): engine = spec
-    else: raise TypeError('Expected: {}|{}|{}; Found: {}'.format(PerfManager,Engine,str,type(spec)))
-    with lock:
-      self = listing.get(engine)
-      if self is None:
-        self = super(PerfManager,cls).__new__(cls)
-        self.engine,meta = SQLinit(engine,schema)
-        self.session_t = meta['Session']
-        self.experiment_t = meta['Experiment']
-        self.perf_t = meta['Perf']
-        self.history = []
-    return self
-
-  def __del__(self):
-    self.engine.dispose()
-
-  def __getnewargs__(self): return self.engine.url,
-
-  def connect(self,**ka):
-    conn = self.engine.connect(**ka)
-    if self.engine.name == 'sqlite': conn.execute('PRAGMA foreign_keys=1')
-    return conn
-
-  def getsession(self,initf):
-    with open(initf) as u: x = u.read()
-    t = {}
-    exec(x,t) # checks syntax
-    t = ' '.join(k for k in t if not k.startswith('_'))
-    v = os.stat(initf).st_mtime
-    with self.connect() as conn:
-      r = conn.execute(select([self.session_t]).where((self.session_t.c.version==v)&(self.session_t.c.testbed==x))).fetchone()
-      if r is None:
-        r = dict(version=datetime.fromtimestamp(v),testbed=x,tests=t)
-        r['oid'] = conn.execute(self.session_t.insert().values(**r)).inserted_primary_key[0]
-    return PerfSession(self,**r)
+  experiments = relationship('Experiment',back_populates='context',cascade='all, delete, delete-orphan')
 
 #--------------------------------------------------------------------------------------------------
-# PerfManager as mapping
+  def newexperiment(self,name,seq,host=None,exc=sys.executable,tmax=120.,**ka):
 #--------------------------------------------------------------------------------------------------
-
-  def __getitem__(self,oid):
-    with self.connect() as conn:
-      r = conn.execute(select([self.session_t]).where(self.session_t.c.oid==oid)).fetchone()
-      if r is None: raise KeyError(oid)
-      return PerfSession(self,**r)
-
-  def __delitem__(self,oid):
-    with self.connect() as conn:
-      n = conn.execute(self.session_t.delete().where(self.session_t.c.oid==oid)).rowcount
-    if n==0: raise KeyError(oid)
-
-  def __setitem__(self,oid,v):
-    raise Exception('Direct create/update not permitted on {}'.format(self))
-    
-  def __iter__(self):
-    with self.connect() as conn:
-      yield from (oid for oid, in conn.execute(select([self.session_t.c.oid])))
-
-  def __len__(self):
-    with self.connect() as conn:
-      return conn.execute(select([func.count(self.session_t.c.oid)])).fetchone()[0]
-
-  def items(self):
-    with self.connect() as conn:
-      for r in conn.execute(select([self.session_t])): yield r.oid,PerfSession(self,**r)
-
-  def clear(self):
-    with self.connect() as conn:
-      conn.execute(self.session_t.delete())
-
-#--------------------------------------------------------------------------------------------------
-# Display
-#--------------------------------------------------------------------------------------------------
-
-  def _repr_html_(self):
-    from lxml.etree import tounicode
-    return tounicode(self.as_html())
-  def as_html(self):
-    return html_stack(*(v.as_html() for k,v in sorted(self.items())))
-  def __str__(self): return 'PerfManager<{}>'.format(self.engine.url)
-
-#==================================================================================================
-class PerfSession (MutableMapping):
-#==================================================================================================
-
-  def __init__(self,mgr,**ka):
-    self.__dict__.update(ka)
-    self.experiment_t = mgr.experiment_t
-    self.perf_t = mgr.perf_t
-    self.connect = mgr.connect
-    self.url = mgr.engine.url
-
-  def record(self,name,seq,host=None,exc=sys.executable,tmax=120.,**ka):
     def rcall(sub,m,protocol=2):
       import pickle
       pickle.dump(m,sub.stdin,protocol=protocol)
@@ -159,83 +49,103 @@ class PerfSession (MutableMapping):
       r = pickle.load(sub.stdout)
       if isinstance(r,Exception): raise Exception('Exception in executor') from r
       return r
-    with self.connect() as conn:
-      exp = conn.execute(self.experiment_t.insert().values(session=self.oid,created=datetime.now(),name=name,host=(host or gethostname()),exc=exc,args=ka,tmax=tmax)).inserted_primary_key[0]
-    n = 0
-    logger.info('Experiment %s:  %s (executor: %s, tmax: %.2fs)',exp,name,exc,tmax)
-    try:
-      cmd = [] if host is None else ['ssh','-T','-q','-x',host]
-      cmd += [exc,'-u',SPATH]
-      with subprocess.Popen(cmd,bufsize=0,stdin=subprocess.PIPE,stdout=subprocess.PIPE) as sub:
-        rcall(sub,(self.testbed,name,ka))
-        for sz in seq:
-          tm = rcall(sub,sz)
-          try:
-            with self.connect() as conn:
-              conn.execute(self.perf_t.insert().values(exper=exp,size=sz,meter=tm))
-            n += 1
-            if tm > tmax: break
-          finally: logger.info('Perf(%s,%.2f)=%.2f',exp,sz,tm)
-    finally:
-      if n==0:
-        with self.connect() as conn:
-          conn.execute(self.experiment_t.delete().where(self.experiment_t.c.oid==exp))
-        exp = None
+    exp = Experiment(created=datetime.now(),host=(host or gethostname()),name=name,args=ka,exc=exc,tmax=tmax,perfs=[])
+    cmd = [] if host is None else ['ssh','-T','-q','-x',host]
+    cmd += [exc,'-u',SPATH]
+    with subprocess.Popen(cmd,bufsize=0,stdin=subprocess.PIPE,stdout=subprocess.PIPE) as sub:
+      rcall(sub,(self.testbed,name,ka))
+      for sz in seq:
+        tm = rcall(sub,sz)
+        logger.info('Perf(%.2f)=%.2f',sz,tm)
+        exp.perfs.append(Perf(size=sz,meter=tm))
+        if tm > tmax: break
+    self.experiments.append(exp)
     return exp
 
-  def report(self,**ka):
-    from numpy import array
-    e = odict(**ka)
-    with self.connect() as conn:
-      e.result = array(list(map(tuple,conn.execute(select([self.perf_t.c.size,self.perf_t.c.meter]).where(self.perf_t.c.exper==self.oid)))))
-    return e
+#--------------------------------------------------------------------------------------------------
+  def display(self,fig,inner='exc',outer='name',**filtr):
+#--------------------------------------------------------------------------------------------------
+    st0,st1 = set(('host','name','args','exc')),set((inner,outer)+tuple(filtr))
+    assert st0 <= st1, 'Missing status: {}'.format(st0-st1)
+    assert st1 <= st0, 'Unknown status: {}'.format(st1-st0)
+    inner = lambda exp,a=inner: getattr(exp,a)
+    outer = lambda exp,a=outer: getattr(exp,a)
+    def filtr(exp,L=filtr.items()):
+      return all(getattr(exp,a)==v for a,v in L)
+    tests = defaultdict(dict)
+    innerL = set()
+    for exp in self.experiments:
+      if not filtr(exp): continue
+      r = inner(exp)
+      tests[outer(exp)][r] = tuple(zip(*((p.size,p.meter) for p in exp.perfs)))
+      innerL.add(r)
+    innerL = sorted(innerL)
+    for (outerv,D),ax in zipaxes(sorted(tests.items()),fig,sharex=True,sharey=True):
+      for innerv in innerL:
+        r = D.get(innerv)
+        if r is None: continue
+        ax.plot(r[0],r[1],label=innerv)
+      ax.set_xlabel('size')
+      ax.set_ylabel('meter')
+      ax.set_title(outerv)
+      ax.legend(fontsize='x-small')
 
 #--------------------------------------------------------------------------------------------------
-# PerfSession as mapping
-#--------------------------------------------------------------------------------------------------
+  @property
+  def title(self): self.testbed.split('\n',1)[0][2:]
 
-  def __getitem__(self,oid):
-    with self.connect() as conn:
-      r = conn.execute(select([self.experiment_t]).where((self.experiment_t.c.oid==oid)&(self.experiment_t.c.session==self.oid))).fetchone()
-      if r is None: raise KeyError(oid)
-      return self.report(**r)
-    
-  def __delitem__(self,oid):
-    with self.connect() as conn:
-      n = conn.execute(self.experiment_t.delete().where((self.experiment_t.c.oid==oid)&(self.experiment_t.c.session==self.oid))).rowcount
-    if n==0: raise KeyError(oid)
-
-  def __setitem__(self,oid,v):
-    raise Exception('Direct create/update not permitted on {}'.format(self))
-    
-  def __iter__(self):
-    with self.connect() as conn:
-      yield from (oid for oid, in conn.execute(select([self.experiment_t.c.oid]).where(self.experiment_t.c.session==self.oid)))
-
-  def __len__(self):
-    with self.connect() as conn:
-      return conn.execute(select([func.count(self.experiment_t.c.oid)]).where(self.experiment_t.c.session==self.oid)).fetchone()[0]
-    
-  def items(self):
-    with self.connect() as conn:
-      for r in conn.execute(select([self.experiment_t]).where(self.experiment_t.c.session==self.oid)): yield r.oid,self.report(**r)
-
-  def clear(self):
-    with self.connect() as conn:
-      conn.execute(self.self.experiment_t.delete())
-  
-#--------------------------------------------------------------------------------------------------
-# Display
-#--------------------------------------------------------------------------------------------------
+  def __repr__(self): return '{}.Context<{}:{}>'.format(__name__,self.oid,self.title)
 
   def _repr_html_(self):
     from lxml.etree import tounicode
     return tounicode(self.as_html())
   def as_html(self):
-    H = [h for h in self.experiment_t.c.keys() if h != 'oid' and h!='session']
-    L = list((k,[v[h] for h in H]) for k,v in sorted(self.items()))
-    return html_table(L,[str for h in H],hdrs=H,title='Session {}: {{{}}} [{}]'.format(self.oid,self.tests,self.version))
-  def __str__(self): return 'PerfSession<{}:{}>'.format(self.url,self.oid)
+    H = ('created','host','name','args','exc','tmax')
+    return html_table(((exp.oid,[getattr(exp,h) for h in H]) for exp in self.experiments),hdrs=H,fmts=[str for h in H],title='{0.oid}: {0.title} {{{0.tests}}} {0.version}'.format(self))
+
+#==================================================================================================
+class Experiment (Base):
+#==================================================================================================
+  created = Column(DateTime(),nullable=False)
+  host = Column(Text(),nullable=False)
+  name = Column(Text(),nullable=False)
+  args = Column(PickleType(),nullable=False)
+  exc = Column(Text(),nullable=False)
+  tmax = Column(Float(),nullable=False)
+
+  context_oid = Column(Integer(),ForeignKey('Context.oid'))
+  context = relationship('Context',back_populates='experiments')
+  perfs = relationship('Perf',back_populates='experiment',cascade='all, delete, delete-orphan')
+
+#==================================================================================================
+class Perf (Base):
+#==================================================================================================
+  size = Column(Float())
+  meter = Column(Float())
+
+  experiment_oid = Column(Integer(),ForeignKey('Experiment.oid'))
+  experiment = relationship('Experiment',back_populates='perfs')
+
+#==================================================================================================
+class Root (ormsroot):
+#==================================================================================================
+
+  target = Context
+
+  def getcontext(self,initf):
+    with open(initf) as u: x = u.read()
+    t = {}
+    exec(x,t) # checks syntax
+    t = ' '.join(k for k in t if not k.startswith('_'))
+    v = datetime.fromtimestamp(os.stat(initf).st_mtime)
+    with self.session.begin_nested():
+      r = self.session.query(Context).filter_by(testbed=x,version=v).first()
+      if r is None:
+        r = Context(version=v,testbed=x,tests=t,experiments=[])
+        self.session.add(r)
+    return r
+
+sessionmaker = Root.sessionmaker
 
 #==================================================================================================
 # Utilities

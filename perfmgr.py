@@ -16,7 +16,7 @@ from sqlalchemy import Column, Index, ForeignKey
 from sqlalchemy.types import Text, Integer, Float, DateTime, PickleType
 from sqlalchemy.ext.declarative import as_declarative, declared_attr
 from sqlalchemy.orm import relationship
-from . import SQLinit, zipaxes, ormsroot
+from . import SQLinit, zipaxes, ormsroot, html_table
 
 logger = logging.getLogger(__name__)
 
@@ -130,8 +130,6 @@ class Perf (Base):
 class Root (ormsroot):
 #==================================================================================================
 
-  target = Context
-
   def getcontext(self,initf):
     with open(initf) as u: x = u.read()
     t = {}
@@ -145,6 +143,7 @@ class Root (ormsroot):
         self.session.add(r)
     return r
 
+Root.set_base(Context)
 sessionmaker = Root.sessionmaker
 
 #==================================================================================================
@@ -158,20 +157,3 @@ def geometric(xo,step):
   while True:
     yield x
     x = step*x
-
-#--------------------------------------------------------------------------------------------------
-def html_table(irows,fmts,hdrs=None,title=None):
-#--------------------------------------------------------------------------------------------------
-  from lxml.builder import E
-  def thead():
-    if title is not None: yield E.TR(E.TD(title,colspan=str(1+len(fmts))),style='background-color: gray; color: white')
-    if hdrs is not None: yield E.TR(E.TD(),*(E.TH(hdr) for hdr in hdrs))
-  def tbody():
-    for ind,row in irows:
-      yield E.TR(E.TH(str(ind)),*(E.TD(fmt(v)) for fmt,v in zip(fmts,row)))
-  return E.TABLE(E.THEAD(*thead()),E.TBODY(*tbody()))
-#--------------------------------------------------------------------------------------------------
-def html_stack(*a,**ka):
-#--------------------------------------------------------------------------------------------------
-  from lxml.builder import E
-  return E.DIV(*(E.DIV(x,**ka) for x in a))

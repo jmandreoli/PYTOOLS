@@ -299,22 +299,23 @@ A simple utility to browse sliceable objects page per page in IPython.
   else: interact((lambda page=start:display(D[(page-1)*pgsize:page*pgsize])),page=(1,P))
 
 #==================================================================================================
-def ipylist(name,columns,fmt=None):
+def ipylist(name,columns,parse=None):
   r"""
 :param name: name of the type
 :type name: :class:`str`
 :param columns: a tuple of column names
 :type columns: :class:`tuple`\ (\ :class:`str`)
-:param fmt: a formatting function
+:param fmt: a parsing function
 
-Returns a subclass of :class:`list` with an IPython pretty printer for columns. Function *fmt* takes an object and a column name (from *columns*) as input and returns the string representation of that column for that object. It defaults to :func:`getattr`.
+Returns a subclass of :class:`list` with an IPython pretty printer for columns. Function *parse* takes an object and a column name (from *columns*) as input and returns the representation of that column for that object. It defaults to :func:`getattr`.
   """
 #==================================================================================================
-  from lxml.builder import E
   from lxml.etree import tounicode
   if fmt is None: fmt = getattr
   t = type(name,(list,),{})
-  t._repr_html_ = lambda self,columns=columns,fmt=fmt: tounicode(E.TABLE(E.THEAD(E.TR(*(E.TH(c) for c in columns))),E.TBODY(*(E.TR(*(E.TD(str(fmt(x,c))) for c in columns)) for x in self))))
+  fmts = len(columns)*((lambda s:s),)
+  parsec=(lambda x: (parse(x,c) for c in columns))
+  t._repr_html_ = lambda self: tounicode(html_table(enumerate(map(parsec(self))),fmts,hdrs=columns))
   t.__getitem__ = lambda self,s,t=t: t(super(t,self).__getitem__(s)) if isinstance(s,slice) else super(t,self).__getitem__(s)
   return t
 
@@ -372,6 +373,38 @@ Returns an HTML safe representation of *x*.
   """
 #==================================================================================================
   return x._repr_html_() if hasattr(x,'_repr_html_') else str(x).replace('<','&lt;').replace('>','&gt;')
+
+#==================================================================================================
+def html_table(irows,fmts,hdrs=None,title=None):
+  r"""
+Returns an HTML table object.
+
+:param irows: a generator of pairs of an object (key) and a tuple of objects (value)
+:param fmts: a tuple of format functions matching the length of the value tuples
+:param hdrs: a tuple of strings matching the length of the value tuples
+:param title: a string
+  """
+#==================================================================================================
+  from lxml.builder import E
+  def thead():
+    if title is not None: yield E.TR(E.TD(title,colspan=str(1+len(fmts))),style='background-color: gray; color: white')
+    if hdrs is not None: yield E.TR(E.TD(),*(E.TH(hdr) for hdr in hdrs))
+  def tbody():
+    for ind,row in irows:
+      yield E.TR(E.TH(str(ind)),*(E.TD(fmt(v)) for fmt,v in zip(fmts,row)))
+  return E.TABLE(E.THEAD(*thead()),E.TBODY(*tbody()))
+
+#==================================================================================================
+def html_stack(*a,**ka):
+  r"""
+Returns a stack of HTML objects.
+
+:param a: a list of HTML objects
+:param ka: a dictionary of HTML attributes for the DIV encapsulating each object
+  """
+#==================================================================================================
+  from lxml.builder import E
+  return E.DIV(*(E.DIV(x,**ka) for x in a))
 
 #==================================================================================================
 class SQliteStack:
@@ -655,17 +688,55 @@ def SQLHandlerMetadata(info=dict(origin=__name__+'.SQLHandler',version=1)):
 
 #==================================================================================================
 class ormsroot (MutableMapping):
+  r"""
+Instances of this class implement very simple persistent object managers based on the sqlalchemy ORM. This class should not be instantiated directly.
+
+Each subclass *C* of this class should invoke the following class method: :meth:`set_base` with a single argument *R*, an sqlalchemy declarative persistent class. Once this is done, a specialised session maker can be obtained by invoking method :meth:`sessionmaker` of class *C*, with the url of an sqlalchemy supported database as first argument, the other arguments being the same as those for :meth:`sqlalchemy.orm.sessionmaker`. This sessionmaker will produce sessions with the following characteristics:
+
+* they are attached to an sqlalchemy engine at this url (note that engines are reused across multiple sessionmakers with the same url)
+
+* they have a :attr:`root` attribute, pointing to an instance of *C*, which acts as a dictionary where the keys are the primary keys of *R* and the values the corresponding ORM entries. Deletion from the dictionary is supported (and reflected in the persitent class *R* on session commit), but not direct update.
+
+Class *C* should provide a method to insert new objects in the persistent class *R*, and they will then be reflected in the session root. Example::
+
+   from sqlalchemy.ext.declarative import Base
+   from sqlalchemy import Column, Text, Integer
+
+   class Employee (Base):
+     oid = Column(Integer(),primary_key=True)
+     name = Column(Text())
+     position = Column(Text())
+
+   class Root(ormsroot):
+     def newemployee(self,name,position):
+       r = Employee(name=name,position=position)
+       self.session.add(r)
+       return r
+
+   Root.set_base(Employee)
+
+   Session = Root.sessionmaker('sqlite://')
+   s = Session()
+   jack = s.root.newemployee('jack','manager')
+   joe = s.root.newemployee('joe','writer')
+   s.commit() # for persistency
+   assert set(s.root) == set([jack.oid,joe.oid])
+
+   s.delete(jack)
+   assert set(s.root) == set([joe.oid])
+
+Furthermore, the session roots have an ipython HTML display.
+  """
 #==================================================================================================
 
   cache = {}
-  target = None
 
-  def __init__(self,s):
-    self.session = s
-    s.listing = self
+  def __init__(self,session):
+    self.session = session
+    session.root = session.r = self
 
   def __getitem__(self,k):
-    r = self.session.query(self.target).filter_by(oid=k).first()
+    r = self.session.query(self.base).get(k)
     if r is None: raise KeyError(k)
     self.session.add(r)
     return r
@@ -677,19 +748,10 @@ class ormsroot (MutableMapping):
     raise Exception('Direct create/update not permitted on {} instance'.format(self.__class__))
 
   def __iter__(self):
-    with self.session.begin_nested():
-      yield from (r[0] for r in self.session.query(self.target.oid))
+    with self.session.begin_nested(): yield from self.basepk()
 
   def __len__(self):
-    return self.session.query(self.target).count()
-
-  def items(self):
-    with self.session.begin_nested():
-      yield from self.session.query(self.target.oid,self.target)
-
-  def clear(self):
-    with self.session.begin_nested():
-      for r in self.session.query(self.target): self.session.delete(r)
+    return self.session.query(self.base).count()
 
   def _repr_html_(self):
     from lxml.etree import tounicode
@@ -701,13 +763,22 @@ class ormsroot (MutableMapping):
   def sessionmaker(cls,url,*a,**ka):
     from sqlalchemy.orm import sessionmaker
     engine = cls.cache.get(url)
-    if engine is None: cls.cache[url] = engine = SQLinit(url,cls.target.metadata)
+    if engine is None: cls.cache[url] = engine = SQLinit(url,cls.base.metadata)
     Session_ = sessionmaker(engine,*a,**ka)
     def Session(**x):
       s = Session_(**x)
       cls(s)
       return s
     return Session
+
+  @classmethod
+  def set_base(cls,t):
+    assert cls is not ormsroot
+    cls.base = t
+    pk = t.__table__.primary_key.columns.values()
+    def basepk(self,pk=pk,s=(0 if len(pk)==1 else slice(None))):
+      for r in self.session.query(*pk): yield r[s]
+    cls.basepk = basepk
 
 #==================================================================================================
 class spark:

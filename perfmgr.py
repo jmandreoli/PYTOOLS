@@ -12,6 +12,7 @@ import os, sys, subprocess, logging
 from datetime import datetime
 from socket import gethostname
 from collections import defaultdict
+from itertools import cycle
 from sqlalchemy import Column, Index, ForeignKey
 from sqlalchemy.types import Text, Integer, Float, DateTime, PickleType
 from sqlalchemy.ext.declarative import as_declarative, declared_attr
@@ -32,6 +33,9 @@ Base.metadata.info.update(origin=__name__,version=1)
 
 #==================================================================================================
 class Context (Base):
+  r"""
+Instances of this class are persistent and represent a bunch of performance experiments over a shared testbed.
+  """
 #==================================================================================================
   version = Column(DateTime(),nullable=False)
   testbed = Column(Text(),nullable=False)
@@ -41,6 +45,15 @@ class Context (Base):
 
 #--------------------------------------------------------------------------------------------------
   def newexperiment(self,name,seq,host=None,exc=sys.executable,tmax=120.,**ka):
+    r"""
+Launches one experiment.
+
+:param name: the name of the test in the testbed
+:param seq: a generator of sizes for the test
+:param host: a machine name accessible by ssh
+:param exc: the path to the python executable to run on the host
+:param tmax: the loop through sizes stops when the test exceeds this duration in sec
+    """
 #--------------------------------------------------------------------------------------------------
     def rcall(sub,m,protocol=2):
       import pickle
@@ -50,6 +63,7 @@ class Context (Base):
       if isinstance(r,Exception): raise Exception('Exception in executor') from r
       return r
     exp = Experiment(created=datetime.now(),host=(host or gethostname()),name=name,args=ka,exc=exc,tmax=tmax,perfs=[])
+    logger.info('Experiment(host=%s,name=%s,args=%s,exc=%s,tmax=%s)',exp.host,exp.name,exp.args,exp.exc,exp.tmax)
     cmd = [] if host is None else ['ssh','-T','-q','-x',host]
     cmd += [exc,'-u',SPATH]
     with subprocess.Popen(cmd,bufsize=0,stdin=subprocess.PIPE,stdout=subprocess.PIPE) as sub:
@@ -63,14 +77,22 @@ class Context (Base):
     return exp
 
 #--------------------------------------------------------------------------------------------------
-  def display(self,fig,inner='exc',outer='name',**filtr):
+  def display(self,fig,inner,outer,**filtr):
+    r"""
+Displays the results of all the experiments in this context. Strings *inner*, *outer* and the keys in *filtr* must be all distinct and cover exactly the list: ``host``, ``name``, ``args``, ``exc``. The experiments selected for display are those which match the *filter* dictionary.
+
+* For each value of the outer component of the selected experiments, a separate matplotlib axes is displayed for that value. It shows the performance results recorded for all the experiments having that value for the outer component.
+
+* The different experiments are labelled with the value of their inner component, which appears in the legend. Experiments with the same inner component share the same colour across the axes (i.e. different values of the outer component).
+    """
 #--------------------------------------------------------------------------------------------------
     st0,st1 = set(('host','name','args','exc')),set((inner,outer)+tuple(filtr))
     assert st0 <= st1, 'Missing status: {}'.format(st0-st1)
     assert st1 <= st0, 'Unknown status: {}'.format(st1-st0)
-    inner = lambda exp,a=inner: getattr(exp,a)
-    outer = lambda exp,a=outer: getattr(exp,a)
-    def filtr(exp,L=filtr.items()):
+    inner = lambda exp,a=inner: str(getattr(exp,a))
+    outer = lambda exp,a=outer: str(getattr(exp,a))
+    dflt = dict(host=gethostname(),exc=sys.executable)
+    def filtr(exp,L=[(k,(dflt[k] if v is None else v)) for k,v in filtr.items()]):
       return all(getattr(exp,a)==v for a,v in L)
     tests = defaultdict(dict)
     innerL = set()
@@ -79,12 +101,13 @@ class Context (Base):
       r = inner(exp)
       tests[outer(exp)][r] = tuple(zip(*((p.size,p.meter) for p in exp.perfs)))
       innerL.add(r)
-    innerL = sorted(innerL)
+    assert tests, 'No experiment passed the filter'
+    innerL = list(zip(cycle('bgrcmyk'),sorted(innerL)))
     for (outerv,D),ax in zipaxes(sorted(tests.items()),fig,sharex=True,sharey=True):
-      for innerv in innerL:
+      for col,innerv in innerL:
         r = D.get(innerv)
         if r is None: continue
-        ax.plot(r[0],r[1],label=innerv)
+        ax.plot(r[0],r[1],c=col,label=innerv)
       ax.set_xlabel('size')
       ax.set_ylabel('meter')
       ax.set_title(outerv)
@@ -100,7 +123,7 @@ class Context (Base):
     from lxml.etree import tounicode
     return tounicode(self.as_html())
   def as_html(self):
-    H = ('created','host','name','args','exc','tmax')
+    H = ('created','host','name','args','exc','tmax','nperf')
     return html_table(((exp.oid,[getattr(exp,h) for h in H]) for exp in self.experiments),hdrs=H,fmts=[str for h in H],title='{0.oid}: {0.title} {{{0.tests}}} {0.version}'.format(self))
 
 #==================================================================================================
@@ -117,6 +140,9 @@ class Experiment (Base):
   context = relationship('Context',back_populates='experiments')
   perfs = relationship('Perf',back_populates='experiment',cascade='all, delete, delete-orphan')
 
+  @property
+  def nperf(self): return len(self.perfs)
+
 #==================================================================================================
 class Perf (Base):
 #==================================================================================================
@@ -128,9 +154,15 @@ class Perf (Base):
 
 #==================================================================================================
 class Root (ormsroot):
+  r"""
+Instances of this class give access to the main :class:`Context` persistent class.
+  """
 #==================================================================================================
 
   def getcontext(self,initf):
+    r"""
+Retrieves or creates a :class:`Context` instance associated with the testbed contained in file *initf*.
+    """
     with open(initf) as u: x = u.read()
     t = {}
     exec(x,t) # checks syntax
@@ -151,9 +183,12 @@ sessionmaker = Root.sessionmaker
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-def geometric(xo,step):
+def geometric(xo,a):
+  r"""
+A generator enumerating the values of a geometric sequence with initial value *xo* and common ratio *a*.
+  """
 #--------------------------------------------------------------------------------------------------
   x = xo
   while True:
     yield x
-    x = step*x
+    x = a*x

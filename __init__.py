@@ -695,37 +695,30 @@ Each subclass *C* of this class should invoke the following class method: :meth:
 
 * they are attached to an sqlalchemy engine at this url (note that engines are reused across multiple sessionmakers with the same url)
 
-* they have a :attr:`root` attribute, pointing to an instance of *C*, which acts as a dictionary where the keys are the primary keys of *R* and the values the corresponding ORM entries. Deletion from the dictionary is supported (and reflected in the persitent class *R* on session commit), but not direct update.
+* they have a :attr:`root` attribute, pointing to an instance of *C*, which acts as a dictionary where the keys are the primary keys of *R* and the values the corresponding ORM entries. The root object has a convenient ipython HTML representation. Direct update to the dictionary is not supported, except deletion, which is made persitent on session commit.
 
-Class *C* should provide a method to insert new objects in the persistent class *R*, and they will then be reflected in the session root. Example::
+Class *C* should provide a method to insert new objects in the persistent class *R*, and they will then be reflected in the session root (and made persitent on session commit). Example::
 
-   from sqlalchemy.ext.declarative import Base
+   from sqlalchemy.ext.declarative import declarative_base; Base = declarative_base()
    from sqlalchemy import Column, Text, Integer
 
    class Employee (Base):
-     oid = Column(Integer(),primary_key=True)
-     name = Column(Text())
-     position = Column(Text())
+     __tablename__ = 'Employee'
+     oid = Column(Integer(),primary_key=True); name = Column(Text()); position = Column(Text())
 
    class Root(ormsroot):
-     def newemployee(self,name,position):
-       r = Employee(name=name,position=position)
-       self.session.add(r)
-       return r
+     def new(self,name,position): r = Employee(name=name,position=position); self.session.add(r); return r
 
    Root.set_base(Employee)
 
-   Session = Root.sessionmaker('sqlite://')
-   s = Session()
-   jack = s.root.newemployee('jack','manager')
-   joe = s.root.newemployee('joe','writer')
-   s.commit() # for persistency
-   assert set(s.root) == set([jack.oid,joe.oid])
-
-   s.delete(jack)
+   Session = Root.sessionmaker('sqlite://') # memory db for the example
+   s = Session() # first session
+   jack = s.root.new('jack','manager'); joe = s.root.new('joe','writer')
+   s.commit(); s.close() # for persistency; assigns oids (jack:1, joe:2)
+   s = Session() # second session (possibly in another process if real db is used)
+   jack = s.root.pop(1); joe = s.root[2]
    assert set(s.root) == set([joe.oid])
-
-Furthermore, the session roots have an ipython HTML display.
+   s.commit(); s.close()
   """
 #==================================================================================================
 

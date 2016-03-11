@@ -12,7 +12,8 @@ def _main():
   pickle.dump(r,stdout)
   while True:
     try:
-      sz = pickle.load(stdin)
+      try: sz = pickle.load(stdin)
+      except EOFError: return
       e = test(sz,**kargs)
       next(e)
       t = clock()

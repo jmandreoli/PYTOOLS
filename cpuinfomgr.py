@@ -30,6 +30,9 @@ Base.metadata.info.update(origin=__name__,version=1)
 
 #==================================================================================================
 class Context(Base):
+  r"""
+Instances of this class are persistent and represent a collection of host machines on the cloud at a given time.
+  """
 #==================================================================================================
   tstamp = Column(DateTime())
 
@@ -82,6 +85,9 @@ class Root (ormsroot):
 #==================================================================================================
 
   def newcontext(self,hosts=''):
+    r"""
+Creates a :class:`Context` instance associated with the list of hosts specified by *hosts*. If *hosts* is a string, it is interpreted as a regular expression filtering the host names taken from the list of know hosts. Otherwise, it must be a list of host names.
+    """
     context = Context(tstamp=datetime.now(),hosts=[])
     if isinstance(hosts,str):
       pat = re.compile(hosts)
@@ -107,15 +113,19 @@ class Root (ormsroot):
 Root.set_base(Context)
 sessionmaker = Root.sessionmaker
 
+#==================================================================================================
+# Utilities
+#==================================================================================================
+
+#--------------------------------------------------------------------------------------------------
 def knownhosts(source=None):
+  r"""
+Enumerates hostnames from file *source* with the same format as ``~/.ssh/known_hosts`` (default).
+  """
+#--------------------------------------------------------------------------------------------------
   import os
   if source is None: source = os.path.expanduser('~/.ssh/known_hosts')
   with open(source) as u:
     for x in u:
       x = x.strip()
       if x: yield x.split(None,1)[0].split(',',1)[0]
-
-
-
-
-

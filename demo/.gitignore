@@ -1,6 +1,7 @@
 cache.dir/*
 chrono.dir/*
 docstack.dir/*
+perfmgr.dir/*
 *.out
 *.png
 *.qcfg

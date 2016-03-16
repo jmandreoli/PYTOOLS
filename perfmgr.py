@@ -8,7 +8,7 @@
 # *** Xerox Research Centre Europe - Grenoble ***
 #
 
-import os, sys, subprocess, logging
+import os, sys, subprocess, time, logging
 from datetime import datetime
 from socket import gethostname
 from collections import defaultdict
@@ -44,15 +44,15 @@ Instances of this class are persistent and represent a bunch of performance expe
   experiments = relationship('Experiment',back_populates='context',cascade='all, delete, delete-orphan')
 
 #--------------------------------------------------------------------------------------------------
-  def newexperiment(self,name,seq,host=None,exc=sys.executable,tmax=120.,**ka):
+  def newexperiment(self,name,seq,smax,host=None,exc=sys.executable,**ka):
     r"""
-Launches one experiment.
+Launches one experiment, i.e. a sequence of tests. Each test takes one input (a number) and produces a pair of a result (any object) and a size (a number). The latter must be an increasing function of the input. The test loop stops when the test size exceeds a threshold.
 
 :param name: the name of the test in the testbed
-:param seq: a generator of sizes for the test
-:param host: a machine name accessible by ssh
-:param exc: the path to the python executable to run on the host
-:param tmax: the loop through sizes stops when the test exceeds this duration in sec
+:param seq: a generator of test inputs (floats) which must be in increasing order
+:param smax: threshold on test size
+:param host: a machine name accessible by ssh (default: current machine)
+:param exc: the path to the python executable to run on the host (default: current executable)
     """
 #--------------------------------------------------------------------------------------------------
     def rcall(sub,m,protocol=2):
@@ -62,60 +62,77 @@ Launches one experiment.
       r = pickle.load(sub.stdout)
       if isinstance(r,Exception): raise Exception('Exception in executor') from r
       return r
-    exp = Experiment(created=datetime.now(),host=(host or gethostname()),name=name,args=ka,exc=exc,tmax=tmax,perfs=[])
-    logger.info('Experiment(host=%s,name=%s,args=%s,exc=%s,tmax=%s)',exp.host,exp.name,exp.args,exp.exc,exp.tmax)
+    assert name in self.tests.split()
     cmd = [] if host is None else ['ssh','-T','-q','-x',host]
     cmd += [exc,'-u',SPATH]
+    if host is None: host = gethostname()
+    exp = Experiment(created=datetime.now(),host=host,name=name,args=ka,exc=exc,smax=smax,perfs=[])
+    logger.info('Experiment(host=%s,name=%s,args=%s,exc=%s,smax=%s)',host,name,ka,exc,smax)
     with subprocess.Popen(cmd,bufsize=0,stdin=subprocess.PIPE,stdout=subprocess.PIPE) as sub:
       rcall(sub,(self.testbed,name,ka))
-      for sz in seq:
-        tm = rcall(sub,sz)
-        logger.info('Perf(%.2f)=%.2f',sz,tm)
-        exp.perfs.append(Perf(size=sz,meter=tm))
-        if tm > tmax: break
+      for x in seq:
+        y,sz = rcall(sub,x)
+        logger.info('Perf(%.2f)=%s',x,y)
+        exp.perfs.append(Perf(xval=x,yval=y,size=sz))
+        if sz > smax: break
     self.experiments.append(exp)
     return exp
 
 #--------------------------------------------------------------------------------------------------
-  def display(self,fig,inner,outer,**filtr):
+  def display(self,fig,target,meter=(lambda x: x),filtr=(lambda exp: True),**kfiltr):
     r"""
-Displays the results of all the experiments in this context. Strings *inner*, *outer* and the keys in *filtr* must be all distinct and cover exactly the list: ``host``, ``name``, ``args``, ``exc``. The experiments selected for display are those which match the *filter* dictionary.
+Displays the results of selected experiments in this context. The selection test is the conjunction of the filter function *filtr* applied to the experiment object, and for each item *s*,\ *v* of the dictionary *kfiltr*, whether slot *k* of the experiment is equal to *v*. If *v* is :const:`None`, it is replaced by a default value: the current host for ``host``, the current python executable for ``exc``, an empty dictionary for ``args`` and an empty string for ``name``.
 
-* For each value of the outer component of the selected experiments, a separate matplotlib axes is displayed for that value. It shows the performance results recorded for all the experiments having that value for the outer component.
-
-* The different experiments are labelled with the value of their inner component, which appears in the legend. Experiments with the same inner component share the same colour across the axes (i.e. different values of the outer component).
+:param fig: a matplotlib figure
+:param target: the slot to plot
+:type target: ``host`` | ``name`` | ``args`` | ``exc``
+:param meter: a function which maps a test output into a number, or a key if test output is of type :class:`dict`
+:type meter: callable|\ :class:`str`
+:param filtr: a function which maps an experiment into a boolean
+:param kfiltr: a dict with keys in ``host``, ``name``, ``args``, ``exc``
     """
 #--------------------------------------------------------------------------------------------------
-    st0,st1 = set(('host','name','args','exc')),set((inner,outer)+tuple(filtr))
-    assert st0 <= st1, 'Missing status: {}'.format(st0-st1)
-    assert st1 <= st0, 'Unknown status: {}'.format(st1-st0)
-    inner = lambda exp,a=inner: str(getattr(exp,a))
-    outer = lambda exp,a=outer: str(getattr(exp,a))
-    dflt = dict(host=gethostname(),exc=sys.executable)
-    def filtr(exp,L=[(k,(dflt[k] if v is None else v)) for k,v in filtr.items()]):
-      return all(getattr(exp,a)==v for a,v in L)
+    def mkfiltr(u,dflt=dict(host=gethostname(),exc=sys.executable,args={},name='')):
+      slot,x = u
+      d = dflt.get(slot)
+      assert d is not None, 'Unknown slot: {}'.format(slot)
+      if x is None: x = d
+      return lambda exp: getattr(exp,slot)==x
+    def conf(exp):
+      for slot in slots:
+        x = getattr(exp,slot)
+        if slot =='args':
+          x = '{{{}}}'.format(','.join('{}={}'.format(k,v) for k,v in sorted(x.items())))
+        else: x = str(x)
+        yield x
+    if isinstance(meter,str): meterf = lambda r,m=meter: r[m]
+    else: meterf = meter; meter = 'meter' if meter.__name__=='<lambda>' else meter.__name__
+    kfiltr = list(map(mkfiltr,kfiltr.items()))
+    slots = 'name','args','exc','host'
+    targeti = slots.index(target)
+    rngs = [set() for slot in slots]
     tests = defaultdict(dict)
-    innerL = set()
     for exp in self.experiments:
-      if not filtr(exp): continue
-      r = inner(exp)
-      tests[outer(exp)][r] = tuple(zip(*((p.size,p.meter) for p in exp.perfs)))
-      innerL.add(r)
+      if not(filtr(exp) and all(f(exp) for f in kfiltr)): continue
+      c = list(conf(exp))
+      for x,r in zip(c,rngs): r.add(x)
+      x = c[targeti]; c[targeti] = None
+      tests[tuple(c)][x] = tuple(zip(*((p.xval,meterf(p.yval)) for p in exp.perfs)))
     assert tests, 'No experiment passed the filter'
-    innerL = list(zip(cycle('bgrcmyk'),sorted(innerL)))
-    for (outerv,D),ax in zipaxes(sorted(tests.items()),fig,sharex=True,sharey=True):
-      for col,innerv in innerL:
-        r = D.get(innerv)
-        if r is None: continue
-        ax.plot(r[0],r[1],c=col,label=innerv)
-      ax.set_xlabel('size')
-      ax.set_ylabel('meter')
-      ax.set_title(outerv)
-      ax.legend(fontsize='x-small')
+    targets = tuple(zip(cycle('bgrcmyk'),sorted(rngs[targeti])))
+    nontargeti = [i for i,r in enumerate(rngs) if i!=targeti and len(r)>1]
+    for (c,D),ax in zipaxes(sorted(tests.items()),fig,sharex=True,sharey=True):
+      ax.set_title(','.join('{}={}'.format(slots[i],c[i]) for i in nontargeti),fontsize='small')
+      for col,val in targets:
+        t = D.get(val)
+        if t is None: continue
+        ax.plot(t[0],t[1],c=col,label=val)
+      ax.set_ylabel(meter,fontsize='small')
+      ax.legend(fontsize='x-small',loc='upper left')
 
 #--------------------------------------------------------------------------------------------------
   @property
-  def title(self): self.testbed.split('\n',1)[0][2:]
+  def title(self): return self.testbed.split('\n',1)[0][2:]
 
   def __repr__(self): return '{}.Context<{}:{}>'.format(__name__,self.oid,self.title)
 
@@ -123,7 +140,7 @@ Displays the results of all the experiments in this context. Strings *inner*, *o
     from lxml.etree import tounicode
     return tounicode(self.as_html())
   def as_html(self):
-    H = ('created','host','name','args','exc','tmax','nperf')
+    H = ('created','host','name','args','exc','smax','nperf')
     return html_table(((exp.oid,[getattr(exp,h) for h in H]) for exp in self.experiments),hdrs=H,fmts=[str for h in H],title='{0.oid}: {0.title} {{{0.tests}}} {0.version}'.format(self))
 
 #==================================================================================================
@@ -134,7 +151,7 @@ class Experiment (Base):
   name = Column(Text(),nullable=False)
   args = Column(PickleType(),nullable=False)
   exc = Column(Text(),nullable=False)
-  tmax = Column(Float(),nullable=False)
+  smax = Column(Float(),nullable=False)
 
   context_oid = Column(Integer(),ForeignKey('Context.oid'))
   context = relationship('Context',back_populates='experiments')
@@ -146,8 +163,9 @@ class Experiment (Base):
 #==================================================================================================
 class Perf (Base):
 #==================================================================================================
+  xval = Column(Float())
+  yval = Column(PickleType())
   size = Column(Float())
-  meter = Column(Float())
 
   experiment_oid = Column(Integer(),ForeignKey('Experiment.oid'))
   experiment = relationship('Experiment',back_populates='perfs')
@@ -171,7 +189,7 @@ Retrieves or creates a :class:`Context` instance associated with the testbed con
     with self.session.begin_nested():
       r = self.session.query(Context).filter_by(testbed=x,version=v).first()
       if r is None:
-        r = Context(version=v,testbed=x,tests=t,experiments=[])
+        r = Context(testbed=x,version=v,tests=t,experiments=[])
         self.session.add(r)
     return r
 
@@ -189,6 +207,4 @@ A generator enumerating the values of a geometric sequence with initial value *x
   """
 #--------------------------------------------------------------------------------------------------
   x = xo
-  while True:
-    yield x
-    x = a*x
+  while True: yield x; x = a*x

@@ -1,23 +1,24 @@
 # numpy array perfomance tests
 
-def MatrixDeterminant(sz,manual=None):
+def MatrixDeterminant(x,manual=None):
   from numpy.linalg import det
-  from numpy import linspace, newaxis
-  a = linspace(0,1000,int(sz))[:,newaxis]
-  a = a+a.T
-  if manual: det = _manualdet
-  yield
-  det(a)
-  yield
+  return _timing((_manualdet if manual else det),_somematrix(x))
 
-def MatrixSquared(sz,manual=None):
-  from numpy import linspace, newaxis, dot
-  a = linspace(0,1000,int(sz))[:,newaxis]
-  a = a+a.T
-  if manual: dot = _manualdot
-  yield
-  dot(a,a)
-  yield
+def MatrixSquared(x,manual=None):
+  from numpy import dot
+  return _timing((lambda a,dot=(_manualdot if manual else dot): dot(a,a)),_somematrix(x))
+
+def _timing(f,*a,**ka):
+  from time import time,clock
+  p = time(),clock()
+  f(*a,**ka)
+  p = time()-p[0],clock()-p[1]
+  return dict(time=p[0],clock=p[1]),p[0]
+
+def _somematrix(x):
+  from numpy import linspace, newaxis
+  a = linspace(0,1000,int(x))[:,newaxis]
+  return a+a.T
 
 def _manualdot(a,b):
   from numpy import empty, sum

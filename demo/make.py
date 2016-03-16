@@ -31,4 +31,3 @@ def fordoc(module):
 if __name__=='__main__':
   module = sys.argv[1]
   fordoc(module)
-

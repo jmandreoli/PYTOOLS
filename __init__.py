@@ -731,17 +731,16 @@ Class *C* should provide a method to insert new objects in the persistent class 
   def __getitem__(self,k):
     r = self.session.query(self.base).get(k)
     if r is None: raise KeyError(k)
-    self.session.add(r)
     return r
 
   def __delitem__(self,k):
-    with self.session.begin_nested(): self.session.delete(self[k])
+    self.session.delete(self[k])
 
   def __setitem__(self,k,v):
     raise Exception('Direct create/update not permitted on {} instance'.format(self.__class__))
 
   def __iter__(self):
-    with self.session.begin_nested(): yield from self.basepk()
+    yield from self.basepk()
 
   def __len__(self):
     return self.session.query(self.base).count()

@@ -1,11 +1,11 @@
 # Only python2 syntax here
 
 def _main():
-  import pickle, sys, gc
+  import pickle, sys, socket, gc
   stdin = sys.stdin if sys.version_info[0]==2 else sys.stdin.buffer
   stdout = sys.stdout if sys.version_info[0]==2 else sys.stdout.buffer
   testbed,name,kargs = pickle.load(stdin)
-  r = None
+  r = socket.gethostname(), sys.executable
   G = globals()
   try: exec(testbed,G); test = G[name]
   except: r = sys.exc_info()[1]

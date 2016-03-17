@@ -65,16 +65,16 @@ Launches one experiment, i.e. a sequence of tests. Each test takes one input (a 
     assert name in self.tests.split()
     cmd = [] if host is None else ['ssh','-T','-q','-x',host]
     cmd += [exc,'-u',SPATH]
-    if host is None: host = gethostname()
-    exp = Experiment(created=datetime.now(),host=host,name=name,args=ka,exc=exc,smax=smax,perfs=[])
-    logger.info('Experiment(host=%s,name=%s,args=%s,exc=%s,smax=%s)',host,name,ka,exc,smax)
     with subprocess.Popen(cmd,bufsize=0,stdin=subprocess.PIPE,stdout=subprocess.PIPE) as sub:
-      rcall(sub,(self.testbed,name,ka))
+      host_,exc_ = rcall(sub,(self.testbed,name,ka))
+      L = []
       for x in seq:
         y,sz = rcall(sub,x)
         logger.info('Perf(%.2f)=%s',x,y)
-        exp.perfs.append(Perf(xval=x,yval=y,size=sz))
+        L.append(Perf(xval=x,yval=y,size=sz))
         if sz > smax: break
+    exp = Experiment(created=datetime.now(),name=name,args=ka,smax=smax,host=host_,exc=exc_,perfs=L)
+    logger.info('Created Experiment(host=%s,name=%s,args=%s,exc=%s,smax=%s,nperf=%s)',exp.host,exp.name,exp.args,exp.exc,exp.smax,exp.nperf)
     self.experiments.append(exp)
     return exp
 
@@ -186,11 +186,11 @@ Retrieves or creates a :class:`Context` instance associated with the testbed con
     exec(x,t) # checks syntax
     t = ' '.join(k for k in t if not k.startswith('_'))
     v = datetime.fromtimestamp(os.stat(initf).st_mtime)
-    with self.session.begin_nested():
-      r = self.session.query(Context).filter_by(testbed=x,version=v).first()
-      if r is None:
-        r = Context(testbed=x,version=v,tests=t,experiments=[])
-        self.session.add(r)
+    r = self.session.query(Context).filter_by(testbed=x,version=v).first()
+    if r is None:
+      r = Context(testbed=x,version=v,tests=t,experiments=[])
+      logger.info('Created Context(testbed=%s,version=%s,tests=%s)',r.title,r.version,r.tests)
+      self.session.add(r)
     return r
 
 Root.set_base(Context)

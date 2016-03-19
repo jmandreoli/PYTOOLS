@@ -614,10 +614,10 @@ def SQLinit(engine,meta):
       metainfo_table = meta_.tables['Metainfo']
       metainfo = dict(engine.execute(select((metainfo_table.c))).fetchone())
       del metainfo['created']
-    except: raise SQLinitMetainfoException()
+    except: raise SQLinitMetainfoException('Not found')
     for k,v in meta.info.items():
       if metainfo.get(k) != str(v):
-        raise SQLinitMismatchException('{}[expected:{},found:{}]'.format(k,v,metainfo.get(k)))
+        raise SQLinitMetainfoException('{}[expected:{},found:{}]'.format(k,v,metainfo.get(k)))
   else:
     metainfo_table = Table(
       'Metainfo',meta_,
@@ -629,7 +629,6 @@ def SQLinit(engine,meta):
     meta.create_all(bind=engine)
   return engine
 
-class SQLinitMismatchException (Exception): pass
 class SQLinitMetainfoException (Exception): pass
 
 #==================================================================================================
@@ -724,12 +723,14 @@ Class *C* should provide a method to insert new objects in the persistent class 
 
   cache = {}
 
-  def __init__(self,session):
+  def __init__(self,dclass,session):
+    self.dclass = dclass
     self.session = session
-    session.root = session.r = self
+    self.pk = pk = self.dclass.__table__.primary_key.columns.values()
+    self.pkindex = (lambda r,k=pk[0]: getattr(r,k)) if len(pk)==1 else (lambda r,pk=pk: tuple(getattr(r,k) for k in pk))
 
   def __getitem__(self,k):
-    r = self.session.query(self.base).get(k)
+    r = self.session.query(self.dclass).get(k)
     if r is None: raise KeyError(k)
     return r
 
@@ -737,10 +738,10 @@ Class *C* should provide a method to insert new objects in the persistent class 
     self.session.delete(self[k])
 
   def __setitem__(self,k,v):
-    raise Exception('Direct create/update not permitted on {} instance'.format(self.__class__))
+    raise Exception('Direct create/update not permitted')
 
   def __iter__(self):
-    yield from self.basepk()
+    for r in self.session.query(*self.pk): yield self.pkindex(r)
 
   def __len__(self):
     return self.session.query(self.base).count()
@@ -767,9 +768,6 @@ Class *C* should provide a method to insert new objects in the persistent class 
   def set_base(cls,t):
     assert cls is not ormsroot
     cls.base = t
-    pk = t.__table__.primary_key.columns.values()
-    def basepk(self,pk=pk,s=(0 if len(pk)==1 else slice(None))):
-      for r in self.session.query(*pk): yield r[s]
     cls.basepk = basepk
 
 #==================================================================================================

@@ -27,7 +27,8 @@ Use as a decorator to declare, in a class, a computable attribute which is compu
   __slots__ = ('get',)
 
   def __init__(self,get):
-    if get.__code__.co_argcount != 1:
+    from inspect import signature
+    if any(p for p in signature(get).parameters.values() if p.kind!=p.POSITIONAL_OR_KEYWORD):
       raise Exception('ondemand attribute definition must be a function with a single argument')
     self.get = get
 

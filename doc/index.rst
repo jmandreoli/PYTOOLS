@@ -15,6 +15,7 @@ Contents:
    quickui.rst
    mplext.rst
    monitor.rst
+   polynomials.rst
    perfmgr.rst
    cpuinfomgr.rst
    chrono.rst

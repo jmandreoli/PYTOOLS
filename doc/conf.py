@@ -31,6 +31,7 @@ sys.path.insert(0,'/home/andreoli/src/distrib')
 # ones.
 extensions = [
     'sphinx.ext.autodoc',
+    'sphinx.ext.mathjax',
     'sphinx.ext.viewcode',
 ]
 

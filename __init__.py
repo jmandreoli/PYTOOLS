@@ -589,7 +589,7 @@ class GitException (Exception): pass
 #==================================================================================================
 def SQLinit(engine,meta):
   r"""
-:param engine: a sqlalchemy engine (or its url) or :const:`None` if *meta* is already bound
+:param engine: a sqlalchemy engine (or its url)
 :param meta: a sqlalchemy metadata structure
 
 * When the database is empty, is is populated using *meta*
@@ -603,11 +603,13 @@ def SQLinit(engine,meta):
   from sqlalchemy.sql import select, insert, update, delete, and_
   if isinstance(engine,str):
     engine = create_engine(engine)
-    if engine.name == 'sqlite':
-      @event.listens_for(engine,'connect')
+    if engine.driver == 'pysqlite':
+      # fixes a bug in the pysqlite driver; to be removed if fixed
+      # see http://docs.sqlalchemy.org/en/rel_1_0/dialects/sqlite.html
       def do_connect(conn,rec): conn.isolation_level = None
-      @event.listens_for(engine,'begin')
       def do_begin(conn): conn.execute('BEGIN')
+      event.listen(engine,'connect',do_connect)
+      event.listen(engine,'begin',do_begin)
   meta_ = MetaData(bind=engine)
   meta_.reflect()
   if meta_.tables:
@@ -722,13 +724,11 @@ Class *C* should provide a method to insert new objects in the persistent class 
   """
 #==================================================================================================
 
-  cache = {}
-
-  def __init__(self,dclass,session):
+  def __init__(self,session,dclass):
     self.dclass = dclass
-    self.session = session
     self.pk = pk = self.dclass.__table__.primary_key.columns.values()
-    self.pkindex = (lambda r,k=pk[0]: getattr(r,k)) if len(pk)==1 else (lambda r,pk=pk: tuple(getattr(r,k) for k in pk))
+    self.pkindex = (lambda r,k=pk[0].name: getattr(r,k)) if len(pk)==1 else (lambda r,pk=pk: tuple(getattr(r,c.name) for c in pk))
+    self.session = session
 
   def __getitem__(self,k):
     r = self.session.query(self.dclass).get(k)
@@ -753,23 +753,24 @@ Class *C* should provide a method to insert new objects in the persistent class 
   def as_html(self):
     return html_stack(*(v.as_html() for k,v in sorted(self.items())))
 
+  cache = {}
   @classmethod
-  def sessionmaker(cls,url,*a,**ka):
+  def sessionmaker(cls,url,execution_options={},*a,**ka):
+    def tr(fmt,lvl): return lambda **ka: logger.log(lvl,fmt,ka)
+    from sqlalchemy import event
     from sqlalchemy.orm import sessionmaker
     engine = cls.cache.get(url)
     if engine is None: cls.cache[url] = engine = SQLinit(url,cls.base.metadata)
+    if execution_options:
+      trace = execution_options.pop('trace',{})
+      engine = engine.execution_options(**execution_options)
+      for evt,lvl in trace.items(): event.listen(engine,evt,tr('SQA:{} %s'.format(evt),lvl),named=True)
     Session_ = sessionmaker(engine,*a,**ka)
     def Session(**x):
       s = Session_(**x)
-      cls(s)
+      s.root = cls(s,cls.base)
       return s
     return Session
-
-  @classmethod
-  def set_base(cls,t):
-    assert cls is not ormsroot
-    cls.base = t
-    cls.basepk = basepk
 
 #==================================================================================================
 class spark:
@@ -851,3 +852,7 @@ Returns the representation of *time* in one of days,hours,minutes,seconds (depen
   time /= 24.
   return '{:.1f}day'.format(time)
 
+def loggingBasicConfig(**ka):
+  logger = logging.getLogger()
+  for h in logger.handlers: logger.removeHandler(h)
+  logging.basicConfig(**ka)

@@ -44,7 +44,7 @@ Instances of this class are persistent and represent a bunch of performance expe
   experiments = relationship('Experiment',back_populates='context',cascade='all, delete, delete-orphan')
 
 #--------------------------------------------------------------------------------------------------
-  def newexperiment(self,name,seq,smax,host=None,exc=sys.executable,**ka):
+  def newexperiment(self,initf,name,seq,smax,host=None,exc=sys.executable,**ka):
     r"""
 Launches one experiment, i.e. a sequence of tests. Each test takes one input (a number) and produces a pair of a result (any object) and a size (a number). The latter must be an increasing function of the input. The test loop stops when the test size exceeds a threshold.
 
@@ -77,6 +77,7 @@ Launches one experiment, i.e. a sequence of tests. Each test takes one input (a 
     logger.info('Created Experiment(host=%s,name=%s,args=%s,exc=%s,smax=%s,nperf=%s)',exp.host,exp.name,exp.args,exp.exc,exp.smax,exp.nperf)
     self.experiments.append(exp)
     return exp
+
 
 #--------------------------------------------------------------------------------------------------
   def display(self,fig,target,meter=(lambda x: x),filtr=(lambda exp: True),**kfiltr):
@@ -177,23 +178,20 @@ Instances of this class give access to the main :class:`Context` persistent clas
   """
 #==================================================================================================
 
+  base = Context
+
   def getcontext(self,initf):
-    r"""
-Retrieves or creates a :class:`Context` instance associated with the testbed contained in file *initf*.
-    """
-    with open(initf) as u: x = u.read()
+    with open(initf) as u: x = u.read(); v = os.stat(u).st_mtime
     t = {}
     exec(x,t) # checks syntax
     t = ' '.join(k for k in t if not k.startswith('_'))
-    v = datetime.fromtimestamp(os.stat(initf).st_mtime)
+    v = datetime.fromtimestamp(v)
     r = self.session.query(Context).filter_by(testbed=x,version=v).first()
     if r is None:
       r = Context(testbed=x,version=v,tests=t,experiments=[])
       logger.info('Created Context(testbed=%s,version=%s,tests=%s)',r.title,r.version,r.tests)
       self.session.add(r)
-    return r
 
-Root.set_base(Context)
 sessionmaker = Root.sessionmaker
 
 #==================================================================================================

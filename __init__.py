@@ -756,7 +756,6 @@ Class *C* should provide a method to insert new objects in the persistent class 
   cache = {}
   @classmethod
   def sessionmaker(cls,url,execution_options={},*a,**ka):
-    def tr(fmt,lvl): return lambda **ka: logger.log(lvl,fmt,ka)
     from sqlalchemy import event
     from sqlalchemy.orm import sessionmaker
     engine = cls.cache.get(url)
@@ -764,7 +763,9 @@ Class *C* should provide a method to insert new objects in the persistent class 
     if execution_options:
       trace = execution_options.pop('trace',{})
       engine = engine.execution_options(**execution_options)
-      for evt,lvl in trace.items(): event.listen(engine,evt,tr('SQA:{} %s'.format(evt),lvl),named=True)
+      for evt,log in trace.items():
+        if isinstance(log,int): log = lambda _lvl=log,_fmt='SQA:{}%s'.format(evt),**ka:logger.log(_lvl,_fmt,ka)
+        event.listen(engine,evt,log,named=True)
     Session_ = sessionmaker(engine,*a,**ka)
     def Session(**x):
       s = Session_(**x)

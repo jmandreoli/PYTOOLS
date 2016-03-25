@@ -37,14 +37,15 @@ class Context (Base):
 Instances of this class are persistent and represent a bunch of performance experiments over a shared testbed.
   """
 #==================================================================================================
-  version = Column(DateTime(),nullable=False)
   testbed = Column(Text(),nullable=False)
+  version = Column(DateTime(),nullable=False)
   tests = Column(Text(),nullable=False)
 
   experiments = relationship('Experiment',back_populates='context',cascade='all, delete, delete-orphan')
 
+
 #--------------------------------------------------------------------------------------------------
-  def newexperiment(self,initf,name,seq,smax,host=None,exc=sys.executable,**ka):
+  def run(self,name,seq,smax,host=None,exc=None,**ka):
     r"""
 Launches one experiment, i.e. a sequence of tests. Each test takes one input (a number) and produces a pair of a result (any object) and a size (a number). The latter must be an increasing function of the input. The test loop stops when the test size exceeds a threshold.
 
@@ -62,9 +63,9 @@ Launches one experiment, i.e. a sequence of tests. Each test takes one input (a 
       r = pickle.load(sub.stdout)
       if isinstance(r,Exception): raise Exception('Exception in executor') from r
       return r
-    assert name in self.tests.split()
+    assert name in self.tests.split(' ')
     cmd = [] if host is None else ['ssh','-T','-q','-x',host]
-    cmd += [exc,'-u',SPATH]
+    cmd += [(sys.executable if exc is None else exc),'-u',SPATH]
     with subprocess.Popen(cmd,bufsize=0,stdin=subprocess.PIPE,stdout=subprocess.PIPE) as sub:
       host_,exc_ = rcall(sub,(self.testbed,name,ka))
       L = []
@@ -73,14 +74,10 @@ Launches one experiment, i.e. a sequence of tests. Each test takes one input (a 
         logger.info('Perf(%.2f)=%s',x,y)
         L.append(Perf(xval=x,yval=y,size=sz))
         if sz > smax: break
-    exp = Experiment(created=datetime.now(),name=name,args=ka,smax=smax,host=host_,exc=exc_,perfs=L)
-    logger.info('Created Experiment(host=%s,name=%s,args=%s,exc=%s,smax=%s,nperf=%s)',exp.host,exp.name,exp.args,exp.exc,exp.smax,exp.nperf)
-    self.experiments.append(exp)
-    return exp
-
+    return Experiment(created=datetime.now(),name=name,args=ka,smax=smax,host=host_,exc=exc_,perfs=L,context=self)
 
 #--------------------------------------------------------------------------------------------------
-  def display(self,fig,target,meter=(lambda x: x),filtr=(lambda exp: True),**kfiltr):
+  def display(self,fig,target,meter=(lambda x: x),filtr=(lambda exp: True),fmt={},**kfiltr):
     r"""
 Displays the results of selected experiments in this context. The selection test is the conjunction of the filter function *filtr* applied to the experiment object, and for each item *s*,\ *v* of the dictionary *kfiltr*, whether slot *k* of the experiment is equal to *v*. If *v* is :const:`None`, it is replaced by a default value: the current host for ``host``, the current python executable for ``exc``, an empty dictionary for ``args`` and an empty string for ``name``.
 
@@ -99,23 +96,19 @@ Displays the results of selected experiments in this context. The selection test
       assert d is not None, 'Unknown slot: {}'.format(slot)
       if x is None: x = d
       return lambda exp: getattr(exp,slot)==x
-    def conf(exp):
-      for slot in slots:
-        x = getattr(exp,slot)
-        if slot =='args':
-          x = '{{{}}}'.format(','.join('{}={}'.format(k,v) for k,v in sorted(x.items())))
-        else: x = str(x)
-        yield x
+    fmtd = dict(args=(lambda x:'{{{}}}'.format(','.join('{}={}'.format(k,v) for k,v in sorted(x.items())))))
+    fmtd.update(fmt)
     if isinstance(meter,str): meterf = lambda r,m=meter: r[m]
     else: meterf = meter; meter = 'meter' if meter.__name__=='<lambda>' else meter.__name__
     kfiltr = list(map(mkfiltr,kfiltr.items()))
     slots = 'name','args','exc','host'
+    fmts = tuple(fmtd.get(slot,str) for slot in slots)
     targeti = slots.index(target)
     rngs = [set() for slot in slots]
     tests = defaultdict(dict)
     for exp in self.experiments:
       if not(filtr(exp) and all(f(exp) for f in kfiltr)): continue
-      c = list(conf(exp))
+      c = list(f(getattr(exp,slot)) for f,slot in zip(fmts,slots))
       for x,r in zip(c,rngs): r.add(x)
       x = c[targeti]; c[targeti] = None
       tests[tuple(c)][x] = tuple(zip(*((p.xval,meterf(p.yval)) for p in exp.perfs)))
@@ -130,6 +123,15 @@ Displays the results of selected experiments in this context. The selection test
         ax.plot(t[0],t[1],c=col,label=val)
       ax.set_ylabel(meter,fontsize='small')
       ax.legend(fontsize='x-small',loc='upper left')
+
+  @staticmethod
+  def fromfile(initf):
+    with open(initf) as u: x = u.read(); v = os.stat(u.fileno()).st_mtime
+    t = {}
+    exec(x,t) # checks syntax
+    t = ' '.join(k for k in t if not k.startswith('_'))
+    v = datetime.fromtimestamp(v)
+    return Context(testbed=x,version=v,tests=t)
 
 #--------------------------------------------------------------------------------------------------
   @property
@@ -180,17 +182,26 @@ Instances of this class give access to the main :class:`Context` persistent clas
 
   base = Context
 
-  def getcontext(self,initf):
-    with open(initf) as u: x = u.read(); v = os.stat(u).st_mtime
-    t = {}
-    exec(x,t) # checks syntax
-    t = ' '.join(k for k in t if not k.startswith('_'))
-    v = datetime.fromtimestamp(v)
-    r = self.session.query(Context).filter_by(testbed=x,version=v).first()
-    if r is None:
-      r = Context(testbed=x,version=v,tests=t,experiments=[])
-      logger.info('Created Context(testbed=%s,version=%s,tests=%s)',r.title,r.version,r.tests)
-      self.session.add(r)
+  def addexperiment(self,e):
+    with self.session.begin_nested():
+      c = e.context
+      try:
+        e.context = None # unlink
+        exp = self.session.merge(e)
+        exp.context = self.addcontext(c)
+      finally: e.context = c # relink
+      self.session.flush()
+      logger.info('Created %s',exp)
+    return exp
+
+  def addcontext(self,c):
+    with self.session.begin_nested():
+      context = self.session.query(Context).filter_by(testbed=c.testbed,version=c.version).first()
+      if context is None:
+        context = self.session.merge(c)
+        self.session.flush()
+        logger.info('Created %s',context)
+    return context
 
 sessionmaker = Root.sessionmaker
 

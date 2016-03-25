@@ -38,6 +38,28 @@ Instances of this class are persistent and represent a collection of host machin
 
   hosts = relationship('Host',back_populates='context',cascade='all, delete, delete-orphan')
 
+  @staticmethod
+  def load(hosts=''):
+    if isinstance(hosts,str):
+      pat = re.compile(hosts)
+      hosts = (h for h in knownhosts() if pat.fullmatch(h) is not None)
+    context = Context(tstamp=datetime.now())
+    for hostname in hosts:
+      logger.info('Examining host: %s',hostname)
+      cmd = [] if hostname is None else ['ssh','-q','-n','-x','-T',hostname]
+      cmd += 'cat','/proc/cpuinfo'
+      p = subprocess.run(cmd,stdout=subprocess.PIPE,universal_newlines=True)
+      procn = None
+      L = []
+      for y in p.stdout.split('\n'):
+        y = y.strip()
+        if not y: continue
+        key,val = map(str.strip,y.split(':',1))
+        if key == 'processor': procn = int(val); continue
+        L.append(Procinfo(procn=procn,key=key,val=val))
+      context.hosts.append(Host(name=(getfqdn() if hostname is None else getfqdn(hostname)),procinfos=L))
+    return context
+
   def __repr__(self): return '{}.Context<{}:{}>'.format(__name__,self.oid,self.tstamp)
 
   def _repr_html_(self):
@@ -56,9 +78,8 @@ Instances of this class are persistent and represent a collection of host machin
 class Host(Base):
 #==================================================================================================
   name = Column(Text(),nullable=False)
-  nproc = Column(Integer(),nullable=False)
 
-  context_oid = Column(Integer(),ForeignKey('Context.oid'),nullable=False)
+  context_oid = Column(Integer(),ForeignKey('Context.oid'))
   context = relationship('Context',back_populates='hosts')
   procinfos = relationship('Procinfo',back_populates='host',cascade='all, delete, delete-orphan')
 
@@ -69,6 +90,9 @@ class Host(Base):
     else: raise Exception('Invalid process number specification')
     for p in self.procinfos:
       if filtr(p.procn) and p.key==key: yield p.val
+
+  @property
+  def nproc(self): return len(self.procinfos)
 
 #==================================================================================================
 class Procinfo(Base):
@@ -84,33 +108,16 @@ class Procinfo(Base):
 class Root (ormsroot):
 #==================================================================================================
 
-  def newcontext(self,hosts=''):
+  base = Context
+
+  def addcontext(self,ctx):
     r"""
 Creates a :class:`Context` instance associated with the list of hosts specified by *hosts*. If *hosts* is a string, it is interpreted as a regular expression filtering the host names taken from the list of know hosts. Otherwise, it must be a list of host names.
     """
-    context = Context(tstamp=datetime.now(),hosts=[])
-    if isinstance(hosts,str):
-      pat = re.compile(hosts)
-      hosts = (h for h in knownhosts() if pat.fullmatch(h) is not None)
-    for hostname in hosts:
-      host = Host(name=hostname,procinfos=[],nproc=0)
-      context.hosts.append(host)
-      logger.info('Examining host: %s',hostname)
-      cmd = [] if hostname is None else ['ssh','-q','-n','-x','-T',hostname]
-      cmd += 'cat','/proc/cpuinfo'
-      p = subprocess.run(cmd,stdout=subprocess.PIPE,universal_newlines=True)
-      procn = None
-      for y in p.stdout.split('\n'):
-        y = y.strip()
-        if not y: continue
-        key,val = y.split(':',1)
-        key = key.strip(); val = val.strip()
-        if key == 'processor': host.nproc += 1; procn = int(val); continue
-        host.procinfos.append(Procinfo(procn=procn,key=key,val=val))
-    self.session.add(context)
-    return context
+    with self.session.begin_nested():
+      context = self.session.merge(ctx)
+      self.session.flush()
 
-Root.set_base(Context)
 sessionmaker = Root.sessionmaker
 
 #==================================================================================================

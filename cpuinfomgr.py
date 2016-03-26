@@ -119,6 +119,7 @@ Creates a :class:`Context` instance associated with the list of hosts specified 
     with self.session.begin_nested():
       context = self.session.merge(ctx)
       self.session.flush()
+    return context
 
 sessionmaker = Root.sessionmaker
 

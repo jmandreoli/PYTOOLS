@@ -43,7 +43,6 @@ Instances of this class are persistent and represent a bunch of performance expe
 
   experiments = relationship('Experiment',back_populates='context',cascade='all, delete, delete-orphan')
 
-
 #--------------------------------------------------------------------------------------------------
   def run(self,name,seq,smax,host=None,exc=None,**ka):
     r"""
@@ -124,8 +123,10 @@ Displays the results of selected experiments in this context. The selection test
       ax.set_ylabel(meter,fontsize='small')
       ax.legend(fontsize='x-small',loc='upper left')
 
+#--------------------------------------------------------------------------------------------------
   @staticmethod
   def fromfile(initf):
+#--------------------------------------------------------------------------------------------------
     with open(initf) as u: x = u.read(); v = os.stat(u.fileno()).st_mtime
     t = {}
     exec(x,t) # checks syntax

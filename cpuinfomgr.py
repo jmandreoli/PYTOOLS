@@ -38,8 +38,10 @@ Instances of this class are persistent and represent a collection of host machin
 
   hosts = relationship('Host',back_populates='context',cascade='all, delete, delete-orphan')
 
+#--------------------------------------------------------------------------------------------------
   @staticmethod
   def load(hosts=''):
+#--------------------------------------------------------------------------------------------------
     if isinstance(hosts,str):
       pat = re.compile(hosts)
       hosts = (h for h in knownhosts() if pat.fullmatch(h) is not None)
@@ -51,15 +53,17 @@ Instances of this class are persistent and represent a collection of host machin
       p = subprocess.run(cmd,stdout=subprocess.PIPE,universal_newlines=True)
       procn = None
       L = []
+      n = 0
       for y in p.stdout.split('\n'):
         y = y.strip()
         if not y: continue
         key,val = map(str.strip,y.split(':',1))
-        if key == 'processor': procn = int(val); continue
+        if key == 'processor': n+=1; procn = int(val); continue
         L.append(Procinfo(procn=procn,key=key,val=val))
-      context.hosts.append(Host(name=(getfqdn() if hostname is None else getfqdn(hostname)),procinfos=L))
+      context.hosts.append(Host(name=(getfqdn() if hostname is None else getfqdn(hostname)),nproc=n,procinfos=L))
     return context
 
+#--------------------------------------------------------------------------------------------------
   def __repr__(self): return '{}.Context<{}:{}>'.format(__name__,self.oid,self.tstamp)
 
   def _repr_html_(self):
@@ -78,6 +82,7 @@ Instances of this class are persistent and represent a collection of host machin
 class Host(Base):
 #==================================================================================================
   name = Column(Text(),nullable=False)
+  nproc = Column(Integer(),nullable=False)
 
   context_oid = Column(Integer(),ForeignKey('Context.oid'))
   context = relationship('Context',back_populates='hosts')
@@ -90,9 +95,6 @@ class Host(Base):
     else: raise Exception('Invalid process number specification')
     for p in self.procinfos:
       if filtr(p.procn) and p.key==key: yield p.val
-
-  @property
-  def nproc(self): return len(self.procinfos)
 
 #==================================================================================================
 class Procinfo(Base):

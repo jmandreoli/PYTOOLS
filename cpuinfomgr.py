@@ -11,7 +11,7 @@
 import subprocess, re, logging
 from collections import defaultdict
 from datetime import datetime
-from socket import gethostname
+from socket import getfqdn
 from sqlalchemy import Column, Index, ForeignKey
 from sqlalchemy.types import Text, Integer, Float, DateTime, PickleType
 from sqlalchemy.ext.declarative import as_declarative, declared_attr

@@ -39,15 +39,22 @@ For latex representation, scalars are passed to function :func:`latexc` of this 
 #==================================================================================================
   __slots__ = ('coefs','roots','cst','latex_')
 
-  def __init__(self,coefs,roots={},cst=1):
-    self.roots = roots.copy()
-    s = tuple(i for i,c in enumerate(coefs) if c)
-    m = max(s)
-    self.coefs = tuple(coefs[min(s):m+1])
-    m = len(coefs)-1-m
-    if m: self.roots[0] = self.roots.get(0,0)+m
+  def __new__(cls,coefs,roots={},cst=1,check=True):
+    roots = roots.copy()
+    if check:
+      s = tuple(i for i,c in enumerate(coefs) if c)
+      if not cst or not s: return ZeroPolynomial.singleton
+      m = max(s)
+      s = slice(min(s),m+1)
+      m = len(coefs)-1-m
+      if m: roots[0] = roots.get(0,0)+m
+      coefs = coefs[s]
+    self = super().__new__(cls)
+    self.roots = roots
+    self.coefs = coefs
     self.cst = cst
     self.latex_ = None
+    return self
 
   def factorise(self,x):
     r"""
@@ -74,7 +81,7 @@ Evaluates this polynomial at *x*.
     for r,m in other.roots.items(): roots[r] = roots.get(r,0)+m
     cst = self.cst*other.cst
     coefs = list(convolution(self.coefs,other.coefs))
-    return self.__class__(coefs,roots,cst)
+    return self.__class__(coefs,roots,cst,check=False)
   def __rmul__(self,other): return self.__mul__(other)
 
   def __add__(self,other,trs=(lambda c:c),tro=(lambda c:c)):
@@ -104,8 +111,8 @@ Returns a format string with one placeholder. When formatted with a variable nam
     """
     if self.latex_ is None:
       roots = ''.join(latexr(r,m) for r,m in sorted(self.roots.items(),key=(lambda r: abs(r[0]))))
-      if len(self.coefs)>1:
-        K = len(self.coefs)-1
+      K = len(self.coefs)-1
+      if K>0:
         latex = ''.join(latexm(k,c,K) for k,c in enumerate(self.coefs) if c)
         if roots: latex = '({})'.format(latex)
         latex = roots+latex
@@ -118,8 +125,27 @@ Returns a format string with one placeholder. When formatted with a variable nam
       self.latex_ = latex
     return self.latex_
 
-  def _repr_latex_(self): return '${}$'.format(self.latex.format('X'))
-  def __str__(self): return self.latex.format('X')
+  dvar = 'X'
+  def _repr_latex_(self): return '${}$'.format(self)
+  def __str__(self): return self.latex.format(self.dvar)
+
+#==================================================================================================
+class ZeroPolynomial:
+  r"""
+Single-instance class containing the zero polynomial.
+  """
+#==================================================================================================
+  def __call__(self,x): return 0
+  def __add__(self,other): return other
+  def __radd__(self,other): return other
+  def __mul__(self,other): return self
+  def __rmul__(self,other): return self
+  def __sub__(self,other): return other.__class__(other.coefs,other.roots,-other.cst)
+  def __rsub__(self,other): return other
+  def _repr_latex_(self): return '$0$'
+  def __str__(self): return '0'
+  latex = '0'
+ZeroPolynomial.singleton = ZeroPolynomial()
 
 #==================================================================================================
 class FracPolynomial (Polynomial):
@@ -143,8 +169,7 @@ Instances of this class are polynomials with fractional coefficients, where the 
 # Utilities
 #==================================================================================================
 
-def peval(coefs,x):
-  q = 0
+def peval(coefs,x,q=0):
   for c in coefs: q = c+q*x
   return q
 

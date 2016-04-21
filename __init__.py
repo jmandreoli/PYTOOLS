@@ -791,7 +791,8 @@ By default, method :meth:`init` of this class is identical to method :meth:`defa
     atexit.register(sc.stop)
 
   def config():
-    from xdg.BaseDirectory import load_first_config
+    try: from xdg.BaseDirectory import load_first_config
+    except: return
     p = load_first_config('spark/pyspark.py')
     if p is None: return
     d = {}

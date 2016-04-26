@@ -858,3 +858,4 @@ def loggingBasicConfig(**ka):
   logger = logging.getLogger()
   for h in logger.handlers: logger.removeHandler(h)
   logging.basicConfig(**ka)
+  return logger

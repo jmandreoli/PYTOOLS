@@ -321,7 +321,7 @@ Returns a subclass of :class:`list` with an IPython pretty printer for columns. 
   return t
 
 #==================================================================================================
-def ipysetup(D,helpers={},types={},_hstyle='display: inline; padding-left: 3mm; vertical-align: middle',**buttons):
+def ipysetup(D,helpers={},types={},_hstyle='display: inline; padding-left: 3mm; vertical-align: middle',_sort=(lambda x:x),**buttons):
   r"""
 Sets values in a dictionary through an interface.
 
@@ -346,7 +346,7 @@ A helper is any string. A vtype is either a python basic type (\ :class:`bool`, 
   def ClickButton(label,action,data):
     b = Button(description=label); b.on_click(action); b.data = data; return b
   def row():
-    for k,v in sorted(D.items()):
+    for k,v in _sort(D.items()):
       typ = types.get(k,type(v))
       if typ is bool: F = Checkbox
       elif typ is str: F = Text
@@ -361,7 +361,7 @@ A helper is any string. A vtype is either a python basic type (\ :class:`bool`, 
       w = F(description=k,value=v)
       W.append(w)
       w.observe(upd, 'value')
-      yield HBox(children=(w,HTML(description='help',value='<div style="{}">{}</div>'.format(_hstyle,helpers.get(k,'')))))
+      yield HBox(children=(w,HTML(description='help',value='<span style="{}" title="{}">?</span>'.format(_hstyle,helpers.get(k,'')))))
     if buttons:
       yield HBox(children=[ClickButton(label,upda,data) for label,data in sorted(buttons.items())])
   W = []

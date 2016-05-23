@@ -313,13 +313,14 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
         paintp(p)
         cell.figure.savefig(str((savp/'p{:02d}'.format(p)).with_suffix('.'+saveargs['format'])),**saveargs)
     finally: paintp(pagesav)
+      set_action = cell.figure.canvas.toolbar.addAction # works only with qt
   cell = Cell.create(*_a,**_ka)
-  cell.figure.canvas.toolbar.addAction('prev-page',lambda:paintp((page-1)%npage))
-  cell.figure.canvas.toolbar.addAction('next-page',lambda:paintp((page+1)%npage))
+  set_action('prev-page',lambda:paintp((page-1)%npage))
+  set_action('next-page',lambda:paintp((page+1)%npage))
   if savepath is not None:
     saveargs = saveargs.copy()
     for k,v in savedefaults.items(): saveargs.setdefault(k,v)
-    cell.figure.canvas.toolbar.addAction('save-all',saveall)
+    set_action('save-all',saveall)
   Nr,Nc = (shape,shape) if isinstance(shape,int) else shape
   cell.make_grid(Nr,Nc)
   for c in genc(cell): vmake(c)

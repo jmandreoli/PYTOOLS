@@ -102,22 +102,22 @@ Methods:
     return c
 
 #------------------------------------------------------------------------------
-  def connect(self,f,D=dict(button_press=0,button_release=1,draw=2,key_press=3,key_release=4,motion_notify=5,pick=6,resize=7,scroll=8,figure_enter=9,figure_leave=10,axes_enter=11,axes_leave=12,close=13),**ka):
+  def connect(self,D=dict(button_press=0,button_release=1,draw=2,key_press=3,key_release=4,motion_notify=5,pick=6,resize=7,scroll=8,figure_enter=9,figure_leave=10,axes_enter=11,axes_leave=12,close=13),**ka):
     r"""
-(only when :attr:`axes` is not :const:`None`). Connects slot *f* to signals of type specified by *D*.
+Connects slot *f* to signals of type specified by *D*.
     """
 #------------------------------------------------------------------------------
     assert all(D.get(evt) is not None for evt in ka)
-    for evt in ka:
+    for evt,f in ka.items():
       b = self.figure.canvas.mpl_connect(evt+'_event',(lambda ev: f(ev)))
       self.callbacks.append(b)
 
 #------------------------------------------------------------------------------
   def clear(self):
     r"""
-Clears *self*.
-If :attr:`axes` was not :const:`None`, all callbacks are disconnected.
-If :attr:`grid` was not :const:`None`, all offspring cells are cleared.
+Clears *self*. All callbacks are disconnected.
+If :attr:`axes` is not :const:`None`, the axes is detached from the figure.
+If :attr:`grid` is not :const:`None`, all offspring cells are cleared.
 After execution, both :attr:`axes` and :attr:`grid` are reset to :const:`None`.
     """
 #------------------------------------------------------------------------------
@@ -130,8 +130,8 @@ After execution, both :attr:`axes` and :attr:`grid` are reset to :const:`None`.
     elif self.axes is not None:
       self.figure.delaxes(self.axes)
       self.axes = None
-      for b in self.callbacks: self.figure.canvas.mpl_disconnect(b)
-      del self.callbacks[:]
+    for b in self.callbacks: self.figure.canvas.mpl_disconnect(b)
+    del self.callbacks[:]
 
 #------------------------------------------------------------------------------
   @contextmanager
@@ -264,7 +264,7 @@ Invoked when the pause status of the timer changes (or it ends). This implementa
 #==================================================================================================
 
 #------------------------------------------------------------------------------
-def pager(L,shape,vmake,vpaint,*_a,savepath=None,saveargs={},savedefaults=dict(format='svg',orientation='landscape',frameon=False),**_ka):
+def pager(L,shape,vmake,vpaint,*_a,savepath=None,saveargs={},savedefaults=dict(format='svg',orientation='landscape',frameon=False),bstyle=dict(fontsize='small',backgroundcolor='k',color='w'),**_ka):
   r"""
 :param L: a list of arbitrary objects other than :const:`None`
 :param shape: a pair (number of rows, number of columns) or a single number if they are equat
@@ -286,6 +286,7 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
   """
 #------------------------------------------------------------------------------
   from numpy import ceil
+  from matplotlib.text import Text
   def gen(L):
     yield from L
     while True: yield None
@@ -307,20 +308,43 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
       savp.mkdir()
       altsavp.rename(savp/'saved')
     pagesav = page
-    try:      
+    try:
       for p in range(npage):
         logger.info('building page %s',p)
         paintp(p)
         cell.figure.savefig(str((savp/'p{:02d}'.format(p)).with_suffix('.'+saveargs['format'])),**saveargs)
     finally: paintp(pagesav)
-      set_action = cell.figure.canvas.toolbar.addAction # works only with qt
   cell = Cell.create(*_a,**_ka)
-  set_action('prev-page',lambda:paintp((page-1)%npage))
-  set_action('next-page',lambda:paintp((page+1)%npage))
+  actions = {
+    'prev-page': (lambda:paintp((page-1)%npage)),
+    'next-page': (lambda:paintp((page+1)%npage)),
+    }
   if savepath is not None:
     saveargs = saveargs.copy()
     for k,v in savedefaults.items(): saveargs.setdefault(k,v)
-    set_action('save-all',saveall)
+    actions['save-all'] = saveall
+  try: tb = cell.figure.canvas.toolbar; tb.addAction
+  except:
+    bstyle = bstyle.copy()
+    bstyle.update(figure=cell.figure,transform=cell.figure.transFigure,picker=True,visible=False)
+    def button(a,spec={'prev-page':(0.,'left'),'next-page':(1.,'right'),'save-all':(.5,'center')}):
+      x,ha = spec[a]
+      return Text(x,1.,a,va='top',ha=ha,**bstyle)
+    buttons = dict((button(a),f) for a,f in actions.items())
+    cell.figure.texts.extend(list(buttons))
+    cell.connect(pick=lambda ev:buttons.get(ev.artist,lambda:None)())
+    b_visible = False
+    def onmotion(ev,fig=cell.figure):
+      nonlocal b_visible
+      if ev.inaxes is not None: return
+      x,y = fig.transFigure.inverted().transform((ev.x,ev.y))
+      if (y<.95 if b_visible else y>=.95):
+        b_visible = not b_visible
+        for b in buttons: b.set_visible(b_visible)
+        fig.canvas.draw()
+    cell.connect(motion_notify=onmotion)
+  else:
+    for a,f in actions.items(): tb.addAction(a,f)
   Nr,Nc = (shape,shape) if isinstance(shape,int) else shape
   cell.make_grid(Nr,Nc)
   for c in genc(cell): vmake(c)

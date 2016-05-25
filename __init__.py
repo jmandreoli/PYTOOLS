@@ -56,7 +56,11 @@ Objects of this class act as dict objects, except their keys are also attributes
   """
 #==================================================================================================
   def __init__(self,*a,**ka):
-    if a: assert len(a)==1 and not ka, 'odict takes either one positional argument or a list of keyword arguments'; r = a[0]
+    if a:
+      n = len(a)
+      if n>1: raise TypeError('expected at most 1 positional argument, got {}'.format(n))
+      if ka: raise TypeError('expected no keyword arguments, got {}'.format(len(ka)))
+      r = a[0]
     else: r = dict(**ka)
     self.__dict__['_ref'] = r
   def __getitem__(self,k): return self._ref[k]
@@ -72,6 +76,8 @@ Objects of this class act as dict objects, except their keys are also attributes
   def __repr__(self): return repr(self._ref)
   def __len__(self): return len(self._ref)
   def __iter__(self): return iter(self._ref)
+  def __getstate__(self): return self._ref.copy()
+  def __setstate__(self,r): self.__dict__['_ref'] = r
 
 #==================================================================================================
 class ARG (tuple):

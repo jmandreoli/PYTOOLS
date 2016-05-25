@@ -259,6 +259,55 @@ Invoked when the pause status of the timer changes (or it ends). This implementa
     """
     pass
 
+#==============================================================================
+class Menu:
+  r"""
+:param fig: a matplotlib figure
+:param size: the size of the menu in figure coordinates (hence between 0. and 1.)
+:type size: :class:`float`
+:param ka: passed to the button factory :class:`matplotlib.text.Text`
+
+Objects of this class control a menu added to a figure. The menu is located on the top of the figure, initially invisible. Two buttons at the top corners remain always visible and allow toggling the visibility of the menu. Simulates a very restricted subset of the API of the QT toolbar (which should be preferred when the backend is QT).
+  """
+#==============================================================================
+
+  bstyle = dict(backgroundcolor='k',color='w',fontsize='small')
+
+  def __init__(self,fig,size=.02,nullcallback=lambda:None,**ka):
+    from matplotlib.patches import Rectangle
+    from collections import OrderedDict
+    toggles = [Rectangle((x,1.),size*e,-size,transform=fig.transFigure,picker=True,figure=fig,zorder=2,fc='gray') for x,e in ((0.,1.),(1.,-1.))]
+    fig.patches.extend(toggles)
+    self.ax = fig.add_axes((size,1.-size,1.-2*size,size),xticks=(),yticks=(),frameon=False,zorder=1,visible=False)
+    def onpick(ev,ax=self.ax,toggles=toggles):
+      if ev.artist in toggles:
+        ax.set_visible(not ax.get_visible())
+        ax.figure.canvas.draw()
+        return
+      self.actions.get(ev.artist,nullcallback)()
+    fig.canvas.mpl_connect('pick_event',onpick)
+    self.actions = OrderedDict()
+    for k,v in self.bstyle.items(): ka.setdefault(k,v)
+    self.bstyle = ka.items()
+
+  def addAction(self,label,callback,**ka):
+    r"""Adds (and returns) a button with given label and callback."""
+    for k,v in self.bstyle: ka.setdefault(k,v)
+    b = self.ax.text(0.,1.,label,transform=self.ax.transAxes,va='top',ha='center',picker=True,**ka)
+    self.actions[b] = callback
+    self.setpos()
+    return b
+
+  def delAction(self,b):
+    r"""Deletes a button previously added by :meth:`addAction`."""
+    del self.actions[b]
+    self.setpos()
+
+  def setpos(self):
+    n = len(self.actions)+1
+    for i,b in enumerate(self.actions,1): b.set_x(i/n)
+    self.ax.figure.canvas.draw()
+
 #==================================================================================================
 # Utilities
 #==================================================================================================
@@ -315,36 +364,17 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
         cell.figure.savefig(str((savp/'p{:02d}'.format(p)).with_suffix('.'+saveargs['format'])),**saveargs)
     finally: paintp(pagesav)
   cell = Cell.create(*_a,**_ka)
-  actions = {
-    'prev-page': (lambda:paintp((page-1)%npage)),
-    'next-page': (lambda:paintp((page+1)%npage)),
-    }
+  actions = [
+    ('prev-page',(lambda:paintp((page-1)%npage))),
+    ('next-page',(lambda:paintp((page+1)%npage))),
+  ]
   if savepath is not None:
     saveargs = saveargs.copy()
     for k,v in savedefaults.items(): saveargs.setdefault(k,v)
-    actions['save-all'] = saveall
-  try: tb = cell.figure.canvas.toolbar; tb.addAction
-  except:
-    bstyle = bstyle.copy()
-    bstyle.update(figure=cell.figure,transform=cell.figure.transFigure,picker=True,visible=False)
-    def button(a,spec={'prev-page':(0.,'left'),'next-page':(1.,'right'),'save-all':(.5,'center')}):
-      x,ha = spec[a]
-      return Text(x,1.,a,va='top',ha=ha,**bstyle)
-    buttons = dict((button(a),f) for a,f in actions.items())
-    cell.figure.texts.extend(list(buttons))
-    cell.connect(pick=lambda ev:buttons.get(ev.artist,lambda:None)())
-    b_visible = False
-    def onmotion(ev,fig=cell.figure):
-      nonlocal b_visible
-      if ev.inaxes is not None: return
-      x,y = fig.transFigure.inverted().transform((ev.x,ev.y))
-      if (y<.95 if b_visible else y>=.95):
-        b_visible = not b_visible
-        for b in buttons: b.set_visible(b_visible)
-        fig.canvas.draw()
-    cell.connect(motion_notify=onmotion)
-  else:
-    for a,f in actions.items(): tb.addAction(a,f)
+    actions.append(('save-all',saveall))
+  try: menu = cell.figure.canvas.toolbar; menu.addAction
+  except: menu = Menu(cell.figure,**bstyle)
+  for a,f in actions: menu.addAction(a,f)
   Nr,Nc = (shape,shape) if isinstance(shape,int) else shape
   cell.make_grid(Nr,Nc)
   for c in genc(cell): vmake(c)

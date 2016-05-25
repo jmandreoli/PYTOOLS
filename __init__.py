@@ -41,7 +41,7 @@ Use as a decorator to declare, in a class, a computable attribute which is compu
       return val
 
 #==================================================================================================
-class odict (MutableMapping):
+class odict:
   r"""
 Objects of this class act as dict objects, except their keys are also attributes. Keys must be strings and must not override dict standard methods, but no check is performed. Example::
 
@@ -55,14 +55,23 @@ Objects of this class act as dict objects, except their keys are also attributes
    #>>> 13
   """
 #==================================================================================================
-  def __init__(self,**ka): self.__dict__ = ka
-  def __getitem__(self,k): return self.__dict__[k]
-  def __setitem__(self,k,v): self.__dict__[k] = v
-  def __delitem__(self,k): del self.__dict__[k]
-  def __iter__(self): return iter(self.__dict__)
-  def __len__(self): return len(self.__dict__)
-  def __str__(self): return str(self.__dict__)
-  def __repr__(self): return repr(self.__dict__)
+  def __init__(self,*a,**ka):
+    if a: assert len(a)==1 and not ka, 'odict takes either one positional argument or a list of keyword arguments'; r = a[0]
+    else: r = dict(**ka)
+    self.__dict__['_ref'] = r
+  def __getitem__(self,k): return self._ref[k]
+  def __setitem__(self,k,v): self._ref[k] = v
+  def __delitem__(self,k): del self._ref[k]
+  def __contains__(self,k): return k in self._ref
+  def __eq__(self,other): return self._ref == other
+  def __ne__(self,other): return self._ref != other
+  def __getattr__(self,a): return self._ref[a]
+  def __setattr__(self,a,v): self._ref[a] = v
+  def __delattr__(self,a): del self._ref[a]
+  def __str__(self): return str(self._ref)
+  def __repr__(self): return repr(self._ref)
+  def __len__(self): return len(self._ref)
+  def __iter__(self): return iter(self._ref)
 
 #==================================================================================================
 class ARG (tuple):

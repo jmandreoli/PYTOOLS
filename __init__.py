@@ -3,7 +3,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 #==================================================================================================
-class ondemand (object):
+class ondemand:
   r"""
 Use as a decorator to declare, in a class, a computable attribute which is computed only once (its value is then cached). Example::
 

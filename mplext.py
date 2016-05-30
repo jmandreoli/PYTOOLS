@@ -383,6 +383,6 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
   for c in genc(cell): vmake(c)
   cellpp = Nr*Nc
   npage = int(ceil(len(L)/cellpp))
-  ctrl = Slider(cell.figure.add_axes((0.1,.95,.8,.05),visible=False,zorder=3),'page',.5,npage+.5,valinit=0,valfmt='%.0f/{}'.format(npage),closedmin=False,closedmax=False)
+  ctrl = Slider(cell.figure.add_axes((0.1,0.,.8,.03),visible=False,zorder=1),'page',.5,npage+.5,valinit=0,valfmt='%.0f/{}'.format(npage),closedmin=False,closedmax=False)
   ctrl.on_changed(lambda p:paintp(int(rint(p))-1))
   ctrl.set_val(1+offset/cellpp)

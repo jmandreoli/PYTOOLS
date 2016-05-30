@@ -313,7 +313,7 @@ Objects of this class control a menu added to a figure. The menu is located on t
 #==================================================================================================
 
 #------------------------------------------------------------------------------
-def pager(L,shape,vmake,vpaint,*_a,savepath=None,saveargs={},savedefaults=dict(format='svg',orientation='landscape',frameon=False),bstyle=dict(fontsize='small',backgroundcolor='k',color='w'),**_ka):
+def pager(L,shape,vmake,vpaint,*_a,offset=0,savepath=None,saveargs={},savedefaults=dict(format='svg',orientation='landscape',frameon=False),bstyle=dict(fontsize='small',backgroundcolor='k',color='w'),**_ka):
   r"""
 :param L: a list of arbitrary objects other than :const:`None`
 :param shape: a pair (number of rows, number of columns) or a single number if they are equat
@@ -334,8 +334,9 @@ Function *vpaint* takes as input a cell and an element of *L* or None, and displ
 Unfortunately, matplotlib toolbars are not standardised: the depend on the backend and may not support adding button.
   """
 #------------------------------------------------------------------------------
-  from numpy import ceil
+  from numpy import ceil, rint, clip
   from matplotlib.text import Text
+  from matplotlib.widgets import Slider
   def gen(L):
     yield from L
     while True: yield None
@@ -343,9 +344,10 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
     Nr,Nc = cell.shape
     yield from (cell[row,col] for row in range(Nr) for col in range(Nc))
   def paintp(p):
-    nonlocal page
-    page = p
-    for c,x in zip(genc(cell),gen(L[page*cellpp:])): vpaint(c,x)
+    for c,x in zip(genc(cell),gen(L[p*cellpp:])): vpaint(c,x)
+    cell.figure.canvas.draw()
+  def toggle_ctrl():
+    ctrl.ax.set_visible(not ctrl.ax.get_visible())
     cell.figure.canvas.draw()
   def saveall():
     from pathlib import Path
@@ -356,17 +358,18 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
       savp.rename(altsavp)
       savp.mkdir()
       altsavp.rename(savp/'saved')
-    pagesav = page
     try:
       for p in range(npage):
         logger.info('building page %s',p)
         paintp(p)
         cell.figure.savefig(str((savp/'p{:02d}'.format(p)).with_suffix('.'+saveargs['format'])),**saveargs)
-    finally: paintp(pagesav)
+    finally:
+      ctrl.set_val(ctrl.val)
   cell = Cell.create(*_a,**_ka)
   actions = [
-    ('prev-page',(lambda:paintp((page-1)%npage))),
-    ('next-page',(lambda:paintp((page+1)%npage))),
+    ('<<',(lambda:ctrl.set_val(clip(ctrl.val-1,1,npage)))),
+    ('>>',(lambda:ctrl.set_val(clip(ctrl.val+1,1,npage)))),
+    ('toggle-ctrl',toggle_ctrl),
   ]
   if savepath is not None:
     saveargs = saveargs.copy()
@@ -380,5 +383,6 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
   for c in genc(cell): vmake(c)
   cellpp = Nr*Nc
   npage = int(ceil(len(L)/cellpp))
-  page = None
-  paintp(0)
+  ctrl = Slider(cell.figure.add_axes((0.1,.95,.8,.05),visible=False,zorder=3),'page',.5,npage+.5,valinit=0,valfmt='%.0f/{}'.format(npage),closedmin=False,closedmax=False)
+  ctrl.on_changed(lambda p:paintp(int(rint(p))-1))
+  ctrl.set_val(1+offset/cellpp)

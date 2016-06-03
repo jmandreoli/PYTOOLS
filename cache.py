@@ -17,7 +17,7 @@ from functools import update_wrapper
 from collections import namedtuple, defaultdict
 from collections.abc import MutableMapping
 from time import process_time, perf_counter
-from . import ARG, SQliteNew, size_fmt, time_fmt
+from . import ARG, SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_incontext, html_parlist
 
 # Data associated with each cell is kept in a separate file
 # in the same folder as the database
@@ -388,74 +388,35 @@ Methods:
     self.func = func
   def getkey(self,arg):
     r"""
-Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are matched against the definition of :attr:`func`. Returns the pickled representation of the resulting assignment of the parameter names of the function in the order in which they appear in its definition, omitting the ignored ones. If a parameter name in :attr:`func` is prefixed by \*\* (hence its assignment is a dict), it is replaced by its sorted list of items.
+Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are matched against the definition of :attr:`func`. Returns the pickled representation of the resulting values of the parameter names of the function in the order in which they appear in its definition, omitting the ignored ones. If a parameter name in :attr:`func` is prefixed by \*\* (hence its assignment is a dict), it is replaced by its sorted list of items.
     """
     return pickle.dumps(tuple(self.genkey(arg)))
   def genkey(self,arg):
     a,ka = arg
     d = inspect.getcallargs(self.func,*a,**ka)
     for p,typ in self.params:
-      if typ!=-1: yield p,(sorted(d[p].items()) if typ==2 else d[p])
+      if typ!=-1: yield sorted(d[p].items()) if typ==2 else d[p]
   def getval(self,arg):
     r"""
 Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. Returns the value of calling attribute :attr:`func` with that positional argument list and keyword argument dict. Note that this attribute is not restored when the signature is obtained by unpickling, so invcation of this method fails.
     """
     a,ka = arg
     return self.func(*a,**ka)
+
   def html(self,ckey):
     r"""
 Argument *ckey* must have been obtained by invocation of method :meth:`getkey`. Returns an HTML formatted representation of the argument of that invocation.
     """
-    from lxml.builder import E
-    return E.DIV(*self.genhtml(pickle.loads(ckey)))
-  def genhtml(self,ckey):
-    from lxml.builder import E
-    disp = (lambda k,v: E.DIV(E.B(k),'=',E.EM(repr(v)),style='display: inline; padding: 5px;'))
-    def h(ckey,dparams=dict(self.params)):
-      for p,v in ckey:
-        if dparams[p]==2: yield from (disp(k,vk) for k,vk in v)
-        else: yield disp(p,v)
-    return h(ckey)
+    def h(ckey):
+      for v,(p,typ) in zip(ckey,((p,typ) for p,typ in self.params if typ!=-1)):
+        if typ==2: yield from v
+        else: yield p,v
+    return html_incontext(ParList(*h(pickle.loads(ckey))))
+
   def info(self): return self.name
   def __str__(self,mark={-1:'-',0:'',1:'*',2:'**'}): return '{}({})'.format(self.name,','.join(mark[typ]+p for p,typ in self.params))
   def __getstate__(self): return self.name, self.params
   def __setstate__(self,state): self.name, self.params = state
-
-#--------------------------------------------------------------------------------------------------
-class ProcessSignature (Signature):
-  r"""
-An instance of this class defines a functor attached to a python top-level function and a base signature.
-
-:param func: a function, defined at the top-level of its module (hence pickable)
-:param ignore: a list of parameter names among those of *func*
-:param base: a signature
-
-.. method:: getkey(arg)
-.. method:: getval(arg)
-
-   Method :meth:`getkey` (resp. :meth:`getval`) applied to a pair *a*, *ka* returns the same as their counterpart in class :class:`Signature`, except the first positional argument in *a* is replaced by the result of applying to it the :meth:`getkey` (resp. :meth:`getval`) method of the base signature.
-  """
-#--------------------------------------------------------------------------------------------------
-
-  def __init__(self,func,ignore,base):
-    super(ProcessSignature,self).__init__(func,ignore)
-    p,typ = self.params[0]
-    self.params = ((p,-1),)+self.params[1:]
-    self.base = base
-  def genkey(self,arg):
-    yield self.base.getkey(arg[0][0])
-    yield from super(ProcessSignature,self).genkey(arg)
-  def getval(self,args):
-    a,ka = args
-    return self.func(self.base.getval(a[0]),*a[1:],**ka)
-  def html(self,ckey):
-    from lxml.builder import E
-    ckey = pickle.loads(ckey)
-    return E.DIV(self.base.html(ckey[0]),E.DIV(*self.genhtml(ckey[1:]),style='border-top: thin dashed blue'),style='padding:0')
-  def info(self): return super(ProcessSignature,self).info(),self.base.info()
-  def __str__(self): return '{};{}'.format(self.base,super(ProcessSignature,self).__str__())
-  def __getstate__(self): return super(ProcessSignature,self).__getstate__(), self.base
-  def __setstate__(self,state): state, self.base = state; super(ProcessSignature,self).__setstate__(state)
 
 #==================================================================================================
 class FileStorage:
@@ -576,111 +537,17 @@ A decorator which applies to a function and replaces it by a persistently cached
   return transf
 
 #--------------------------------------------------------------------------------------------------
-class DerivedSignature:
-#--------------------------------------------------------------------------------------------------
-  def __init__(self,cache): self.getval = cache; self.alt = cache.sig
-  def getkey(self,ckey): return self.alt.getkey(ckey)
-  def getval(self,arg): return self.alt.cache(arg) # overridden at instance level unless unpickled
-  def html(self,ckey): return self.alt.html(ckey)
-  def info(self): return self.alt.info()
-  def __str__(self): return str(self.alt)
-  def __getstate__(self): return self.alt
-  def __setstate__(self,state): self.alt = state
-
-#--------------------------------------------------------------------------------------------------
-def make_process_step(base,f,ignore=(),factory=CacheBlock,**ka):
-  r"""
-Basic process cache factory (invoked to cache each process step).
-
-:param base: a cache block
-:type base: :class:`CacheBlock`\|\ :class:`NoneType`
-:param f: a function
-:param ignore: passed, together with the function, to the signature constructor
-
-The signature of the returned cache is an instance of :class:`Signature` if *base* is :const:`None`, otherwise an instance of :class:`ProcessSignature`, in which case, its base is a copy of the signature of *base* where :attr:`getval` is overridden by *base* itself. This is what enables the "stacked cache" effect of processes.
-  """
-#--------------------------------------------------------------------------------------------------
-  if base is None: sig = Signature(f,ignore)
-  elif isinstance(base,CacheBlock): sig = ProcessSignature(f,ignore,base=DerivedSignature(base))
-  else: raise TypeError('Cannot create a cache with base of type {} (not {})'.format(type(base),CacheBlock))
-  c = factory(signature=sig,**ka)
-  c.base = base
-  return c
-
-#--------------------------------------------------------------------------------------------------
-def make_process(base,*steps,**spec):
-  r"""
-Basic process factory.
-
-:param base: the base cache block, which must be a process cache (optional, defaults to :const:`None`\)
-:type base: :class:`CacheBlock`\|\ :class:`NoneType`
-:param steps: list of steps
-:type steps: list(\ :class:`ARG`\)
-
-Each step is defined by a :class:`ARG` object whose first positional argument must be a string representing the step name, the rest being called the step configuration. The *spec* dict is used to customise the configuration of each step. First, each *spec* item whose key is not a step name is used to update the keyword argument of the configuration of all the steps. Then, each *spec* item whose key is a step name must have a dict value, which is used to update the keyword argument of that step's configuration. Thus the following expressions are equivalent::
-
-   F= make_process(ARG('s_A',fA,ignore=('z',)),ARG('s_B',fB),clear=True,db=DIR,s_A=dict(clear=False))
-   F= make_process(ARG('s_A',fA,ignore=('z',),clear=False,db=DIR),ARG('s_B',fB,clear=True,db=DIR))
-
-Then function :func:`make_process_step` is called for each step with the result of the previous call used as base (initially the *base* argument), and the updated step configuration as other arguments. In the above example, this leads to the following cache construction::
-
-   make_process_step(make_process_step(None,fA,ignore=('z',),clear=False,db=DIR),fB,clear=True,db=DIR)
-
-Finally, the returned value is a function using the cache thus obtained (accessible through the attribute :attr:`cache` of the function). The function must be invoked with keyword arguments only, assigning to each step name a :class:`ARG` object called the step instantiation. Except for the first step, the positional argument of each step instantiation is prepended with the step instantiation of the previous step. The updated instantiation of the last step is then submitted to the cache. Thus, in the above example, the following expressions are equivalent::
-
-   F(s_A=ARG(3,z=22),s_B=ARG(4,u=5),...)
-   F.cache(ARG(ARG(3,z=22),4,u=5))
-   fB(fA(3,z=22),4,u=5)
-
-where both the inner expression ``fA()`` and the outer expression ``fB()`` are independently persistently cached.
-  """
-#--------------------------------------------------------------------------------------------------
-  def setdflt(ka,v): ka.update(spec); ka.update(v); return ka
-  def caller(steps,cache,dflt=ARG()):
-    def F(**args):
-      arg = args.get(steps[0],dflt)
-      for step in steps[1:]:
-        a,ka = args.get(step,dflt)
-        arg = ARG(arg,*a,**ka)
-      return cache(arg)
-    return F
-  if isinstance(base,ARG): steps = (base,)+steps; base = None
-  cfg = [(a[0],a[1:],ka,spec.pop(a[0],())) for a,ka in steps]
-  cfg = [(step,a,setdflt(ka.copy(),v)) for step,a,ka,v in cfg]
-  cache = base
-  bases,steps = ((),()) if cache is None else (cache.bases,cache.steps)
-  for step,a,ka in cfg:
-    cache = make_process_step(cache,*a,**ka)
-    cache.base,base = base,cache
-    bases = cache.bases = bases+(cache,)
-    steps = cache.steps = steps+(step,)
-    F = cache.caller = caller(steps,cache)
-    F.cache = cache
-  return F
-
-#--------------------------------------------------------------------------------------------------
 def getparams(func,ignore=(),code={inspect.Parameter.VAR_POSITIONAL:1,inspect.Parameter.VAR_KEYWORD:2}):
 #--------------------------------------------------------------------------------------------------
   for p in inspect.signature(func).parameters.values():
     # coding needed because p.kind is not pickable/unpickable before python 3.5
     yield p.name,(-1 if p.name in ignore else code.get(p.kind,0))
 
-#--------------------------------------------------------------------------------------------------
-def html_table(irows,fmts,hdrs=None,title=None):
-#--------------------------------------------------------------------------------------------------
-  from lxml.builder import E
-  def thead():
-    if title is not None: yield E.TR(E.TD(title,colspan=str(1+len(fmts))),style='background-color: gray; color: white')
-    if hdrs is not None: yield E.TR(E.TD(),*(E.TH(hdr) for hdr in hdrs))
-  def tbody():
-    for ind,row in irows:
-      yield E.TR(E.TH(str(ind)),*(E.TD(fmt(v)) for fmt,v in zip(fmts,row)))
-  return E.TABLE(E.THEAD(*thead()),E.TBODY(*tbody()))
-#--------------------------------------------------------------------------------------------------
-def html_stack(*a,**ka):
-#--------------------------------------------------------------------------------------------------
-  from lxml.builder import E
-  return E.DIV(*(E.DIV(x,**ka) for x in a))
+#==================================================================================================
+class ParList:
+#==================================================================================================
+  def __init__(self,*L): self.L = L
+  def as_html(self,incontext): return html_parlist((),self.L,incontext)
 
 #--------------------------------------------------------------------------------------------------
 class SignatureMismatchException (Exception):

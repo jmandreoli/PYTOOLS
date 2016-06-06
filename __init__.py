@@ -1,4 +1,4 @@
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 import logging
 logger = logging.getLogger(__name__)
 
@@ -139,48 +139,26 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
     yield o,ax
 
 #==================================================================================================
-class BaseProcess (MutableMapping):
+class Process:
   r"""
-Instances of this class implement symbolic expressions. The value of a process is held in attribute :attr:`value` and is a dictionary. It can be computed by invoking method :meth:`incarnate`, which is automatically invoked when accessing an item. Incarnation can be cancelled by invoking method :meth:`reset`. Incarnation is automatically lost on pickling, and is not restored on unpickling. Subclasses must implement a method :meth:`call` which is invoked on the first incarnation.
-  """
-#==================================================================================================
-  def __getitem__(self,k): self.incarnate(); return self.value.__getitem__(k)
-  def __setitem__(self,k,v): self.value.__setitem__(k,v)
-  def __delitem__(self,k): self.value.__delitem__(k)
-  def __contains__(self,k): self.incarnate(); return k in self.value
-  def __repr__(self): return self.value.__repr__() if self.incarnated else super().__repr__()
-  def __len__(self): self.incarnate(); return len(self.value)
-  def __iter__(self): self.incarnate(); return self.value.__iter__()
-  def __hash__(self): return hash(self.__getstate__())
-  def incarnate(self):
-    if self.incarnated: return
-    self.incarnated = True
-    self.call()
-  def reset(self): self.incarnated = False; self.value = {}
-  def call(self): raise NotImplementedError()
-
-#==================================================================================================
-class Process(BaseProcess):
-  r"""
-Instances of this class are processes for which the :meth:`call` method is explicitly configured by a function *func* and its arguments *a* (positional) and *ka* (keyword). The first positional arguments can be instances of class :class:`Process` themselves and constitute the base of the process. On call, the base processes are first incarnated sequentially, and their values are merged into the value of this process, then the configuration function is called. It must return a dictionary which is then used to update the value of this process.
+Instances of this class implement closed symbolic expressions. The value of a process is held in attribute :attr:`value`. It can be computed by invoking method :meth:`incarnate`. Incarnation can be cancelled by invoking method :meth:`reset`. Incarnation is lost on pickling, and is not restored on unpickling. Subclasses should define automatic triggers of the incarnation (see e.g. class :class:`MapProcess`).
   """
 #==================================================================================================
 
   def __init__(self,func,*a,**ka):
-    from itertools import takewhile
     self.reset()
-    base = tuple(takewhile(lambda s: isinstance(s,Process),a))
-    n = len(base)
-    self.config = [a[n:],ka.copy()]
+    self.config = [a,ka.copy()]
     self.func = func
-    self.base = None if n==0 else base[0] if n==1 else MProcess(base)
+    self.opened = True
 
   def __getstate__(self):
-    return (self.config[0],tuple(sorted(self.config[1].items()))),self.func,self.base,self.opened
+    return self.func,self.config[0],tuple(sorted(self.config[1].items()))
+
   def __setstate__(self,state):
-    super().reset()
-    c,self.func,self.base,self.opened = state
-    self.config = [c[0],dict(c[1])]
+    self.reset()
+    self.func,a,ka = state
+    self.config = [a,dict(ka)]
+    self.opened = False
 
   def rearg(self,*a,**ka):
     r"""
@@ -189,45 +167,45 @@ Updates the config argument of this process. Must be called before first incarna
     assert self.opened
     self.config[0] += a
     self.config[1].update(ka)
-
+  
   def refunc(self,f):
     r"""
 Replaces the config function of this process. Must be called before first incarnation.
     """
     assert self.opened
     self.func = f
-
-  def reset(self): self.opened = True; super().reset()
-
-  def call(self):
+  
+  def incarnate(self):
+    if self.incarnated: return
+    self.incarnated = True
     self.opened = False
     a,ka = self.config
-    if self.base is not None:
-      self.base.incarnate()
-      self.value.update(self.base)
-      a = (self.base,)+a
-    self.value.update(self.func(*a,**ka))
+    self.value = self.func(*a,**ka)
+
+  def reset(self):
+    self.incarnated = False
+    self.value = None
 
   def as_html(self,incontext):
-    def p():
-      yield VERBATIM('{}.{}'.format(self.func.__module__,self.func.__name__))
-      if self.base is not None: yield self.base
-      yield from self.config[0]
-    return html_parlist(tuple(p()),sorted(self.config[1].items()),incontext,deco=('[|','|',']'))
+    import inspect
+    func = inspect.unwrap(self.func)
+    f = VERBATIM('{}.{}{}'.format(func.__module__,func.__name__,('*' if self.incarnated else '')))
+    return html_parlist((f,)+self.config[0],sorted(self.config[1].items()),incontext,deco=('[|','|',']'))
 
   def _repr_html_(self):
     from lxml.etree import tounicode
     return tounicode(html_incontext(self))
 
-#==================================================================================================
-class MProcess(BaseProcess):
-#==================================================================================================
-  def __init__(self,L):self.reset(); self.children = L
-  def __getstate__(self): return self.children
-  def __setstate__(self,state): self.children = state; self.reset()
-  def call(self):
-    for s in self.children: s.incarnate(); self.value.update(s) # could be parallelised
-  def as_html(self,incontext): return html_parlist(self.children,(),incontext,deco=('[-','-',']'))
+  def __hash__(self): return hash(self.__getstate__())
+  def __repr__(self): return repr(self.value) if self.incarnated else super().__repr__()
+
+class MapProcess (Process,Mapping):
+  r"""
+Processes of this class are also read-only mappings and trigger incarnation on all the map operations, then delegate such operations to their value.
+  """
+  def __getitem__(self,k): self.incarnate(); return self.value[k]
+  def __len__(self): self.incarnate(); return len(self.value)
+  def __iter__(self): self.incarnate(); return iter(self.value)
 
 #==================================================================================================
 class Tree:

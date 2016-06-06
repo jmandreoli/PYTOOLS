@@ -543,9 +543,7 @@ def getparams(func,ignore=(),code={inspect.Parameter.VAR_POSITIONAL:1,inspect.Pa
     # coding needed because p.kind is not pickable/unpickable before python 3.5
     yield p.name,(-1 if p.name in ignore else code.get(p.kind,0))
 
-#==================================================================================================
 class ParList:
-#==================================================================================================
   def __init__(self,*L): self.L = L
   def as_html(self,incontext): return html_parlist((),self.L,incontext)
 

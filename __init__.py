@@ -709,7 +709,7 @@ By default, method :meth:`init` of this class is identical to method :meth:`defa
   del config
 
 #==================================================================================================
-def config_env(name,deflt=None):
+def config_env(name,deflt=None,asfile=False):
   r"""
 :param name: the name of an environment variable
 :type name: :class:`str`
@@ -721,6 +721,8 @@ Returns a value obtained by executing the string value of an environment variabl
   import os
   x = os.environ.get(name)
   if x is None: return deflt
+  if asfile:
+    with open(x) as u: x = u.read(x)
   d = {}
   exec(x,d)
   return d['value']

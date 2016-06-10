@@ -693,6 +693,7 @@ By default, method :meth:`init` of this class is identical to method :meth:`defa
   def default_init(cls,**ka):
     import atexit
     from pyspark.context import SparkContext
+    if cls.sc is not None: cls.sc.stop()
     cls.sc = sc = SparkContext(**ka)
     atexit.register(sc.stop)
 

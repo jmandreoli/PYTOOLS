@@ -18,7 +18,7 @@ from collections.abc import MutableMapping
 from contextlib import contextmanager
 from itertools import islice
 from functools import partial
-from . import type_annotation_autocheck, SQliteHandler, SQliteStack, SQliteNew
+from . import SQliteStack, SQliteNew
 
 # IMPORTANT:
 # In order for the foreign key clauses to operate, one must set
@@ -191,7 +191,6 @@ This method is normally called on a remote process (see method :meth:`ChronoBloc
     status = 0
     reft = time.perf_counter()
     with self.connect(session) as conn:
-      logging.basicConfig(handlers=(SQliteHandler(conn),),**ka)
       try:
         for x in islice(flow,slc.start,slc.stop,slc.step):
           tstamp = time.perf_counter()-reft
@@ -419,15 +418,18 @@ Methods:
         yield (fnam,sticky),fmtv(val)
 
   @staticmethod
-  @type_annotation_autocheck
-  def Field(trig:str,sticky:(bool,set((0,1)))=None,fmtk:(callable,str,type(None))=None,fmtv:(callable,type(None))=None,ID=(lambda x: x)):
+  def Field(trig,sticky=None,fmtk=None,fmtv=None,ID=(lambda x: x)):
     r"""
 A convenience function to specify a :class:`Formatter` field.
 
 :param trig: a regular expression
+:type trig: :class:`str`
 :param sticky: whether the field should be sticky
+:class sticky: :class:`bool`
 :param fmtk: 1-input, 1-output function
+:type fmtk: callable|\ :class:`str`\|\ :class:`NoneType`
 :param fmtv: 1-input, 1-output function
+:type fmtv: callable|\ :class:`NoneType`
 :rtype: a triple *fmtkr*, *sticky*, *fmtv*
 
 The field name formatting function *fmtkr* of the result field is defined as follows: its argument is matched against the regular expression *trig*; :const:`None` is returned if the match fails, otherwise, the result of applying *fmtk* to the groups extracted by the regular expression. If *fmtk* is unspecified or :const:`None`, identity is assumed, and if *fmtk* is a string, it must be a format string (curly brackets notation) and its formatting function is assumed. If *fmtv* is unspecified or :const:`None`, identity is assumed. For example::
@@ -457,10 +459,20 @@ The field name formatting function *fmtkr* of the result field is defined as fol
     return fmtk,sticky,fmtv
 
   @staticmethod
-  @type_annotation_autocheck
-  def UField(trig:str,fmts:str,unit:str=None,delunit=lambda x:float(x.split()[0]),**ka):
+  def UField(trig,fmts,unit=None,delunit=lambda x:float(x.split()[0]),**ka):
     r"""
-A convenience function to specify a :class:`Formatter` field. For example::
+A convenience function to specify a :class:`Formatter` field.
+
+:param trig: a regular expression
+:type trig: :class:`str`
+:param fmts: an output format
+:type fmts: :class:`str`
+:param unit: the name of a unit
+:type unit: :class:`str`\|\ :class:`NoneType`
+:param delunit: a parser for an experssion with units
+:type delunit: callable
+
+For example::
 
    f = Formatter(Formatter.UField(r'\.voltage\.line-(\d+)','L{:0>2}',unit='V'))
    list(f([('.voltage.line-6','42.0 V'),('.voltage.line-23','35 V')]))

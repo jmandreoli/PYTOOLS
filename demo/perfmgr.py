@@ -27,7 +27,7 @@ def demo_(compute=False):
   if compute:
     for test in 'MatrixSquared','MatrixDeterminant':
       for m in True,False:
-        exp = Experiment.run(ctx,test,geometric(100,1.2),smax=5.,manual=m)
+        exp = ctx.run(test,geometric(100,1.2),smax=5.,manual=m)
         orms.root.addexperiment(exp)
         orms.commit()
   else: # display

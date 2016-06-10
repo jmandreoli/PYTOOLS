@@ -1,8 +1,8 @@
-PYTHONPATH :=
 PYTHON :=
-TARGET := cache.out chrono.out monitor.out mplext.out quickui.out
+PYTHONPATH :=
+TARGET := cache.out monitor.out mplext.out quickui.out perfmgr.out
 
 all: ${TARGET}
 
 %.out: %.py
-	export PYTHONPATH=${PYTHONPATH} ; ${PYTHON} make.py $(patsubst %.py,%,$<)
+	@export PYTHONPATH=${PYTHONPATH} ; ${PYTHON} make.py $(patsubst %.py,%,$<)

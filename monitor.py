@@ -9,7 +9,6 @@
 
 import logging
 from collections import namedtuple
-from . import type_annotation_autocheck
 
 #==================================================================================================
 class Monitor:
@@ -134,21 +133,21 @@ The returned factory, when invoked with some arguments, returns a monitor with *
   return F
 
 #--------------------------------------------------------------------------------------------------
-@type_annotation_autocheck
 @monitor
-def iterc_monitor(env,maxiter:int=0,maxcpu:float=float('inf'),logger:(logging.Logger,type(None))=None,show:(float,type(None))=None,fmt:(callable,type(None))=None):
+def iterc_monitor(env,maxiter=0,maxcpu=float('inf'),logger=None,show=None,fmt:callable=None):
   r"""
 Returns a monitor managing the number of iterations and enabling basic logging.
 
 :param maxiter: stops the loop at that number of iterations (if reached)
+:type maxiter: :class:`int`
 :param maxcpu: stops the loop after that amount of cpu time (if reached)
+:type maxcpu: :class:`float`
+:param logger: the logger on which to report (optional)
+:type logger: :class:`logging.Logger`\|\ :class:`NoneType`
 :param show: controls the logging rate (see below)
+:type show: :class:`int`\|\ :class:`NoneType`
 :param fmt: invoked to produce the log string, passed the current iteration count and environment
-:param logger: the logger to use
-:param label: name of an attribute of the environment to which the iteration count is assigned at each iteration
-:type label: :class:`str`\|\ :class:`NoneType`
-
-If *logger* is :const:`None`, no logging occurs (*fmt* and *show* are ignored). Otherwise, if *show* is :const:`None`, logging occurs at each iteration. Otherwise, logging occurs every period roughly equal to *show* times the iteration count (hence, the logging rate slows down with the number of iterations).
+:type fmt: callable|\ :class:`NoneType`
   """
 #--------------------------------------------------------------------------------------------------
   x = 1
@@ -180,16 +179,13 @@ If *logger* is :const:`None`, no logging occurs (*fmt* and *show* are ignored). 
       x += 1
 
 #--------------------------------------------------------------------------------------------------
-@type_annotation_autocheck
 @monitor
-def averaging_monitor(env,targetf:callable=None,rtype=namedtuple('stats',('count','mean','var'))):
+def averaging_monitor(env,targetf=None,rtype=namedtuple('stats',('count','mean','var'))):
   r"""
 Returns a monitor which computes some basic statistics about the loop.
 
 :param targetf: extracts from the environment the variable on which to compute the statistics
 :type targetf: callable
-:param label: name of an attribute of the environment to which the computed stats is assigned at each iteration
-:type label: :class:`str`\|\ :class:`NoneType`
 
 The computed statistics consists of a named triple <count,mean,variance> of the list of results of applying callable *targetf* to the environment at each iteration.
   """
@@ -204,9 +200,8 @@ The computed statistics consists of a named triple <count,mean,variance> of the 
     yield rtype(n,xmean,xvar)
 
 #--------------------------------------------------------------------------------------------------
-@type_annotation_autocheck
 @monitor
-def buffer_monitor(env,size:int=0,targetf:callable=None):
+def buffer_monitor(env,size=0,targetf=None):
   r"""
 Returns a monitor which buffers information collected from the loop.
 
@@ -214,8 +209,8 @@ Returns a monitor which buffers information collected from the loop.
 :type targetf: callable
 :param size: size of the buffer (if null, the buffer is infinite, otherwise first in first out policy is applied)
 :type size: :class:`int`
-:param label: name of an attribute of the environment to which the buffer is assigned at each iteration
-:type label: :class:`str`\|\ :class:`NoneType`
+
+The buffer state consists of the last *size* results of applying callable *targetf* to the environment at each iteration.
   """
 #--------------------------------------------------------------------------------------------------
   buf = []

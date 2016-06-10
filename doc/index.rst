@@ -17,7 +17,6 @@ Contents:
    monitor.rst
    perfmgr.rst
    cpuinfomgr.rst
-   chrono.rst
    taskmanager.rst
 
 Available types and functions

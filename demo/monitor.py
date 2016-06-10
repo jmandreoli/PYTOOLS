@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 automatic = False
 
 from pathlib import Path
-from ..monitor import monitor, iterc_monitor, averaging_monitor, buffer_monitor
+from ..monitor import iterc_monitor, averaging_monitor, buffer_monitor
 
 def demo1():
   from itertools import count; from math import log
@@ -25,27 +25,6 @@ def demo1():
   m = iterc_monitor(maxcpu=.1,maxiter=100000,show=.1,logger=logger,fmt=fmts.format)
   m.run(loop)
 
-@monitor
-def delay_monitor(env,delay:float=1.):
-  # inserts a delay after each iteration
-  while True: yield time.sleep(delay)
-
-@monitor
-def display_monitor(env,initf:callable,updatef:callable,**figargs):
-  from matplotlib import use; use('Qt4Agg')
-  from matplotlib.pyplot import figure, show
-  env.fig = fig = figure(**figargs)
-  ax,artists = initf(fig)
-  show(False)
-  fig.canvas.blit(fig.bbox)
-  background = fig.canvas.copy_from_bbox(ax.bbox)
-  while True:
-    for a in updatef(env,artists): ax.draw_artist(a)
-    show(False)
-    fig.canvas.blit(ax.bbox)
-    yield
-    fig.canvas.restore_region(background)
-
 def demo2():
   fmts = 'iterc:{0} x:{1.value[0]:.4f} (mean: {1.stat.mean:.4f}) y:{1.value[1]:.4f}'
   m = averaging_monitor(label='stat',targetf=(lambda env: env.value[0]))
@@ -53,21 +32,34 @@ def demo2():
   m *= buffer_monitor(label='buf',targetf=(lambda env: env.value))
   def initf(fig,bounds=((-1.5,1.5),(-1.5,1.5))):
     ax = fig.add_subplot(1,1,1,xlim=bounds[0],ylim=bounds[1],aspect='equal')
-    return ax,ax.plot(())
+    return ax.plot(())
   def updatef(env,artists):
     line, = artists
-    line.set_data(*zip(*env.buf))
-    return artists
-  m *= display_monitor(initf,updatef,figsize=(10,8))
-  if not automatic: m *= delay_monitor(.04) # slows down to at most 25 frames per seconds (crude)
-  env = m.run(cycloid(a=.3,omega=5.1,step=2.))
-  if automatic: env.fig.savefig(str(Path(__file__).resolve().parent/'monitor.png'))
+    try: line.set_data(*zip(*env.buf))
+    except: pass
+  env = m.run(cycloid(a=.3,omega=5.1,step=2.),detach=(None if automatic else 1.))
+  display(env,initf,updatef,figsize=(10,8))
+
+def display(env,initf:callable,updatef:callable,**figargs):
+  from matplotlib.pyplot import figure, show, close
+  from matplotlib.animation import FuncAnimation
+  fig = figure(**figargs)
+  artists = initf(fig)
+  txt = fig.text(.5,.5,'',zorder=1,color='r',ha='center',va='center')
+  if automatic:
+    updatef(env,artists)
+    fig.savefig(str(Path(__file__).resolve().parent/'monitor.png'))
+  else:
+    a = FuncAnimation(fig,lambda frm:(txt.set_text('OVER') if env.stop else updatef(env,artists)),repeat=False)
+    show()
+    env.stop = True
 
 def cycloid(a,omega,step):
   from math import sin, cos, pi
   step *= pi/180
   u = 0.
   while True:
+    if not automatic: time.sleep(.04) # simulates heavy computing with a delay at each iteration
     yield cos(u)+a*cos(omega*u), sin(u)+a*sin(omega*u)
     u += step
 

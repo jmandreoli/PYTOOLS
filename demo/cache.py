@@ -13,7 +13,9 @@ if __name__=='__main__':
 #--------------------------------------------------------------------------------------------------
 
 from pathlib import Path; DIR = Path(__file__).resolve().parent/'cache.dir'
-from ..cache import lru_persistent_cache, make_process, ARG, State
+from collections import ChainMap
+from .. import MapProcess
+from ..cache import lru_persistent_cache
 automatic = False
 
 @lru_persistent_cache(db=DIR,ignore=('z',))
@@ -26,18 +28,20 @@ def longfunc(x,delay=10):
   if x is None: raise Exception('longfunc error')
   return x
 
-def stepA(a,b,z=None):
-  state = State()
-  state.a = a
-  state.b = b
-  state.u = a+b
-  return state
+@lru_persistent_cache(db=DIR)
+def stepA(**ini): return ini
 
-def stepB(state,c,z=0):
-  state.v = c*state.u+z
-  return state
+@lru_persistent_cache(db=DIR)
+def stepB(E,fr=None,to=None,r=0):
+  p,q = fr
+  return ChainMap({to:E[p]+E[q]+r},E)
 
-proc = make_process(ARG('s_A',stepA),ARG('s_B',stepB),ignore=('z',),db=DIR,s_B=dict(ignore=()))
+def proc(rab=1,rbc=2,rabc=3):
+  P_ini = MapProcess(stepA,a=1,b=2,c=3)
+  P_ab = MapProcess(stepB,P_ini,fr=('a','b'),to='ab',r=rab)
+  P_bc = MapProcess(stepB,P_ini,fr=('b','c'),to='bc',r=rbc)
+  P_abc = MapProcess(stepB,MapProcess(ChainMap,P_ab,P_bc),fr=('ab','bc'),to='abc',r=rabc)
+  return P_abc
 
 #--------------------------------------------------------------------------------------------------
 
@@ -57,7 +61,7 @@ def demo():
   from sys import executable as python
   DEMOS = (
       ((simplefunc.cache,),'simplefunc(1,2) ; simplefunc(1,y=2,z=36)'),
-      (proc.cache.bases,'proc(s_A=ARG(1,b=2,z=36),s_B=ARG(3)).v ; proc(s_A=ARG(1,2),s_B=ARG(3,1)).v'),
+      ((stepA.cache,stepB.cache),'proc()["abc"] ; proc(rabc=4)["abc"] ; proc(rbc=5)["abc"]'),
       ((longfunc.cache,),'longfunc(42,6) ; longfunc(None,4)'),
   )
   for caches,tests in DEMOS:
@@ -68,4 +72,3 @@ def demo():
     if not automatic:
       try: input('RET: continue; ^-C: stop')
       except: print(); break
-

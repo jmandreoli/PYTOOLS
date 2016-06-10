@@ -25,26 +25,6 @@ class PollingFlow:
     yield from map(self.fformatter,map(flatten,atinterval(self.source(),self.period)))
   def __str__(self): return self.str_
 
-class OpenWeatherFlow (PollingFlow):
-  fformatter = Formatter(
-    Formatter.Field(r'\.coord\.(lon)',sticky=True),
-    Formatter.Field(r'\.coord\.(lat)',sticky=True),
-    Formatter.Field(r'\.(dt)'),
-    Formatter.Field(r'\.main\.(temp)'),
-    Formatter.Field(r'\.main\.(pressure)'),
-    Formatter.Field(r'\.main\.(humidity)'),
-  )
-  def source(self):
-    import requests, re
-    url = 'http://api.openweathermap.org/data/2.5/weather?units=metric&q='+self.location
-    s = requests.Session()
-    # First hack the example key
-    m = re.search('appid=(\w+)',s.get('http://openweathermap.org/current').text)
-    if m is None: raise Exception('Cannot hack example key')
-    url += '&appid='+m.group(1)
-    # then download the data
-    while True: yield s.get(url).json()
-
 class ProcFlow (PollingFlow):
   fformatter = Formatter(((lambda nam: nam[1:]),False,float))
   def source(self):
@@ -55,17 +35,16 @@ class ProcFlow (PollingFlow):
         cpu_times_percent=[dict(user=cpu.user,system=cpu.system) for cpu in cpus],
         virtual_memory_percent=psutil.virtual_memory().percent,
         swap_memory_percent=psutil.swap_memory().percent,
-        disk_io = psutil.disk_io_counters().__dict__,
-        net_io = psutil.net_io_counters().__dict__,
+        disk_io = psutil.disk_io_counters()._asdict(),
+        net_io = psutil.net_io_counters()._asdict(),
       )
 
-weather_c = ChronoBlock(flow=OpenWeatherFlow(period=2,location='london'),db=DIR)
 proc_c = ChronoBlock(flow=ProcFlow(period=3),db=DIR)
 
 #--------------------------------------------------------------------------------------------------
 
 def demo():
-  for chrono in proc_c,weather_c:
+  for chrono in proc_c,:
     print(80*'-'); print('Clear',chrono); chrono.clear()
     if automatic:
       import threading, _thread; threading.Timer(10,_thread.interrupt_main).start()

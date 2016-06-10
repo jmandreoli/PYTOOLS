@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 import os, sqlite3, pickle, inspect, threading
 from pathlib import Path
-from functools import update_wrapper
+from functools import partial, update_wrapper
 from collections import namedtuple, defaultdict
 from collections.abc import MutableMapping
 from time import process_time, perf_counter
@@ -521,20 +521,17 @@ Attributes:
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-def lru_persistent_cache(ignore=(),factory=CacheBlock,**ka):
+def lru_persistent_cache(*a,**ka):
   r"""
-A decorator which applies to a function and replaces it by a persistently cached version. The function must be defined at the top-level of its module, to be compatible with :class:`Signature`.
-
-:param ignore: passed, together with the function, to the :class:`Signature` constructor
-:param ka: keyword argument dict passed to :class:`CacheBlock`
+A decorator which applies to a function and returns a persistently cached version of it. The function must be defined at the top-level of its module, to be compatible with :class:`Signature`. When not applied to a function (as sole positional argument), returns a version of itself with default keyword arguments given by *ka*.
   """
 #--------------------------------------------------------------------------------------------------
-  def transf(f):
+  def transf(f,ignore=(),factory=CacheBlock,**ka):
     c = factory(signature=Signature(f,ignore),**ka)
     F = lambda *a,**ka: c((a,ka))
     F.cache = c
     return update_wrapper(F,f)
-  return transf
+  return transf(*a,**ka) if a else partial(lru_persistent_cache,**ka)
 
 #--------------------------------------------------------------------------------------------------
 def getparams(func,ignore=(),code={inspect.Parameter.VAR_POSITIONAL:1,inspect.Parameter.VAR_KEYWORD:2}):

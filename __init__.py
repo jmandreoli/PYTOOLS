@@ -141,62 +141,72 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
 #==================================================================================================
 class Process:
   r"""
-Instances of this class implement closed symbolic expressions. The value of a process is held in attribute :attr:`value`. It can be computed by invoking method :meth:`incarnate`. Incarnation can be cancelled by invoking method :meth:`reset`. Incarnation is lost on pickling, and is not restored on unpickling. Subclasses should define automatic triggers of the incarnation (see e.g. class :class:`MapProcess`).
+Instances of this class implement closed symbolic expressions. The value of a process is held in attribute :attr:`value`. It can be computed by invoking method :meth:`incarnate`. Incarnation can be cancelled by invoking method :meth:`reset`. Incarnation is lost on pickling, and is not restored on unpickling. Subclasses should define automatic triggers of the incarnation (see e.g. class :class:`MapProcess`). Initially, a process is mutable, and its configuration can be changed. It becomes immutable (frozen) after the following operations: incarnation (even after it is reset), hashing, and pickling.
   """
 #==================================================================================================
 
   def __init__(self,func,*a,**ka):
     self.reset()
-    self.config = [a,ka.copy()]
-    self.func = func
-    self.opened = True
-
-  def __getstate__(self):
-    return self.func,self.config[0],tuple(sorted(self.config[1].items()))
-
-  def __setstate__(self,state):
-    self.reset()
-    self.func,a,ka = state
-    self.config = [a,dict(ka)]
-    self.opened = False
+    self.config = [func,a,ka.copy()]
+    self.key = None
 
   def rearg(self,*a,**ka):
     r"""
-Updates the config argument of this process. Must be called before first incarnation.
+Updates the config argument of this process. Raises an error if the process is frozen.
     """
-    assert self.opened
-    self.config[0] += a
-    self.config[1].update(ka)
-  
+    assert self.key is None
+    self.config[1] += a
+    self.config[2].update(ka)
+
   def refunc(self,f):
     r"""
-Replaces the config function of this process. Must be called before first incarnation.
+Replaces the config function of this process. Raises an error if the process is frozen.
     """
-    assert self.opened
-    self.func = f
-  
+    assert self.key is None
+    self.config[0] = f
+
   def incarnate(self):
     if self.incarnated: return
     self.incarnated = True
-    self.opened = False
-    a,ka = self.config
-    self.value = self.func(*a,**ka)
+    self.freeze()
+    func,a,ka = self.config
+    self.value = func(*a,**ka)
 
   def reset(self):
     self.incarnated = False
     self.value = None
 
+  def freeze(self):
+    if self.key is None:
+      from inspect import getcallargs, unwrap, signature
+      func,a,ka = self.config
+      f = unwrap(func)
+      d = getcallargs(f,*a,**ka)
+      self.key = func,tuple((tuple(sorted(d[p.name].items())) if p.kind==p.VAR_KEYWORD else d[p.name]) for p in signature(f).parameters.values())
+
   def as_html(self,incontext):
-    import inspect
-    func = inspect.unwrap(self.func)
-    f = VERBATIM('{}.{}{}'.format(func.__module__,func.__name__,('*' if self.incarnated else '')))
-    return html_parlist((f,)+self.config[0],sorted(self.config[1].items()),incontext,deco=('[|','|',']'))
+    func,a,ka = self.config
+    f = VERBATIM('{}.{}{}'.format(func.__module__,func.__name__,('' if self.incarnated else '?' if self.key is None else '!')))
+    return html_parlist((f,)+a,sorted(ka.items()),incontext,deco=('[|','|',']'))
 
   def _repr_html_(self):
     from lxml.etree import tounicode
     return tounicode(html_incontext(self))
 
-  def __hash__(self): return hash(self.__getstate__())
+  def __getstate__(self):
+    self.freeze()
+    func,a,ka = self.config
+    return func,a,tuple(sorted(ka.items())),self.key
+  def __setstate__(self,state):
+    self.reset()
+    func,a,ka,self.key = state
+    self.config = func,a,dict(ka)
+  def __hash__(self):
+    self.freeze()
+    return hash(self.key)
+  def __eq__(self,other):
+    if not isinstance(other,Process): return False
+    return self.config == other.config
   def __repr__(self): return repr(self.value) if self.incarnated else super().__repr__()
 
 class MapProcess (Process,Mapping):
@@ -207,165 +217,11 @@ Processes of this class are also read-only mappings and trigger incarnation on a
   def __len__(self): self.incarnate(); return len(self.value)
   def __iter__(self): self.incarnate(); return iter(self.value)
 
-#==================================================================================================
-class Tree:
+class CallProcess (Process):
   r"""
-Objects of this class are trees with IPython navigation facilities.
-
-Attributes (must be defined in sub-classes):
-
-.. attribute:: children
-
-   A sequence of :class:`Tree` objects, the offspring of this tree.
-
-.. attribute:: summary
-
-   A string or tuple whose first component is a string and the other components (if any) are name-value pairs. In the latter case, the tuple is formatted into a string. The string must be an HTML representation of the root of this tree.
-
-Methods:
+Processes of this class are also callables, and trigger incarnation on invocation, then delegate the invocation to their value.
   """
-#==================================================================================================
-
-  style_folded =   dict(width='3mm',height='3mm',padding='0cm',font_size='xx-small',label='+',background_color='gray')
-  style_unfolded = dict(width='3mm',height='3mm',padding='0cm',font_size='xx-small',label='-',background_color='darkblue')
-  style_summary = 'border-left: thin solid blue; padding-top: 0mm; padding-bottom: 0mm; padding-left: 1mm; padding-right: 1mm;'
-
-  def ipynav(self):
-    r"""
-Displays a widget for nagigating this tree.
-    """
-    from IPython.display import display
-    from ipywidgets.widgets import HBox, VBox, Button, HTML
-    def lines(node,pre):
-      s = exp.get(pre)
-      if s is None: s = exp[pre] = [False]; s.append(HBox(children=tuple(getline(node,pre,s))))
-      yield s[1]
-      if s[0]:
-        for k,nodec in node.children: yield from lines(nodec,pre+(k,))
-    def getline(node,pre,s):
-      yield HTML('<div style="padding-left: {}cm">&nbsp;</div>'.format(len(pre)+.2))
-      buttons = Button(**node.style_folded), Button(visible=False,**node.style_unfolded)
-      for i,b in enumerate(buttons): b.dual = buttons[1-i]; b.cell = s; b.on_click(nav); yield b
-      if pre:
-        yield HTML('<div style="padding-left:1mm;"><span style="background-color: lavender;" title="{}">{}</style></div>'.format('.'.join(pre),pre[-1]))
-      x = node.summary
-      try:
-        if isinstance(x,tuple):
-          t = htmlsafe(x[0]); x = x[1:]
-          if x: x = ' '.join('<span style="{}"><em>{}</em>: {}</span>'.format(node.style_summary,k,htmlsafe(v)) for k,v in x)
-          else: x = ''
-          x = '<b>{}</b> {}'.format(t,x)
-        elif not isinstance(x,str): raise Exception('Unknown summary format')
-      except Exception as e: x = '<span style="color: red;">{}</span>'.format(e)
-      yield HTML('<div style="padding-left:3mm;">{}</div>'.format(x))
-    def nav(b):
-      b.cell[0] = not b.cell[0]
-      b.visible = False
-      b.dual.visible = True
-      display(next(wdgs))
-    def wdggen():
-      while True:
-        wdg = VBox(children=tuple(lines(self,())))
-        yield wdg
-        wdg.close()
-    exp = {}
-    wdgs = wdggen()
-    display(next(wdgs))
-
-#==================================================================================================
-class otree (Tree):
-  r"""
-Objects of this class are :class:`Tree` instances which represent arbitrary objects as trees.
-
-:param obj: an arbitrary object
-
-Methods:
-  """
-#==================================================================================================
-
-  Register = [],[]
-  @staticmethod
-  def register(spec,Register=Register):
-    r"""
-:param spec: the type of objects to which the hook applies
-:type spec: :class:`type`\|\ :class:`str`
-
-Registers a function as a hook. Use as decorator. Example::
-
-  @otree.register('numpy.ndarray')
-  def get_children(obj): ...
-
-will replace the default :attr:`get_children` function attribute at creation time, whenever the argument *obj* is of class :class:`numpy.ndarray` (only if module :mod:`numpy` is already loaded). Note that it is important to keep :attr:`get_children` as a function and not set the :attr:`children` attribute directly, so offspring computation is done only on demand (otherwise, it may loop).
-    """
-    if isinstance(spec,str): i,spec = 1,tuple(spec.rsplit('.',1))
-    elif isinstance(spec,type): i=0
-    else: raise Exception('Argument must be a string or a class')
-    return lambda f,i=i,spec=spec: Register[i].append((f.__name__,spec,f))
-
-  def __init__(self,obj):
-    from sys import modules
-    L0,L1 = self.Register
-    for i,(a,(mod,klass),f) in reversed(list(enumerate(L1))): # update independent of self,obj
-      m = modules.get(mod)
-      if m is not None: L0.insert(0,(a,getattr(m,klass),f)); del L1[i]
-    self.obj = obj
-    for a,klass,f in L0:
-      if isinstance(obj,klass): setattr(self,a,f)
-
-  @staticmethod
-  def get_children(obj):
-    r"""
-Returns the offspring of an arbitrary object *obj* as an iterator of pairs, each with a string label and a :class:`Tree` instance. By default, returns the sorted content of the attribute dictionary of *obj* (if any), where each value is encapsulated in an :class:`otree` instance. Can be overriden by subclassing, or by registering a hook using :meth:`register`.
-    """
-    if hasattr(obj,'__dict__'):
-      for k,x in sorted(obj.__dict__.items()): yield k,otree(x)
-
-  @staticmethod
-  def get_summary(obj):
-    r"""
-Returns the description of an arbitrary object *obj* as an iterator of pairs, each with a string label and an arbitrary value. By default, returns the :func:`len` of *obj* if it is a sequence, or its signature if it is a routine, nothing otherwise. Can be overriden by subclassing, or by registering a hook using :meth:`register`.
-    """
-    import inspect
-    if inspect.isroutine(obj):
-      yield 'signature',inspect.signature(obj)
-    else:
-      try: yield 'len',len(obj)
-      except: pass
-
-  @ondemand
-  def children(self): return tuple(self.get_children(self.obj))
-  @ondemand
-  def summary(self):
-    t = '{0.__module__}.{0.__qualname__}'.format(type(self.obj))
-    return (t,)+tuple(self.get_summary(self.obj))
-
-@otree.register('numbers.Number')
-def get_children(obj): return ()
-@otree.register('numbers.Number')
-def get_summary(obj): yield 'value',obj
-
-@otree.register('pandas.core.base.PandasObject')
-def get_children(obj):
-  if hasattr(obj,'columns'):
-    for c in obj.columns: yield c,otree(obj[c])
-@otree.register('pandas.core.base.PandasObject')
-def get_summary(obj):
-  if hasattr(obj,'shape'): yield 'shape', obj.shape
-  if hasattr(obj,'dtype'): yield 'dtype', obj.dtype
-
-@otree.register('numpy.ndarray')
-def get_children(obj): return ()
-@otree.register('numpy.ndarray')
-def get_summary(obj): yield 'shape',obj.shape; yield 'dtype',obj.dtype
-
-@otree.register('scipy.sparse.base.spmatrix')
-def get_children(obj): return ()
-@otree.register('scipy.sparse.base.spmatrix')
-def get_summary(obj):
-  n = 1
-  for d in obj.shape: n *= d
-  yield 'shape',obj.shape
-  yield 'density',obj.nnz/n
+  def __call__(self,*a,**ka): self.incarnate(); return self.value(*a,**ka)
 
 #==================================================================================================
 def ipybrowse(D,start=1,pgsize=10):
@@ -489,7 +345,7 @@ def html_parlist(La,Lka,incontext,deco=('','',''),style='display: inline; paddin
   return E.DIV(*h(),style='padding:0')
 
 #==================================================================================================
-def htmlsafe(x):
+def html_safe(x):
   r"""
 Returns an HTML safe representation of *x*.
   """
@@ -564,77 +420,6 @@ Makes sure the file at *path* is a SQlite3 database with schema exactly equal to
       if S!=schema: raise Exception('database has a version conflict')
     else:
       for sql in schema: conn.execute(sql)
-
-#==================================================================================================
-def type_annotation_autocheck(f):
-  r"""
-Decorator which uses type annotations in the signature of *f* to include a type-check in it. Each argument in the signature can be annotated by
-
-* a type
-* a set, taken to be an enumeration of all the allowed values
-* a callable, passed the value of the argument and expected to return a boolean indicating whether it is valid
-* a tuple thereof, interpreted disjunctively
-
-The doc string of function *f* is also modified so that each sphinx ``:param:`` declaration is augmented with the corresponding ``:type:`` declaration (whenever possible).
-  """
-#==================================================================================================
-  from functools import update_wrapper
-  import re
-  def addtype(m):
-    t = argcheck.get(m.group(2))
-    if t is None: return m.group(0)
-    return '{}:type {}: {}{}'.format(m.group(1),m.group(2),t.rst,m.group(0))
-  check,argcheck = type_annotation_checker(f)
-  def F(*a,**ka):
-    check(*a,**ka)
-    return f(*a,**ka)
-  F = update_wrapper(F,f)
-  if F.__doc__ is not None: F.__doc__ = re.sub(r'(\s*):param\s+(\w+)\s*:',addtype,F.__doc__)
-  return F
-
-#==================================================================================================
-def type_annotation_checker(f):
-#==================================================================================================
-  import inspect
-  def nstr(c): return c.__qualname__ if c.__module__ in ('builtins',f.__module__) else c.__module__+'.'+c.__qualname__
-  def nrst(c): return ':class:`{}`'.format(nstr(c))
-  def ravel(c):
-    for cc in c:
-      if isinstance(cc,tuple): yield from ravel(cc)
-      else: yield cc
-  def testera(c):
-    if isinstance(c,set):
-      t = lambda v,c=c: v in c
-      t.str = t.rst = str(c)
-    elif callable(c):
-      t = lambda v,c=c: c(v)
-      t.str,t.rst = nstr(c),nrst(c)
-    else: raise TypeError('Expected type|set|callable|tuple thereof')
-    return t
-  def tester(c):
-    if isinstance(c,tuple):
-      c = [(cc,(None if isinstance(cc,type) else testera(cc))) for cc in ravel(c)]
-      T = tuple(tt for cc,tt in c if tt is not None)
-      C = tuple(cc for cc,tt in c if tt is None)
-      if C:
-        if T: t = lambda v,C=C,T=T: isinstance(v,C) or any(tt(v) for tt in T)
-        else: t = lambda v,C=C: isinstance(v,C)
-      else: t = lambda v,T=T: any(tt(v) for tt in T)
-      t.str = '|'.join((nstr(cc) if tt is None else tt.str) for cc,tt in c)
-      t.rst = r'\|\ '.join((nrst(cc) if tt is None else tt.rst) for cc,tt in c)
-    elif isinstance(c,type):
-      t = lambda v,c=c: isinstance(v,c)
-      t.str,t.rst = nstr(c),nrst(c)
-    else: t = testera(c)
-    return t
-  sig = inspect.signature(f)
-  argcheck = dict((k,tester(p.annotation)) for k,p in sig.parameters.items() if p.annotation is not p.empty)
-  def check(*a,**ka):
-    b = sig.bind(*a,**ka)
-    for k,v in b.arguments.items():
-      t = argcheck.get(k)
-      if t is not None and not t(v): raise TypeError('Argument {} failed to match {}'.format(k,t.str))
-  return check, argcheck
 
 #==================================================================================================
 def set_qtbinding(b=None):
@@ -758,7 +543,7 @@ class SQLinitMetainfoException (Exception): pass
 #==================================================================================================
 class SQLHandler (logging.Handler):
   r"""
-:param engine: a sqlalchemy engine
+:param engine: a sqlalchemy engine (or its url)
 :param label: a text label 
 
 A logging handler class which writes the log messages into a database.
@@ -923,12 +708,29 @@ By default, method :meth:`init` of this class is identical to method :meth:`defa
   del config
 
 #==================================================================================================
+def config_env(name,deflt=None):
+  r"""
+:param name: the name of an environment variable
+:type name: :class:`str`
+:param deflt: an arbitrary python object (optional)
+
+Returns a value obtained by executing the string value of an environment variable in a dictionary, then returning the content of key `value` in that dictionary.
+  """
+#==================================================================================================
+  import os
+  x = os.environ.get(name)
+  if x is None: return deflt
+  d = {}
+  exec(x,d)
+  return d['value']
+
+#==================================================================================================
 def iso2date(iso):
-  r'''
+  r"""
 :param iso: triple as returned by :meth:`datetime.isocalendar`
 
 Returns the :class:`datetime` instance for which the :meth:`datetime.isocalendar` method returns *iso*.
-  '''
+  """
 #==================================================================================================
   from datetime import date,timedelta
   isoyear,isoweek,isoday = iso

@@ -106,6 +106,8 @@ Methods:
   """
 #==================================================================================================
 
+  timeout = 120.
+
   def __new__(cls,spec,listing={},lock=threading.Lock()):
     """
 Generates a :class:`CacheDB` object.
@@ -143,7 +145,7 @@ Note that this constructor is locally cached on the resolved path *spec*.
   def __getnewargs__(self): return self.path,
 
   def connect(self,**ka):
-    conn = sqlite3.connect(self.dbpath,**ka)
+    conn = sqlite3.connect(self.dbpath,timeout=self.timeout,**ka)
     conn.create_function('cellrm',2,lambda cell,size,s=self.storage: s.remove(cell,size))
     return conn
 

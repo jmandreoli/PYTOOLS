@@ -313,17 +313,14 @@ Objects of this class control a menu added to a figure. The menu is located on t
 #==================================================================================================
 
 #------------------------------------------------------------------------------
-def pager(L,shape,vmake,vpaint,*_a,offset=0,savepath=None,saveargs={},savedefaults=dict(format='svg',orientation='landscape',frameon=False),bstyle=dict(fontsize='small',backgroundcolor='k',color='w'),**_ka):
+def pager(L,shape,vmake,vpaint,*_a,offset=0,save=None,savedefaults=dict(dirname='pager-sav',format='svg'),bstyle={},**_ka):
   r"""
 :param L: a list of arbitrary objects other than :const:`None`
 :param shape: a pair (number of rows, number of columns) or a single number if they are equat
 :param vmake: a function to initialise the display (see below)
 :param vpaint: a function to instantiate the display for a given page (see below)
-:param savepath: the path to a directory for saving the display of all the pages (optional)
 :param savedefaults: used as default keyword arguments of method :meth:`savefig` when saving pages
 :type savedefaults: :class:`dict`
-:param saveargs: used as keyword arguments of method :meth:`savefig` when saving pages, overiding *savedefaults*
-:type saveargs: :class:`dict`
 
 This function first create a :class:`Cell` instance with all the remaining arguments, then splits it into a grid of sub-cells according to *shape*, then displays *L* page per page on the grid. Each page displays a slice of *L* of length equal to the product of the components of *shape* (or less, for the final page). The toolbar is enriched with page navigation buttons. A save button also allows to save the whole collection of pages in a given directory (beware: may be long).
 
@@ -337,52 +334,48 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
   from numpy import ceil, rint, clip
   from matplotlib.text import Text
   from matplotlib.widgets import Slider
+  from matplotlib.pyplot import close
+  from pathlib import Path
   def gen(L):
     yield from L
     while True: yield None
   def genc(cell):
     Nr,Nc = cell.shape
     yield from (cell[row,col] for row in range(Nr) for col in range(Nc))
-  def paintp(p):
+  def paintp(cell,p,draw=True):
     for c,x in zip(genc(cell),gen(L[p*cellpp:])): vpaint(c,x)
-    cell.figure.canvas.draw()
+    if draw: cell.figure.canvas.draw()
   def toggle_ctrl():
     ctrl.ax.set_visible(not ctrl.ax.get_visible())
     cell.figure.canvas.draw()
-  def saveall():
-    from pathlib import Path
-    savp = Path(savepath).resolve()
-    if any(savp.iterdir()):
-      altsavp = savp.with_suffix('.sav')
-      assert not altsavp.exists()
-      savp.rename(altsavp)
-      savp.mkdir()
-      altsavp.rename(savp/'saved')
-    try:
-      for p in range(npage):
-        logger.info('building page %s',p)
-        paintp(p)
-        cell.figure.savefig(str((savp/'p{:02d}'.format(p)).with_suffix('.'+saveargs['format'])),**saveargs)
-    finally:
-      ctrl.set_val(ctrl.val)
+  def save_all():
+    #import multiprocessing
+    #multiprocessing.get_context('spawn').Process(target=pager,args=(L,shape,vmake,vpaint),kwargs=dict(save={})).start()
+    pager(L,shape,vmake,vpaint,save={})
   cell = Cell.create(*_a,**_ka)
-  actions = [
-    ('<<',(lambda:ctrl.set_val(clip(ctrl.val-1,1,npage)))),
-    ('>>',(lambda:ctrl.set_val(clip(ctrl.val+1,1,npage)))),
-    ('toggle-ctrl',toggle_ctrl),
-  ]
-  if savepath is not None:
-    saveargs = saveargs.copy()
-    for k,v in savedefaults.items(): saveargs.setdefault(k,v)
-    actions.append(('save-all',saveall))
-  try: menu = cell.figure.canvas.toolbar; menu.addAction
-  except: menu = Menu(cell.figure,**bstyle)
-  for a,f in actions: menu.addAction(a,f)
   Nr,Nc = (shape,shape) if isinstance(shape,int) else shape
   cell.make_grid(Nr,Nc)
   for c in genc(cell): vmake(c)
   cellpp = Nr*Nc
   npage = int(ceil(len(L)/cellpp))
-  ctrl = Slider(cell.figure.add_axes((0.1,0.,.8,.03),visible=False,zorder=1),'page',.5,npage+.5,valinit=0,valfmt='%.0f/{}'.format(npage),closedmin=False,closedmax=False)
-  ctrl.on_changed(lambda p:paintp(int(rint(p))-1))
-  ctrl.set_val(1+offset/cellpp)
+  if save is None:
+    actions = [
+      ('<<',(lambda:ctrl.set_val(clip(ctrl.val-1,1,npage)))),
+      ('>>',(lambda:ctrl.set_val(clip(ctrl.val+1,1,npage)))),
+      ('toggle-ctrl',toggle_ctrl),
+      ('save-all',save_all),
+      ]
+    try: menu = cell.figure.canvas.toolbar; menu.addAction
+    except: menu = Menu(cell.figure,**bstyle)
+    for a,f in actions: menu.addAction(a,f)
+    ctrl = Slider(cell.figure.add_axes((0.1,0.,.8,.03),visible=False,zorder=1),'page',.5,npage+.5,valinit=0,valfmt='%.0f/{}'.format(npage),closedmin=False,closedmax=False)
+    ctrl.on_changed(lambda p:paintp(cell,int(rint(p))-1))
+    ctrl.set_val(1+offset/cellpp)
+  else:
+    s = savedefaults.copy()
+    s.update(save)
+    pth = Path(s.pop('dirname'))
+    for p in range(npage):
+      paintp(cell,p,False)
+      cell.figure.savefig(str((pth/'p{:02d}'.format(p)).with_suffix('.'+s['format'])),**s)
+    close(cell.figure.number)

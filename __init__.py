@@ -313,21 +313,26 @@ A helper is any string. A vtype is either a python basic type (\ :class:`bool`, 
 def html_incontext(x):
 #==================================================================================================
   from lxml.builder import E
+  def format(L):
+    L = sorted(L)
+    t = html_table(((k,(x,)) for k,x in L[1:]),((lambda x:x),))
+    t.insert(0,E.COL(style='background-color: cyan'))
+    return E.DIV(L[0][1],t,style='border:thin solid cyan')
   L = []
   ctx = {}
   def incontext(v):
     if isinstance(v,VERBATIM): return v.verbatim
     try: k = ctx.get(v)
-    except: return repr(v)
+    except: return E.SPAN(repr(v))
     if k is None:
       if hasattr(v,'as_html'):
         ctx[v] = k = len(ctx)
         L.append((k,v.as_html(incontext)))
-      else: return repr(v)
+      else: return E.SPAN(repr(v))
     return E.SPAN('?{}'.format(k),style='color: blue')
   e = incontext(x)
   n = len(L)
-  return e if n==0 else L[0][1] if n==1 else html_table(((k,(x,)) for k,x in sorted(L)),((lambda x:x),))
+  return e if n==0 else L[0][1] if n==1 else format(L)
 
 class VERBATIM:
   def __init__(self,x): self.verbatim = x

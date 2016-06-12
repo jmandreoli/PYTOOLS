@@ -143,6 +143,8 @@ Note that this constructor is locally cached on the resolved path *spec*.
     return self
 
   def __getnewargs__(self): return self.path,
+  def __hash__(self): return hash(self.path)
+  # __eq__ not needed because default behaviour ('is') is OK due to spec cacheing
 
   def connect(self,**ka):
     conn = sqlite3.connect(self.dbpath,timeout=self.timeout,**ka)
@@ -200,9 +202,9 @@ Note that this constructor is locally cached on the resolved path *spec*.
 
   def _repr_html_(self):
     from lxml.etree import tounicode
-    return tounicode(self.as_html())
-  def as_html(self):
-    return html_stack(*(v.as_html() for k,v in sorted(self.items())))
+    return tounicode(html_incontext(self))
+  def as_html(self,incontext):
+    return html_stack(*(v.as_html(incontext) for k,v in sorted(self.items())))
   def __str__(self): return 'Cache<{}>'.format(self.path)
 
 #==================================================================================================
@@ -240,6 +242,9 @@ Methods:
     self.block = db.getblock(signature) if block is None else block
     if maxsize is not None: self.resize(maxsize)
     if clear: self.clear()
+
+  def __hash__(self): return hash((self.db,self.block))
+  def __eq__(self,other): return isinstance(other,CacheBlock) and self.db is other.db and self.block == other.block
 
   def clear_error(self):
     r"""
@@ -362,9 +367,9 @@ Checks whether there is a cache overflow and applies the LRU policy.
 
   def _repr_html_(self):
     from lxml.etree import tounicode
-    return tounicode(self.as_html())
-  def as_html(self,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz)),time_fmt_=(lambda t: '' if t is None else time_fmt(t))):
-    return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,self.sig.html,size_fmt_,time_fmt_,time_fmt_),title='{}: {}'.format(self.block,self.sig))
+    return tounicode(html_incontext(self))
+  def as_html(self,incontext,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz)),time_fmt_=(lambda t: '' if t is None else time_fmt(t))):
+    return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,(lambda ckey,h=self.sig.html: h(ckey,incontext)),size_fmt_,time_fmt_,time_fmt_),title='{}: {}'.format(self.block,self.sig))
   def __str__(self): return 'Cache<{}:{}>'.format(self.db.path,self.sig)
 
 #==================================================================================================
@@ -405,7 +410,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
     a,ka = arg
     return self.func(*a,**ka)
 
-  def html(self,ckey):
+  def html(self,ckey,incontext):
     r"""
 Argument *ckey* must have been obtained by invocation of method :meth:`getkey`. Returns an HTML formatted representation of the argument of that invocation.
     """
@@ -413,7 +418,7 @@ Argument *ckey* must have been obtained by invocation of method :meth:`getkey`. 
       for v,(p,typ) in zip(ckey,((p,typ) for p,typ in self.params if typ!=-1)):
         if typ==2: yield from v
         else: yield p,v
-    return html_incontext(ParList(*h(pickle.loads(ckey))))
+    return html_parlist((),h(pickle.loads(ckey)),incontext)
 
   def info(self): return self.name
   def __str__(self,mark={-1:'-',0:'',1:'*',2:'**'}): return '{}({})'.format(self.name,','.join(mark[typ]+p for p,typ in self.params))
@@ -541,10 +546,6 @@ def getparams(func,ignore=(),code={inspect.Parameter.VAR_POSITIONAL:1,inspect.Pa
   for p in inspect.signature(func).parameters.values():
     # coding needed because p.kind is not pickable/unpickable before python 3.5
     yield p.name,(-1 if p.name in ignore else code.get(p.kind,0))
-
-class ParList:
-  def __init__(self,*L): self.L = L
-  def as_html(self,incontext): return html_parlist((),self.L,incontext)
 
 #--------------------------------------------------------------------------------------------------
 class SignatureMismatchException (Exception):

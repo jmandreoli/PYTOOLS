@@ -313,7 +313,7 @@ Objects of this class control a menu added to a figure. The menu is located on t
 #==================================================================================================
 
 #------------------------------------------------------------------------------
-def pager(L,shape,vmake,vpaint,*_a,offset=0,save=None,savedefaults=dict(dirname='pager-sav',format='svg'),bstyle={},**_ka):
+def pager(L,shape,vmake,vpaint,offset=0,save=None,savedefaults=dict(dirname='pager-sav',format='svg'),bstyle={},**_ka):
   r"""
 :param L: a list of arbitrary objects other than :const:`None`
 :param shape: a pair (number of rows, number of columns) or a single number if they are equat
@@ -336,6 +336,7 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
   from matplotlib.widgets import Slider
   from matplotlib.pyplot import close
   from pathlib import Path
+  from shutil import rmtree
   def gen(L):
     yield from L
     while True: yield None
@@ -349,10 +350,12 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
     ctrl.ax.set_visible(not ctrl.ax.get_visible())
     cell.figure.canvas.draw()
   def save_all():
+    ka = _ka.copy()
+    ka.update(fig=None,figsize=((cell.figure.get_figwidth(),cell.figure.get_figheight())))
     #import multiprocessing
-    #multiprocessing.get_context('spawn').Process(target=pager,args=(L,shape,vmake,vpaint),kwargs=dict(save={})).start()
-    pager(L,shape,vmake,vpaint,*_a,save={},savedefaults=savedefaults,**_ka)
-  cell = Cell.create(*_a,**_ka)
+    #multiprocessing.get_context('spawn').Process(target=pager,args=(L,shape,vmake,vpaint),kwargs=dict(save={},savedefaults=savedefaults,**ka)).start()
+    pager(L,shape,vmake,vpaint,save={},savedefaults=savedefaults,**ka)
+  cell = Cell.create(**_ka)
   Nr,Nc = (shape,shape) if isinstance(shape,int) else shape
   cell.make_grid(Nr,Nc)
   for c in genc(cell): vmake(c)
@@ -375,6 +378,12 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
     s = savedefaults.copy()
     s.update(save)
     pth = Path(s.pop('dirname'))
+    try:
+      assert pth.isdir()
+      for f in list(pth.iterdir()): rmtree(str(f))
+    except Exception as e:
+      logger.warn('Error on save directory %s: %s',path,e)
+      raise
     try:
       for p in range(npage):
         paintp(cell,p,False)

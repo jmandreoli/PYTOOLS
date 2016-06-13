@@ -351,7 +351,7 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
   def save_all():
     #import multiprocessing
     #multiprocessing.get_context('spawn').Process(target=pager,args=(L,shape,vmake,vpaint),kwargs=dict(save={})).start()
-    pager(L,shape,vmake,vpaint,save={})
+    pager(L,shape,vmake,vpaint,*_a,save={},savedefaults=savedefaults,**_ka)
   cell = Cell.create(*_a,**_ka)
   Nr,Nc = (shape,shape) if isinstance(shape,int) else shape
   cell.make_grid(Nr,Nc)
@@ -375,7 +375,9 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
     s = savedefaults.copy()
     s.update(save)
     pth = Path(s.pop('dirname'))
-    for p in range(npage):
-      paintp(cell,p,False)
-      cell.figure.savefig(str((pth/'p{:02d}'.format(p)).with_suffix('.'+s['format'])),**s)
+    try:
+      for p in range(npage):
+        paintp(cell,p,False)
+        cell.figure.savefig(str((pth/'p{:02d}'.format(p)).with_suffix('.'+s['format'])),**s)
+    except Exception as e: logger.warn('Error saving page %s: %s',p,e)
     close(cell.figure.number)

@@ -660,9 +660,9 @@ Class *C* should provide a method to insert new objects in the persistent class 
 
   def _repr_html_(self):
     from lxml.etree import tounicode
-    return tounicode(self.as_html())
-  def as_html(self):
-    return html_stack(*(v.as_html() for k,v in sorted(self.items())))
+    return tounicode(html_incontext(self))
+  def as_html(self,incontext):
+    return html_stack(*(v.as_html(incontext) for k,v in sorted(self.items())))
 
   cache = {}
   @classmethod

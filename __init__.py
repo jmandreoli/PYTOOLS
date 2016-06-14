@@ -322,14 +322,18 @@ def html_incontext(x):
   ctx = {}
   def incontext(v):
     if isinstance(v,VERBATIM): return v.verbatim
-    try: k = ctx.get(v)
+    try: q = ctx.get(v)
     except: return E.SPAN(repr(v))
-    if k is None:
+    if q is None:
       if hasattr(v,'as_html'):
-        ctx[v] = k = len(ctx)
-        L.append((k,v.as_html(incontext)))
+        ctx[v] = k,ref = len(ctx),'py_{}'.format(id(v))
+        try: x = v.as_html(incontext)
+        except: x = E.SPAN(repr(v))
+        L.append((k,E.DIV(x,id=ref)))
       else: return E.SPAN(repr(v))
-    return E.SPAN('?{}'.format(k),style='color: blue')
+    else: k,ref = q
+    js = lambda x,ref=ref: 'document.getElementById(\'{}\').style.border=\'{}\''.format(ref,('thick solid red' if x else 'inherit'))
+    return E.SPAN('?{}'.format(k),style='color: blue',onmouseenter=js(True),onmouseleave=js(False))
   e = incontext(x)
   n = len(L)
   return e if n==0 else L[0][1] if n==1 else format(L)

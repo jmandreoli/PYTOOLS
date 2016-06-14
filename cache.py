@@ -17,7 +17,7 @@ from functools import partial, update_wrapper
 from collections import namedtuple, defaultdict
 from collections.abc import MutableMapping
 from time import process_time, perf_counter
-from . import ARG, SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_incontext, html_parlist
+from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_incontext, html_parlist
 
 # Data associated with each cell is kept in a separate file
 # in the same folder as the database
@@ -554,7 +554,3 @@ Exception raised when restoring a passive signature fails.
   """
 #--------------------------------------------------------------------------------------------------
   pass
-#--------------------------------------------------------------------------------------------------
-class State: pass
-#--------------------------------------------------------------------------------------------------
-

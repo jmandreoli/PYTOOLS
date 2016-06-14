@@ -332,7 +332,7 @@ def html_incontext(x):
         L.append((k,E.DIV(x,id=ref)))
       else: return E.SPAN(repr(v))
     else: k,ref = q
-    js = lambda x,ref=ref: 'document.getElementById(\'{}\').style.border=\'{}\''.format(ref,('thick solid red' if x else 'inherit'))
+    js = lambda x,ref=ref: 'document.getElementById(\'{}\').style.outline=\'{}\''.format(ref,('thick solid red' if x else 'inherit'))
     return E.SPAN('?{}'.format(k),style='color: blue',onmouseenter=js(True),onmouseleave=js(False))
   e = incontext(x)
   n = len(L)

@@ -263,7 +263,7 @@ Returns a subclass of :class:`list` with an IPython pretty printer for columns. 
   return t
 
 #==================================================================================================
-def ipysetup(D,helpers={},types={},_hstyle='display: inline; padding-left: 3mm; vertical-align: middle',_sort=(lambda x:x),**buttons):
+def ipysetup(D,helpers={},types={},_sort=(lambda x:x),**buttons):
   r"""
 Sets values in a dictionary through an interface.
 
@@ -277,35 +277,34 @@ Sets values in a dictionary through an interface.
 A helper is any string. A vtype is either a python basic type (\ :class:`bool`, :class:`str`, :class:`int`, :class:`float`), or a tuple of strings, or an instance of :class:`slice` (possibly with float arguments). When a button is specified by a key and a dict value, a button labeled with that key is displayed, which, when clicked, updates the target dictionary with its value.
   """
 #==================================================================================================
-  from ipywidgets.widgets import HTML, Text, IntText, FloatText, IntSlider, FloatSlider, Dropdown, Checkbox, Button, HBox, VBox
+  from ipywidgets.widgets import Text, Textarea, IntText, FloatText, IntSlider, FloatSlider, Dropdown, Checkbox, Button, HBox, VBox
   from functools import partial
-  def upd(ev):
-    w = ev['owner']; D[w.description] = w.value
-  def upda(b):
+  def upd(ev): w = ev['owner']; D[w.description] = w.value
+  def updw(w,x): w.value = x
+  def upda(data):
     for w in W:
-      x = b.data.get(w.description)
+      x = data.get(w.description)
       if x is not None: w.value = x
-  def ClickButton(label,action,data):
-    b = Button(description=label); b.on_click(action); b.data = data; return b
+  def Action(action,**ka):
+    b = Button(**ka); b.on_click(lambda b: action()); return b
   def row():
     for k,v in _sort(D.items()):
       typ = types.get(k,type(v))
       if typ is bool: F = Checkbox
-      elif typ is str: F = Text
+      elif typ is str: F = Textarea if '\n' in str(v) else Text
       elif typ is int: F = IntText
       elif typ is float: F = FloatText
       elif isinstance(typ,slice):
         slider = IntSlider if isinstance(v,int) else FloatSlider
         F = partial(slider,min=(typ.start or 0),max=typ.stop,step=(typ.step or 0))
-      elif isinstance(typ,tuple) or isinstance(typ,list):
-        F = partial(Dropdown,options=typ)
+      elif isinstance(typ,(tuple,list)): F = partial(Dropdown,options=typ)
       else: raise TypeError('Key: {}'.format(k))
       w = F(description=k,value=v)
       W.append(w)
       w.observe(upd, 'value')
-      yield HBox(children=(w,HTML(description='help',value='<span style="{}" title="{}">?</span>'.format(_hstyle,helpers.get(k,'')))))
+      yield HBox(children=(Action(partial(updw,w,v),description='?',tooltip=helpers.get(k,'')),w))
     if buttons:
-      yield HBox(children=[ClickButton(label,upda,data) for label,data in sorted(buttons.items())])
+      yield HBox(children=[Action(partial(upda,data),description=label) for label,data in sorted(buttons.items())])
   W = []
   return VBox(children=list(row()))
 

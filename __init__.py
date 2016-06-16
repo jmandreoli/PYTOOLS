@@ -80,6 +80,16 @@ Objects of this class act as dict objects, except their keys are also attributes
   def __setstate__(self,r): self.__dict__['_ref'] = r
 
 #==================================================================================================
+class HtmlPlugin:
+  r"""
+Instances of this class have an HTML representation based on :func:`html_incontext`.
+  """
+#==================================================================================================
+  def _repr_html_(self):
+    from lxml.etree import tostring
+    return tostring(html_incontext(self),encoding='unicode')
+
+#==================================================================================================
 class ARG (tuple):
   r"""
 Instances of this (immutable) class are pairs of a tuple of positional arguments and a dict of keyword arguments. Useful to manipulate function invocation arguments without making the invocation.
@@ -139,9 +149,15 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
     yield o,ax
 
 #==================================================================================================
-class Process:
+class Process (HtmlPlugin):
   r"""
 Instances of this class implement closed symbolic expressions. The value of a process is held in attribute :attr:`value`. It can be computed by invoking method :meth:`incarnate`. Incarnation can be cancelled by invoking method :meth:`reset`. Incarnation is lost on pickling, and is not restored on unpickling. Subclasses should define automatic triggers of the incarnation (see e.g. class :class:`MapProcess`). Initially, a process is mutable, and its configuration can be changed. It becomes immutable (frozen) after the following operations: incarnation (even after it is reset), hashing, and pickling.
+
+:param func: the function of the symbolic expression; should be defined at the top-level of its module to be pickable
+:param a: list of positional arguments of the symbolic expression
+:param ka: dictionary of keyword arguments of the symbolic expression
+
+The triple *func*, *a*, *ka* forms the configuration of the process. The arguments in *a* and *ka* should be pickable (for the process to be pickable), and hashable (the latter for display convenience only).
   """
 #==================================================================================================
 
@@ -186,12 +202,8 @@ Replaces the config function of this process. Raises an error if the process is 
 
   def as_html(self,incontext):
     func,a,ka = self.config
-    f = VERBATIM('{}.{}{}'.format(func.__module__,func.__name__,('' if self.incarnated else '?' if self.key is None else '!')))
+    f = '{}.{}{}'.format(func.__module__,func.__name__,('' if self.incarnated else '?' if self.key is None else '!'))
     return html_parlist((f,)+a,sorted(ka.items()),incontext,deco=('[|','|',']'))
-
-  def _repr_html_(self):
-    from lxml.etree import tounicode
-    return tounicode(html_incontext(self))
 
   def __getstate__(self):
     self.freeze()
@@ -248,17 +260,17 @@ def ipylist(name,columns,parse=None):
 :type name: :class:`str`
 :param columns: a tuple of column names
 :type columns: :class:`tuple`\ (\ :class:`str`)
-:param fmt: a parsing function
+:param parse: a parsing function
 
 Returns a subclass of :class:`list` with an IPython pretty printer for columns. Function *parse* takes an object and a column name (from *columns*) as input and returns the representation of that column for that object. It defaults to :func:`getattr`.
   """
 #==================================================================================================
-  from lxml.etree import tounicode
-  if fmt is None: fmt = getattr
+  from lxml.etree import tostring
+  if parse is None: parse = getattr
   t = type(name,(list,),{})
   fmts = len(columns)*((lambda s:s),)
   parsec=(lambda x: (parse(x,c) for c in columns))
-  t._repr_html_ = lambda self: tounicode(html_table(enumerate(map(parsec(self))),fmts,hdrs=columns))
+  t._repr_html_ = lambda self: tostring(html_table(enumerate(map(parsec(self))),fmts,hdrs=columns),encoding='unicode')
   t.__getitem__ = lambda self,s,t=t: t(super(t,self).__getitem__(s)) if isinstance(s,slice) else super(t,self).__getitem__(s)
   return t
 
@@ -312,33 +324,32 @@ A helper is any string. A vtype is either a python basic type (\ :class:`bool`, 
 def html_incontext(x):
 #==================================================================================================
   from lxml.builder import E
+  from lxml.etree import ElementTextIterator
   def format(L):
     L = sorted(L)
     t = html_table(((k,(x,)) for k,x in L[1:]),((lambda x:x),))
     t.insert(0,E.COL(style='background-color: cyan'))
     return E.DIV(L[0][1],t,style='border:thin solid cyan')
-  L = []
-  ctx = {}
   def incontext(v):
-    if isinstance(v,VERBATIM): return v.verbatim
     try: q = ctx.get(v)
-    except: return E.SPAN(repr(v))
+    except: return E.SPAN(str(v))
     if q is None:
       if hasattr(v,'as_html'):
-        ctx[v] = k,ref = len(ctx),'py_{}'.format(id(v))
+        k,ref = len(ctx),'py_{}'.format(id(v))
+        ctx[v] = q = [k,ref,None]
         try: x = v.as_html(incontext)
         except: x = E.SPAN(repr(v))
         L.append((k,E.DIV(x,id=ref)))
-      else: return E.SPAN(repr(v))
-    else: k,ref = q
+        tit = q[2] = ' '.join(ElementTextIterator(x))
+      else: return E.SPAN(str(v))
+    else: k,ref,tit = q
     js = lambda x,ref=ref: 'document.getElementById(\'{}\').style.outline=\'{}\''.format(ref,('thick solid red' if x else 'inherit'))
-    return E.SPAN('?{}'.format(k),style='color: blue',onmouseenter=js(True),onmouseleave=js(False))
+    return E.SPAN('?{}'.format(k),style='color: blue',title=tit,onmouseenter=js(True),onmouseleave=js(False))
+  L = []
+  ctx = {}
   e = incontext(x)
   n = len(L)
   return e if n==0 else L[0][1] if n==1 else format(L)
-
-class VERBATIM:
-  def __init__(self,x): self.verbatim = x
 
 #==================================================================================================
 def html_parlist(La,Lka,incontext,deco=('','',''),style='display: inline; padding: 5px;'):
@@ -398,8 +409,8 @@ class SQliteStack:
 Objects of this class are aggregation functions which simply collect results in a list, for use with a SQlite database. Example::
 
    with sqlite3.connect('/path/to/db') as conn:
-     rstack = SQliteStack(conn,'stack',2)
-     for school,x in conn.execute('SELECT school,stack(age,height) FROM DataTable GROUP BY school'):
+     rstack = SQliteStack.setup(conn,'stack',2)
+     for school,x in conn.execute('SELECT school,stack(age,height) FROM PupilsTable GROUP BY school'):
        print(school,rstack(x))
 
 prints pairs *school*, *L* where *L* is a list of pairs *age*, *height*.
@@ -515,15 +526,14 @@ def SQLinit(engine,meta):
   from sqlalchemy import MetaData, Table, Column, create_engine, event
   from sqlalchemy.types import DateTime, Text, Integer
   from sqlalchemy.sql import select, insert, update, delete, and_
-  if isinstance(engine,str):
-    engine = create_engine(engine)
-    if engine.driver == 'pysqlite':
-      # fixes a bug in the pysqlite driver; to be removed if fixed
-      # see http://docs.sqlalchemy.org/en/rel_1_0/dialects/sqlite.html
-      def do_connect(conn,rec): conn.isolation_level = None
-      def do_begin(conn): conn.execute('BEGIN')
-      event.listen(engine,'connect',do_connect)
-      event.listen(engine,'begin',do_begin)
+  if isinstance(engine,str): engine = create_engine(engine)
+  if engine.driver == 'pysqlite':
+    # fixes a bug in the pysqlite driver; to be removed if fixed
+    # see http://docs.sqlalchemy.org/en/rel_1_0/dialects/sqlite.html
+    def do_connect(conn,rec): conn.isolation_level = None
+    def do_begin(conn): conn.execute('BEGIN')
+    event.listen(engine,'connect',do_connect)
+    event.listen(engine,'begin',do_begin)
   meta_ = MetaData(bind=engine)
   meta_.reflect()
   if meta_.tables:
@@ -603,7 +613,7 @@ def SQLHandlerMetadata(info=dict(origin=__name__+'.SQLHandler',version=1)):
   return meta
 
 #==================================================================================================
-class ormsroot (MutableMapping):
+class ormsroot (MutableMapping,HtmlPlugin):
   r"""
 Instances of this class implement very simple persistent object managers based on the sqlalchemy ORM. This class should not be instantiated directly.
 
@@ -661,9 +671,6 @@ Class *C* should provide a method to insert new objects in the persistent class 
   def __len__(self):
     return self.session.query(self.base).count()
 
-  def _repr_html_(self):
-    from lxml.etree import tounicode
-    return tounicode(html_incontext(self))
   def as_html(self,incontext):
     return html_stack(*(v.as_html(incontext) for k,v in sorted(self.items())))
 

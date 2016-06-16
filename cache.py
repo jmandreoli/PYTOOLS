@@ -17,7 +17,7 @@ from functools import partial, update_wrapper
 from collections import namedtuple, defaultdict
 from collections.abc import MutableMapping
 from time import process_time, perf_counter
-from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_incontext, html_parlist
+from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlist, HtmlPlugin
 
 # Data associated with each cell is kept in a separate file
 # in the same folder as the database
@@ -69,7 +69,7 @@ sqlite3.register_converter('PICKLE',pickle.loads)
 sqlite3.enable_callback_tracebacks(True)
 
 #==================================================================================================
-class CacheDB (MutableMapping):
+class CacheDB (MutableMapping,HtmlPlugin):
   r"""
 Instances of this class manage cache repositories. There is at most one instance of this class in a process for each normalised repository specification path. A cache repository contains a set of values stored in some form. Each value has meta information stored in an index stored as a sqlite database. The index entry attached to a value is called a cell and describes the call event which obtained it. A ``Cell`` entry has the following fields:
 
@@ -148,7 +148,7 @@ Note that this constructor is locally cached on the resolved path *spec*.
 
   def connect(self,**ka):
     conn = sqlite3.connect(self.dbpath,timeout=self.timeout,**ka)
-    conn.create_function('cellrm',2,lambda cell,size,s=self.storage: s.remove(cell,size))
+    conn.create_function('cellrm',2,self.storage.remove)
     return conn
 
   def getblock(self,sig):
@@ -200,15 +200,12 @@ Note that this constructor is locally cached on the resolved path *spec*.
 # Display
 #--------------------------------------------------------------------------------------------------
 
-  def _repr_html_(self):
-    from lxml.etree import tounicode
-    return tounicode(html_incontext(self))
   def as_html(self,incontext):
     return html_stack(*(v.as_html(incontext) for k,v in sorted(self.items())))
   def __str__(self): return 'Cache<{}>'.format(self.path)
 
 #==================================================================================================
-class CacheBlock (MutableMapping):
+class CacheBlock (MutableMapping,HtmlPlugin):
   r"""
 Instances of this class implements blocks of cells sharing the same functor (signature).
 
@@ -365,9 +362,6 @@ Checks whether there is a cache overflow and applies the LRU policy.
 # Display
 #--------------------------------------------------------------------------------------------------
 
-  def _repr_html_(self):
-    from lxml.etree import tounicode
-    return tounicode(html_incontext(self))
   def as_html(self,incontext,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz)),time_fmt_=(lambda t: '' if t is None else time_fmt(t))):
     return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,(lambda ckey,h=self.sig.html: h(ckey,incontext)),size_fmt_,time_fmt_,time_fmt_),title='{}: {}'.format(self.block,self.sig))
   def __str__(self): return 'Cache<{}:{}>'.format(self.db.path,self.sig)
@@ -544,13 +538,4 @@ A decorator which applies to a function and returns a persistently cached versio
 def getparams(func,ignore=(),code={inspect.Parameter.VAR_POSITIONAL:1,inspect.Parameter.VAR_KEYWORD:2}):
 #--------------------------------------------------------------------------------------------------
   for p in inspect.signature(func).parameters.values():
-    # coding needed because p.kind is not pickable/unpickable before python 3.5
     yield p.name,(-1 if p.name in ignore else code.get(p.kind,0))
-
-#--------------------------------------------------------------------------------------------------
-class SignatureMismatchException (Exception):
-  """
-Exception raised when restoring a passive signature fails.
-  """
-#--------------------------------------------------------------------------------------------------
-  pass

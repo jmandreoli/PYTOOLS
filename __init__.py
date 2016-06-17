@@ -321,35 +321,41 @@ A helper is any string. A vtype is either a python basic type (\ :class:`bool`, 
   return VBox(children=list(row()))
 
 #==================================================================================================
-def html_incontext(x):
+def html_incontext(x,refstyle='color: blue; background-color: #e0e0e0;'):
+  r"""
+:param x: an arbitrary object
+
+Returns an HTML representation of *x* as an instance of :class:`lxml.etree.Element`. The representation is by default simply the string representation of *x* (enclosed in a SPAN element), but can be customised if *x* supports method :meth:`as_html`. In that case, the result is that of invoking that method.
+
+Method :meth:`as_html` should only be defined for hashable objects. When invoked on an object, it may recursively compute the HTML representations of its components. To avoid duplication and infinite recursion, the HTML representation of a component should be obtained by passing it to the (sole) argument of method :meth:`as_html`, which is a function which returns the normal HTML representation of its argument on the first call, but returns, on subsequent calls, a "pointer" to that representation in the form of a string `?`*n* (within a SPAN element) where *n* is a unique reference number. The scope of such pointers is one global call of function :func:`html_incontext` (which should never be invoked recursively).
+
+When pointers are created, the result of calling function :func:`html_incontext` on a object *x* is the normal HTML representation of *x* including its pointers, followed by a table mapping each pointer reference *n* to its own HTML representation ("followed by" means the two elements are included in a DIV element with specific styling).
+  """
 #==================================================================================================
   from lxml.builder import E
   from lxml.etree import ElementTextIterator
-  def format(L):
-    L = sorted(L)
-    t = html_table(((k,(x,)) for k,x in L[1:]),((lambda x:x),))
-    t.insert(0,E.COL(style='background-color: cyan'))
-    return E.DIV(L[0][1],t,style='border:thin solid cyan')
+  def hformat(L):
+    return E.TABLE(E.THEAD(E.TR(E.TD(L[0][1],colspan="2",style='padding:0'))),E.TBODY(*(E.TR(E.TH('?{}'.format(k),style=refstyle),E.TD(x)) for k,x in L[1:])))
   def incontext(v):
     try: q = ctx.get(v)
-    except: return E.SPAN(str(v))
+    except: return E.SPAN(str(v)) # for unhashable objects
     if q is None:
       if hasattr(v,'as_html'):
         k,ref = len(ctx),'py_{}'.format(id(v))
         ctx[v] = q = [k,ref,None]
         try: x = v.as_html(incontext)
-        except: x = E.SPAN(repr(v))
+        except: x = E.SPAN(repr(v)) # should not fail, but just in case
         L.append((k,E.DIV(x,id=ref)))
         tit = q[2] = ' '.join(ElementTextIterator(x))
       else: return E.SPAN(str(v))
     else: k,ref,tit = q
     js = lambda x,ref=ref: 'document.getElementById(\'{}\').style.outline=\'{}\''.format(ref,('thick solid red' if x else 'inherit'))
-    return E.SPAN('?{}'.format(k),style='color: blue',title=tit,onmouseenter=js(True),onmouseleave=js(False))
+    return E.SPAN('?{}'.format(k),style=refstyle,title=tit,onmouseenter=js(True),onmouseleave=js(False))
   L = []
   ctx = {}
   e = incontext(x)
   n = len(L)
-  return e if n==0 else L[0][1] if n==1 else format(L)
+  return e if n==0 else L[0][1] if n==1 else hformat(sorted(L))
 
 #==================================================================================================
 def html_parlist(La,Lka,incontext,deco=('','',''),style='display: inline; padding: 5px;'):

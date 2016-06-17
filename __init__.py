@@ -80,6 +80,56 @@ Objects of this class act as dict objects, except their keys are also attributes
   def __setstate__(self,r): self.__dict__['_ref'] = r
 
 #==================================================================================================
+def config_xdg(rsc,deflt=None):
+  r"""
+:param rsc: the name of an XDG resource
+:param deflt: a default string value
+
+Returns the content of the XDG resource named *rsc* or *deflt* if the resource is not found.
+  """
+#==================================================================================================
+  try: from xdg.BaseDirectory import load_first_config
+  except: return deflt
+  p = load_first_config(rsc)
+  if p is None: return deflt
+  with open(p) as u: return u.read()
+
+#==================================================================================================
+def config_env(name,deflt=None,asfile=False):
+  r"""
+:param name: the name of an environment variable
+:param deflt: a default string value
+:param asfile: whether to treat the value of the environment variable as a path to a file
+
+Returns the string value of an environment variable (or the content of the file pointed by it if *asfile* is set) or *deflt* if the environment variable is not assigned.
+  """
+#==================================================================================================
+  import os
+  x = os.environ.get(name)
+  if x is None: return deflt
+  if asfile:
+    with open(x) as u: x = u.read(x)
+  return x
+
+#==================================================================================================
+def autoconfig(module,name,dflt=None,asfile=False):
+  r"""
+:param module: the name of a module
+:param name: the name of a configuration parameter
+:param dflt: a default value for the configuration parameter
+:param asfile: whether to treat the value of the environment variable as a path to a file
+
+Returns an object obtained from an environment variable with a name derived from *module* and *name*. For example, if *module* is `mypackage.mymodule` and *name* is `myparam` then the environment variable is `MYPACKAGE_MYMODULE_MYPARAM`. The value of that variable (or the content of the file pointed by it if *asfile* is set) is executed in an empty dictionary and the value attached to key *name* is returned. If the variable is not assigned, *dflt* is returned.
+  """
+#==================================================================================================
+  x = config_env('{}_{}'.format(module.replace('.','_'),name).upper(),asfile=asfile)
+  if x:
+    d = {}
+    exec(x,d)
+    return d[name]
+  else: return dflt
+
+#==================================================================================================
 class HtmlPlugin:
   r"""
 Instances of this class have an HTML representation based on :func:`html_incontext`.
@@ -151,13 +201,17 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
 #==================================================================================================
 class Process (HtmlPlugin):
   r"""
-Instances of this class implement closed symbolic expressions. The value of a process is held in attribute :attr:`value`. It can be computed by invoking method :meth:`incarnate`. Incarnation can be cancelled by invoking method :meth:`reset`. Incarnation is lost on pickling, and is not restored on unpickling. Subclasses should define automatic triggers of the incarnation (see e.g. class :class:`MapProcess`). Initially, a process is mutable, and its configuration can be changed. It becomes immutable (frozen) after the following operations: incarnation (even after it is reset), hashing, and pickling.
+Instances of this class implement closed symbolic expressions.
 
-:param func: the function of the symbolic expression; should be defined at the top-level of its module to be pickable
+:param func: the function of the symbolic expression
 :param a: list of positional arguments of the symbolic expression
 :param ka: dictionary of keyword arguments of the symbolic expression
 
-The triple *func*, *a*, *ka* forms the configuration of the process. The arguments in *a* and *ka* should be pickable (for the process to be pickable), and hashable (the latter for display convenience only).
+The triple *func*, *a*, *ka* forms the configuration of the :class:`Process` instance. Its value is defined as the result of calling function :func:`func` with positional and keyword arguments *a* and *ka*. The value is actually computed only once (and cached), and only when method :meth:`incarnate` is invoked. Subclasses should define automatic triggers of incarnation (see e.g. class :class:`MapProcess`). The incarnation cache can be reset by invoking method :meth:`reset`.
+
+Initially, a :class:`Process` instance is mutable, and its configuration can be changed. It becomes immutable (frozen) after any of the following operations: incarnation (even after it is reset), hashing, and pickling. Incarnation is not saved on pickling, hence lost on unpickling, but can of course be restored using method :meth:`incarnate`. Thus, when receiving a foreign :class:`Process` instance, a process can decide whether it wants to access its value or only inspect its definition. If recomputing the value is costly, use a persistent cache for *func*.
+
+Caveat: function *func* should be defined at the top-level of its module, and the values in *a* and *ka* should be picklable and hashable (in particular: no dicts nor lists). Hence, any :class:`Process` instance is itself picklable and hashable. In particular, it can be used as argument in the configuration of another :class:`Process` instance.
   """
 #==================================================================================================
 
@@ -168,7 +222,7 @@ The triple *func*, *a*, *ka* forms the configuration of the process. The argumen
 
   def rearg(self,*a,**ka):
     r"""
-Updates the config argument of this process. Raises an error if the process is frozen.
+Updates the config arguments of this process. Raises an error if the process is frozen.
     """
     assert self.key is None
     self.config[1] += a
@@ -201,9 +255,12 @@ Replaces the config function of this process. Raises an error if the process is 
       self.key = func,tuple((tuple(sorted(d[p.name].items())) if p.kind==p.VAR_KEYWORD else d[p.name]) for p in signature(f).parameters.values())
 
   def as_html(self,incontext):
+    from lxml.builder import E
     func,a,ka = self.config
-    f = '{}.{}{}'.format(func.__module__,func.__name__,('' if self.incarnated else '?' if self.key is None else '!'))
-    return html_parlist((f,)+a,sorted(ka.items()),incontext,deco=('[|','|',']'))
+    x = html_parlist(a,sorted(ka.items()),incontext,deco=('[|','|',']'))
+    x.insert(0,(E.SPAN if self.incarnated else E.EM)('{}.{}'.format(func.__module__,func.__name__),style='padding:5px;'))
+    x.insert(1,E.B('::'))
+    return x
 
   def __getstate__(self):
     self.freeze()
@@ -213,17 +270,13 @@ Replaces the config function of this process. Raises an error if the process is 
     self.reset()
     func,a,ka,self.key = state
     self.config = func,a,dict(ka)
-  def __hash__(self):
-    self.freeze()
-    return hash(self.key)
-  def __eq__(self,other):
-    if not isinstance(other,Process): return False
-    return self.config == other.config
+  def __hash__(self): self.freeze(); return hash(self.key)
+  def __eq__(self,other): return isinstance(other,Process) and (self.config == other.config if (self.key is None or other.key is None) else self.key == other.key)
   def __repr__(self): return repr(self.value) if self.incarnated else super().__repr__()
 
 class MapProcess (Process,Mapping):
   r"""
-Processes of this class are also read-only mappings and trigger incarnation on all the map operations, then delegate such operations to their value.
+Processes of this class are also read-only mappings and trigger incarnation on all the map operations, then delegate such operations to their value (expected to be a mapping).
   """
   def __getitem__(self,k): self.incarnate(); return self.value[k]
   def __len__(self): self.incarnate(); return len(self.value)
@@ -231,7 +284,7 @@ Processes of this class are also read-only mappings and trigger incarnation on a
 
 class CallProcess (Process):
   r"""
-Processes of this class are also callables, and trigger incarnation on invocation, then delegate the invocation to their value.
+Processes of this class are also callables, and trigger incarnation on invocation, then delegate the invocation to their value (expected to be a callable).
   """
   def __call__(self,*a,**ka): self.incarnate(); return self.value(*a,**ka)
 
@@ -329,13 +382,13 @@ Returns an HTML representation of *x* as an instance of :class:`lxml.etree.Eleme
 
 Method :meth:`as_html` should only be defined for hashable objects. When invoked on an object, it may recursively compute the HTML representations of its components. To avoid duplication and infinite recursion, the HTML representation of a component should be obtained by passing it to the (sole) argument of method :meth:`as_html`, which is a function which returns the normal HTML representation of its argument on the first call, but returns, on subsequent calls, a "pointer" to that representation in the form of a string `?`*n* (within a SPAN element) where *n* is a unique reference number. The scope of such pointers is one global call of function :func:`html_incontext` (which should never be invoked recursively).
 
-When pointers are created, the result of calling function :func:`html_incontext` on a object *x* is the normal HTML representation of *x* including its pointers, followed by a table mapping each pointer reference *n* to its own HTML representation ("followed by" means the two elements are included in a DIV element with specific styling).
+When pointers are created, the result of calling function :func:`html_incontext` on a object *x* is the normal HTML representation of *x* including its pointers, followed by a TABLE mapping each pointer reference *n* to its own HTML representation.
   """
 #==================================================================================================
   from lxml.builder import E
   from lxml.etree import ElementTextIterator
   def hformat(L):
-    return E.TABLE(E.THEAD(E.TR(E.TD(L[0][1],colspan="2",style='padding:0'))),E.TBODY(*(E.TR(E.TH('?{}'.format(k),style=refstyle),E.TD(x)) for k,x in L[1:])))
+    return E.TABLE(E.THEAD(E.TR(E.TD(L[0][1],colspan="2",style='padding:0; border-bottom: thick solid black;'))),E.TBODY(*(E.TR(E.TH('?{}'.format(k),style=refstyle),E.TD(x)) for k,x in L[1:])))
   def incontext(v):
     try: q = ctx.get(v)
     except: return E.SPAN(str(v)) # for unhashable objects
@@ -358,14 +411,15 @@ When pointers are created, the result of calling function :func:`html_incontext`
   return e if n==0 else L[0][1] if n==1 else hformat(sorted(L))
 
 #==================================================================================================
-def html_parlist(La,Lka,incontext,deco=('','',''),style='display: inline; padding: 5px;'):
+def html_parlist(La,Lka,incontext,deco=('','',''),padding='5px'):
 #==================================================================================================
   from lxml.builder import E
-  opn,sep,cls = deco
   def h():
+    opn,sep,cls = deco
+    stl = 'padding: {}'.format(padding)
     yield opn
-    for v in La: yield E.SPAN(incontext(v),style=style); yield sep
-    for k,v in Lka: yield E.DIV(E.B(k),'=',incontext(v),style=style); yield sep
+    for v in La: yield E.SPAN(incontext(v),style=stl); yield sep
+    for k,v in Lka: yield E.SPAN(E.B(k),'=',incontext(v),style=stl); yield sep
     yield cls
   return E.DIV(*h(),style='padding:0')
 
@@ -623,34 +677,58 @@ class ormsroot (MutableMapping,HtmlPlugin):
   r"""
 Instances of this class implement very simple persistent object managers based on the sqlalchemy ORM. This class should not be instantiated directly.
 
-Each subclass *C* of this class should invoke the following class method: :meth:`set_base` with a single argument *R*, an sqlalchemy declarative persistent class. Once this is done, a specialised session maker can be obtained by invoking method :meth:`sessionmaker` of class *C*, with the url of an sqlalchemy supported database as first argument, the other arguments being the same as those for :meth:`sqlalchemy.orm.sessionmaker`. This sessionmaker will produce sessions with the following characteristics:
+Each subclass *C* of this class should define a class attribute :attr:`base` assigned an sqlalchemy declarative persistent class *B*. Once this is done, a specialised session maker can be obtained by invoking class method :meth:`sessionmaker` of class *C*, with the url of an sqlalchemy supported database as first argument, the other arguments being the same as those for :meth:`sqlalchemy.orm.sessionmaker`. This sessionmaker will produce sessions with the following characteristics:
 
 * they are attached to an sqlalchemy engine at this url (note that engines are reused across multiple sessionmakers with the same url)
 
-* they have a :attr:`root` attribute, pointing to an instance of *C*, which acts as a dictionary where the keys are the primary keys of *R* and the values the corresponding ORM entries. The root object has a convenient ipython HTML representation. Direct update to the dictionary is not supported, except deletion, which is made persitent on session commit.
+* they have a :attr:`root` attribute, pointing to an instance of *C*, which acts as a dictionary where the keys are the primary keys of *B* and the values the corresponding ORM entries. The root object has a convenient ipython HTML representation. Direct update to the dictionary is not supported, except deletion, which is made persitent on session commit.
 
-Class *C* should provide a method to insert new objects in the persistent class *R*, and they will then be reflected in the session root (and made persitent on session commit). Example::
+Class *C* should provide a method to insert new objects in the persistent class *B*, and they will then be reflected in the session root (and made persitent on session commit). Example::
 
    from sqlalchemy.ext.declarative import declarative_base; Base = declarative_base()
    from sqlalchemy import Column, Text, Integer
 
-   class Employee (Base):
-     __tablename__ = 'Employee'
-     oid = Column(Integer(),primary_key=True); name = Column(Text()); position = Column(Text())
+   class Entry (Base): # example of sqlalchemy declarative persistent class definition
+     __tablename__ = 'Entry'
+     oid = Column(Integer(),primary_key=True)
+     name = Column(Text())
+     age = Column(Integer())
+     def __str__(self): return 'Entry<{},{}>'.format(self.oid,self.name)
 
-   class Root(ormsroot):
-     def new(self,name,position): r = Employee(name=name,position=position); self.session.add(r); return r
+   class Root(ormsroot): # simple manager for class Entry
+     base = Entry
+     def new(self,name,age):
+       r = Entry(name=name,age=age)
+       self.session.add(r)
+       return r
 
-   Root.set_base(Employee)
+   sessionmaker = Root.sessionmaker
 
-   Session = Root.sessionmaker('sqlite://') # memory db for the example
-   s = Session() # first session
-   jack = s.root.new('jack','manager'); joe = s.root.new('joe','writer')
-   s.commit(); s.close() # for persistency; assigns oids (jack:1, joe:2)
-   s = Session() # second session (possibly in another process if real db is used)
-   jack = s.root.pop(1); joe = s.root[2]
-   assert set(s.root) == set([joe.oid])
-   s.commit(); s.close()
+Example of use (assuming :func:`sessionmaker` as above has been imported)::
+
+   Session = sessionmaker('sqlite://') # memory db for the example
+
+   from contextlib import contextmanager
+   @contextmanager
+   def mysession(): # sessions as simple sequences of instructions, for the example
+     s = Session()
+     try: yield s
+     else: s.commit()
+     s.close()
+
+   with mysession() as s: # fist session, define two entries
+     jack = s.root.new('jack',45); joe = s.root.new('joe',29)
+     print('Listing:',*s.root.values()) # s.root used as a mapping
+   >>> Listing: Entry<1,jack> Entry<2,joe>
+
+   with mysession() as s: # second session, possibly on another process (if not memory db)
+     jack = s.root.pop(1) # remove jack (directly from mapping)
+     print('Deleted: {}'.format(jack),'; Listing',*s.root.values())
+   >>> Deleted: Entry<1,jack> ; Listing: Entry<2,joe>
+
+   with mysession() as s: # But of course direct sqlalchemy operations are available
+     for x in s.query(Entry.name).filter(Entry.age>25): print(*x)
+   >>> joe
   """
 #==================================================================================================
 
@@ -676,6 +754,8 @@ Class *C* should provide a method to insert new objects in the persistent class 
 
   def __len__(self):
     return self.session.query(self.base).count()
+
+  def __hash__(self): return hash((self.session,self.dclass))
 
   def as_html(self,incontext):
     return html_stack(*(v.as_html(incontext) for k,v in sorted(self.items())))
@@ -718,35 +798,13 @@ By default, method :meth:`init` of this class is identical to method :meth:`defa
     cls.sc = sc = SparkContext(**ka)
     atexit.register(sc.stop)
 
-  def config():
-    try: from xdg.BaseDirectory import load_first_config
-    except: return
-    p = load_first_config('spark/pyspark.py')
-    if p is None: return
-    d = {}
-    with open(p) as u: exec(u.read(),d)
-    return classmethod(d['init'])
-  init = config() or default_init
-  del config
-
-#==================================================================================================
-def config_env(name,deflt=None,asfile=False):
-  r"""
-:param name: the name of an environment variable
-:type name: :class:`str`
-:param deflt: an arbitrary python object (optional)
-
-Returns a value obtained by executing the string value of an environment variable in a dictionary, then returning the content of key `value` in that dictionary.
-  """
-#==================================================================================================
-  import os
-  x = os.environ.get(name)
-  if x is None: return deflt
-  if asfile:
-    with open(x) as u: x = u.read(x)
-  d = {}
-  exec(x,d)
-  return d['value']
+  init = config_xdg('spark/pyspark.py')
+  if init:
+    D = {}
+    exec(init,D)
+    init = classmethod(D['init'])
+    del D
+  else: init = default_init
 
 #==================================================================================================
 def iso2date(iso):

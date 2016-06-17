@@ -17,7 +17,7 @@ from sqlalchemy import Column, Index, ForeignKey
 from sqlalchemy.types import Text, Integer, Float, DateTime, PickleType
 from sqlalchemy.ext.declarative import as_declarative, declared_attr
 from sqlalchemy.orm import relationship
-from . import SQLinit, zipaxes, ormsroot, html_table
+from . import SQLinit, zipaxes, ormsroot, html_table, HtmlPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class Base:
 Base.metadata.info.update(origin=__name__,version=1)
 
 #==================================================================================================
-class Context (Base):
+class Context (Base,HtmlPlugin):
   r"""
 Instances of this class are persistent and represent a bunch of performance experiments over a shared testbed.
   """
@@ -140,10 +140,7 @@ Displays the results of selected experiments in this context. The selection test
 
   def __repr__(self): return '{}.Context<{}:{}>'.format(__name__,self.oid,self.title)
 
-  def _repr_html_(self):
-    from lxml.etree import tounicode
-    return tounicode(self.as_html())
-  def as_html(self):
+  def as_html(self,incontext):
     H = ('created','host','name','args','exc','smax','nperf')
     return html_table(((exp.oid,[getattr(exp,h) for h in H]) for exp in self.experiments),hdrs=H,fmts=[str for h in H],title='{0.oid}: {0.title} {{{0.tests}}} {0.version}'.format(self))
 

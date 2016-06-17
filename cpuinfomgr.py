@@ -16,7 +16,7 @@ from sqlalchemy import Column, Index, ForeignKey
 from sqlalchemy.types import Text, Integer, Float, DateTime, PickleType
 from sqlalchemy.ext.declarative import as_declarative, declared_attr
 from sqlalchemy.orm import relationship
-from . import SQLinit, zipaxes, ormsroot, html_table
+from . import SQLinit, zipaxes, ormsroot, html_table, HtmlPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class Base:
 Base.metadata.info.update(origin=__name__,version=1)
 
 #==================================================================================================
-class Context(Base):
+class Context(Base,HtmlPlugin):
   r"""
 Instances of this class are persistent and represent a collection of host machines on the cloud at a given time.
   """
@@ -66,15 +66,12 @@ Instances of this class are persistent and represent a collection of host machin
 #--------------------------------------------------------------------------------------------------
   def __repr__(self): return '{}.Context<{}:{}>'.format(__name__,self.oid,self.tstamp)
 
-  def _repr_html_(self):
-    from lxml.etree import tounicode
-    return tounicode(self.as_html())
-  def as_html(self):
+  def as_html(self,incontext):
+    from lxml.builder import E
     def hist(L):
-      from lxml.builder import E
       D = defaultdict(int)
       for v in L: D[v] += 1
-      if len(D) == 1: return E.SPAN(list(D.keys())[0])
+      if len(D) == 1: return E.SPAN(*D.keys())
       return E.TABLE(E.TBODY(*(E.TR(E.TD(' '.join(v.split()),style='border:0'),E.TD(str(n),style='border:0; color:blue')) for v,n in sorted(D.items()))))
     return html_table(((host.oid,[host.name,host.nproc,host.getkey('model name'),host.getkey('cpu cores'),host.getkey('cpu MHz')]) for host in self.hosts),hdrs=('name','nproc','model','cores','MHz'),fmts=(str,str,hist,hist,hist),title='{0.oid}: {0.tstamp}'.format(self))
 

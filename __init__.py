@@ -119,7 +119,7 @@ def autoconfig(module,name,dflt=None,asfile=False):
 :param dflt: a default value for the configuration parameter
 :param asfile: whether to treat the value of the environment variable as a path to a file
 
-Returns an object obtained from an environment variable with a name derived from *module* and *name*. For example, if *module* is `mypackage.mymodule` and *name* is `myparam` then the environment variable is `MYPACKAGE_MYMODULE_MYPARAM`. The value of that variable (or the content of the file pointed by it if *asfile* is set) is executed in an empty dictionary and the value attached to key *name* is returned. If the variable is not assigned, *dflt* is returned.
+Returns an object obtained from an environment variable with a name derived from *module* and *name*. For example, if *module* is ``mypackage.mymodule`` and *name* is ``myparam`` then the environment variable is ``MYPACKAGE_MYMODULE_MYPARAM``. The value of that variable (or the content of the file pointed by it if *asfile* is set) is executed in an empty dictionary and the value attached to key *name* is returned. If the variable is not assigned, *dflt* is returned.
   """
 #==================================================================================================
   x = config_env('{}_{}'.format(module.replace('.','_'),name).upper(),asfile=asfile)
@@ -207,7 +207,7 @@ Instances of this class implement closed symbolic expressions.
 :param a: list of positional arguments of the symbolic expression
 :param ka: dictionary of keyword arguments of the symbolic expression
 
-The triple *func*, *a*, *ka* forms the configuration of the :class:`Process` instance. Its value is defined as the result of calling function :func:`func` with positional and keyword arguments *a* and *ka*. The value is actually computed only once (and cached), and only when method :meth:`incarnate` is invoked. Subclasses should define automatic triggers of incarnation (see e.g. class :class:`MapProcess`). The incarnation cache can be reset by invoking method :meth:`reset`.
+The triple *func*, *a*, *ka* forms the configuration of the :class:`Process` instance. Its value is defined as the result of calling function *func* with positional and keyword arguments *a* and *ka*. The value is actually computed only once (and cached), and only when method :meth:`incarnate` is invoked. Subclasses should define automatic triggers of incarnation (see e.g. class :class:`MapProcess`). The incarnation cache can be reset by invoking method :meth:`reset`.
 
 Initially, a :class:`Process` instance is mutable, and its configuration can be changed. It becomes immutable (frozen) after any of the following operations: incarnation (even after it is reset), hashing, and pickling. Incarnation is not saved on pickling, hence lost on unpickling, but can of course be restored using method :meth:`incarnate`. Thus, when receiving a foreign :class:`Process` instance, a process can decide whether it wants to access its value or only inspect its definition. If recomputing the value is costly, use a persistent cache for *func*.
 
@@ -380,9 +380,37 @@ def html_incontext(x,refstyle='color: blue; background-color: #e0e0e0;'):
 
 Returns an HTML representation of *x* as an instance of :class:`lxml.etree.Element`. The representation is by default simply the string representation of *x* (enclosed in a SPAN element), but can be customised if *x* supports method :meth:`as_html`. In that case, the result is that of invoking that method.
 
-Method :meth:`as_html` should only be defined for hashable objects. When invoked on an object, it may recursively compute the HTML representations of its components. To avoid duplication and infinite recursion, the HTML representation of a component should be obtained by passing it to the (sole) argument of method :meth:`as_html`, which is a function which returns the normal HTML representation of its argument on the first call, but returns, on subsequent calls, a "pointer" to that representation in the form of a string `?`*n* (within a SPAN element) where *n* is a unique reference number. The scope of such pointers is one global call of function :func:`html_incontext` (which should never be invoked recursively).
+Method :meth:`as_html` should only be defined for hashable objects. When invoked on an object, it may recursively compute the HTML representations of its components. To avoid duplication and infinite recursion, the HTML representation of a component should be obtained by passing it to the (sole) argument of method :meth:`as_html`, which is a function which returns the normal HTML representation of its argument on the first call, but returns, on subsequent calls, a "pointer" to that representation in the form of a string `?`\ *n* (within a SPAN element) where *n* is a unique reference number. The scope of such pointers is one global call of function :func:`html_incontext` (which should never be invoked recursively).
 
-When pointers are created, the result of calling function :func:`html_incontext` on a object *x* is the normal HTML representation of *x* including its pointers, followed by a TABLE mapping each pointer reference *n* to its own HTML representation.
+When pointers are created, the result of calling function :func:`html_incontext` on a object *x* is the normal HTML representation of *x* including its pointers, followed by a TABLE mapping each pointer reference *n* to its own HTML representation. Example::
+
+   class T:
+     def __init__(self,label,*children): self.label = label; self.children = children
+     def as_html(self,incontext):
+       from lxml.builder import E
+       return E.DIV(E.B(str(self.label)),*(incontext(x) for x in self.children))
+
+   x = T(None)
+   xa,xb,xc = T('a',x),T('b',x),T('c',x)
+   xab,xbc,xac = T('ab',(xa,xb)),T('bc',(xb,xc)),T('ac',(xa,xc))
+   xabc = T('abc',xab,xbc,xac) 
+
+   html_incontext(xabc)
+
+produces::
+
+   <TABLE>
+     <THEAD><TR><TD colspan="2"> <DIV> <B>abc</> <SPAN>?1</> <SPAN>?2</> <SPAN>?3</> </DIV> </TD></TR></THEAD>
+     <TBODY>
+       <TR> <TH>?1</> <DIV> <TD> <DIV> <B>ab</> <SPAN>?4</> <SPAN>?5</> </DIV> </TD> </TR>
+       <TR> <TH>?2</> <TD> <DIV> <B>bc</> <SPAN>?5</> <SPAN>?6</> </DIV> </TD> </TR>
+       <TR> <TH>?3</> <TD> <DIV> <B>ab</> <SPAN>?4</> <SPAN>?6</> </DIV> </TD> </TR>
+       <TR> <TH>?4</> <TD> <DIV> <B>a</> <SPAN>?7</> </DIV> </TD> </TR>
+       <TR> <TH>?5</> <TD> <DIV> <B>b</> <SPAN>?7</> </DIV> </TD> </TR>
+       <TR> <TH>?6</> <TD> <DIV> <B>c</> <SPAN>?7</> </DIV> </TD> </TR>
+       <TR> <TH>?7</> <TD> <DIV> <B></> </DIV> </TD> </TR>
+     </TBODY>
+   </TABLE>
   """
 #==================================================================================================
   from lxml.builder import E

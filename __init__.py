@@ -83,7 +83,7 @@ Objects of this class act as dict objects, except their keys are also attributes
 def config_xdg(rsc,deflt=None):
   r"""
 :param rsc: the name of an XDG resource
-:param deflt: a default string value
+:param deflt: a default value
 
 Returns the content of the XDG resource named *rsc* or *deflt* if the resource is not found.
   """
@@ -98,7 +98,7 @@ Returns the content of the XDG resource named *rsc* or *deflt* if the resource i
 def config_env(name,deflt=None,asfile=False):
   r"""
 :param name: the name of an environment variable
-:param deflt: a default string value
+:param deflt: a default value
 :param asfile: whether to treat the value of the environment variable as a path to a file
 
 Returns the string value of an environment variable (or the content of the file pointed by it if *asfile* is set) or *deflt* if the environment variable is not assigned.
@@ -132,7 +132,7 @@ Returns an object obtained from an environment variable with a name derived from
 #==================================================================================================
 class HtmlPlugin:
   r"""
-Instances of this class have an HTML representation based on :func:`html_incontext`.
+Instances of this class have an ipython HTML representation based on :func:`html_incontext`.
   """
 #==================================================================================================
   def _repr_html_(self):
@@ -174,9 +174,9 @@ Returns a variant of *self* where *a* is appended to the positional arguments an
 #==================================================================================================
 def zipaxes(L,fig,sharex=False,sharey=False,**ka):
   r"""
+:param L: an arbitrary sequence
 :param fig: a figure
 :type fig: :class:`matplotlib.figure.Figure`
-:param L: an arbitrary sequence
 :param sharex: whether all the axes share the same x-axis scale
 :type sharex: :class:`bool`
 :param sharey: whether all the axes share the same y-axis scale
@@ -199,7 +199,7 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
     yield o,ax
 
 #==================================================================================================
-class Process (HtmlPlugin):
+class Expr (HtmlPlugin):
   r"""
 Instances of this class implement closed symbolic expressions.
 
@@ -207,11 +207,11 @@ Instances of this class implement closed symbolic expressions.
 :param a: list of positional arguments of the symbolic expression
 :param ka: dictionary of keyword arguments of the symbolic expression
 
-The triple *func*, *a*, *ka* forms the configuration of the :class:`Process` instance. Its value is defined as the result of calling function *func* with positional and keyword arguments *a* and *ka*. The value is actually computed only once (and cached), and only when method :meth:`incarnate` is invoked. Subclasses should define automatic triggers of incarnation (see e.g. class :class:`MapProcess`). The incarnation cache can be reset by invoking method :meth:`reset`.
+The triple *func*, *a*, *ka* forms the configuration of the :class:`Expr` instance. Its value is defined as the result of calling function *func* with positional and keyword arguments *a* and *ka*. The value is actually computed only once (and cached), and only when method :meth:`incarnate` is invoked. Subclasses should define automatic triggers of incarnation (see e.g. class :class:`MapExpr`). The incarnation cache can be reset by invoking method :meth:`reset`.
 
-Initially, a :class:`Process` instance is mutable, and its configuration can be changed. It becomes immutable (frozen) after any of the following operations: incarnation (even after it is reset), hashing, and pickling. Incarnation is not saved on pickling, hence lost on unpickling, but can of course be restored using method :meth:`incarnate`. Thus, when receiving a foreign :class:`Process` instance, a process can decide whether it wants to access its value or only inspect its definition. If recomputing the value is costly, use a persistent cache for *func*.
+Initially, a :class:`Expr` instance is mutable, and its configuration can be changed. It becomes immutable (frozen) after any of the following operations: incarnation (even after it is reset), hashing, and pickling. Incarnation is not saved on pickling, hence lost on unpickling, but can of course be restored using method :meth:`incarnate`. Thus, when receiving a foreign :class:`Expr` instance, a process can decide whether it wants to access its value or only inspect its definition. If recomputing the value is costly, use a persistent cache for *func*.
 
-Caveat: function *func* should be defined at the top-level of its module, and the values in *a* and *ka* should be picklable and hashable (in particular: no dicts nor lists). Hence, any :class:`Process` instance is itself picklable and hashable. In particular, it can be used as argument in the configuration of another :class:`Process` instance.
+Caveat: function *func* should be defined at the top-level of its module, and the values in *a* and *ka* should be picklable and hashable (in particular: no dicts nor lists). Hence, any :class:`Expr` instance is itself picklable and hashable. In particular, it can be used as argument in the configuration of another :class:`Expr` instance.
   """
 #==================================================================================================
 
@@ -271,20 +271,20 @@ Replaces the config function of this process. Raises an error if the process is 
     func,a,ka,self.key = state
     self.config = func,a,dict(ka)
   def __hash__(self): self.freeze(); return hash(self.key)
-  def __eq__(self,other): return isinstance(other,Process) and (self.config == other.config if (self.key is None or other.key is None) else self.key == other.key)
+  def __eq__(self,other): return isinstance(other,Expr) and (self.config == other.config if (self.key is None or other.key is None) else self.key == other.key)
   def __repr__(self): return repr(self.value) if self.incarnated else super().__repr__()
 
-class MapProcess (Process,Mapping):
+class MapExpr (Expr,Mapping):
   r"""
-Processes of this class are also read-only mappings and trigger incarnation on all the map operations, then delegate such operations to their value (expected to be a mapping).
+Symbolic expressions of this class are also (read-only) mappings and trigger incarnation on all the mapping operations, then delegate such operations to their value (expected to be a mapping).
   """
   def __getitem__(self,k): self.incarnate(); return self.value[k]
   def __len__(self): self.incarnate(); return len(self.value)
   def __iter__(self): self.incarnate(); return iter(self.value)
 
-class CallProcess (Process):
+class CallExpr (Expr):
   r"""
-Processes of this class are also callables, and trigger incarnation on invocation, then delegate the invocation to their value (expected to be a callable).
+Symbolic expressions of this class are also callables, and trigger incarnation on invocation, then delegate the invocation to their value (expected to be a callable).
   """
   def __call__(self,*a,**ka): self.incarnate(); return self.value(*a,**ka)
 
@@ -376,39 +376,38 @@ A helper is any string. A vtype is either a python basic type (\ :class:`bool`, 
 #==================================================================================================
 def html_incontext(x,refstyle='color: blue; background-color: #e0e0e0;'):
   r"""
-:param x: an arbitrary object
+:param x: an arbitrary python object
 
-Returns an HTML representation of *x* as an instance of :class:`lxml.etree.Element`. The representation is by default simply the string representation of *x* (enclosed in a SPAN element), but can be customised if *x* supports method :meth:`as_html`. In that case, the result is that of invoking that method.
+Returns an HTML object (as understood by :mod:`lxml`) representing object *x*. The representation is by default simply the string representation of *x* (enclosed in a SPAN element), but can be customised if *x* supports method :meth:`as_html`. In that case, the result is that of invoking that method.
 
 Method :meth:`as_html` should only be defined for hashable objects. When invoked on an object, it may recursively compute the HTML representations of its components. To avoid duplication and infinite recursion, the HTML representation of a component should be obtained by passing it to the (sole) argument of method :meth:`as_html`, which is a function which returns the normal HTML representation of its argument on the first call, but returns, on subsequent calls, a "pointer" to that representation in the form of a string `?`\ *n* (within a SPAN element) where *n* is a unique reference number. The scope of such pointers is one global call of function :func:`html_incontext` (which should never be invoked recursively).
 
 When pointers are created, the result of calling function :func:`html_incontext` on a object *x* is the normal HTML representation of *x* including its pointers, followed by a TABLE mapping each pointer reference *n* to its own HTML representation. Example::
 
    class T:
-     def __init__(self,label,*children): self.label = label; self.children = children
+     def __init__(self,*children): self.children = children
      def as_html(self,incontext):
        from lxml.builder import E
-       return E.DIV(E.B(str(self.label)),*(incontext(x) for x in self.children))
-
-   x = T(None)
+       return E.DIV(*(y for x in self.children for y in (incontext(x),'|')))
+   # Let's build a trellis DAG
+   x = T('')
    xa,xb,xc = T('a',x),T('b',x),T('c',x)
-   xab,xbc,xac = T('ab',(xa,xb)),T('bc',(xb,xc)),T('ac',(xa,xc))
-   xabc = T('abc',xab,xbc,xac) 
-
+   xab,xbc,xac = T('ab',xa,xb),T('bc',xb,xc),T('ac',xa,xc)
+   xabc = T('abc',xab,xbc,xac)
    html_incontext(xabc)
 
-produces::
+produces (up to some attributes)::
 
    <TABLE>
-     <THEAD><TR><TD colspan="2"> <DIV> <B>abc</> <SPAN>?1</> <SPAN>?2</> <SPAN>?3</> </DIV> </TD></TR></THEAD>
+     <THEAD><TR><TD colspan="2"> <DIV><SPAN>abc</>|<SPAN>?1</>|<SPAN>?5</>|<SPAN>?7</>|</DIV> </TD></TR></THEAD>
      <TBODY>
-       <TR> <TH>?1</> <DIV> <TD> <DIV> <B>ab</> <SPAN>?4</> <SPAN>?5</> </DIV> </TD> </TR>
-       <TR> <TH>?2</> <TD> <DIV> <B>bc</> <SPAN>?5</> <SPAN>?6</> </DIV> </TD> </TR>
-       <TR> <TH>?3</> <TD> <DIV> <B>ab</> <SPAN>?4</> <SPAN>?6</> </DIV> </TD> </TR>
-       <TR> <TH>?4</> <TD> <DIV> <B>a</> <SPAN>?7</> </DIV> </TD> </TR>
-       <TR> <TH>?5</> <TD> <DIV> <B>b</> <SPAN>?7</> </DIV> </TD> </TR>
-       <TR> <TH>?6</> <TD> <DIV> <B>c</> <SPAN>?7</> </DIV> </TD> </TR>
-       <TR> <TH>?7</> <TD> <DIV> <B></> </DIV> </TD> </TR>
+       <TR> <TH>?1</TH> <TD> <DIV><SPAN>ab</>|<SPAN>?2</>|<SPAN>?4</>|</DIV> </TD> </TR>
+       <TR> <TH>?2</TH> <TD> <DIV><SPAN>a</>|<SPAN>?3</>|</DIV> </TD> </TR>
+       <TR> <TH>?3</TH> <TD> <DIV><SPAN></>|</DIV> </TD> </TR>
+       <TR> <TH>?4</TH> <TD> <DIV><SPAN>b</>|<SPAN>?3</>|</DIV> </TD> </TR>
+       <TR> <TH>?5</TH> <TD> <DIV><SPAN>bc</>|<SPAN>?4</>|<SPAN>?6</>|</DIV> </TD> </TR>
+       <TR> <TH>?6</TH> <TD> <DIV><SPAN>c</>|<SPAN>?3</>|</DIV> </TD> </TR>
+       <TR> <TH>?7</TH> <TD> <DIV><SPAN>ac</>|<SPAN>?2</>|<SPAN>?6</>|</DIV> </TD> </TR>
      </TBODY>
    </TABLE>
   """
@@ -468,6 +467,8 @@ Returns an HTML table object.
 :param fmts: a tuple of format functions matching the length of the value tuples
 :param hdrs: a tuple of strings matching the length of the value tuples
 :param title: a string
+
+The format functions in *fmts* are explected to return HTML objects (as understood by :mod:`lxml`).
   """
 #==================================================================================================
   from lxml.builder import E
@@ -484,7 +485,7 @@ def html_stack(*a,**ka):
   r"""
 Returns a stack of HTML objects.
 
-:param a: a list of HTML objects
+:param a: a list of HTML objects (as understood by :mod:`lxml`)
 :param ka: a dictionary of HTML attributes for the DIV encapsulating each object
   """
 #==================================================================================================
@@ -744,19 +745,19 @@ Example of use (assuming :func:`sessionmaker` as above has been imported)::
      else: s.commit()
      s.close()
 
-   with mysession() as s: # fist session, define two entries
+   with mysession() as s: # first session, define two entries
      jack = s.root.new('jack',45); joe = s.root.new('joe',29)
      print('Listing:',*s.root.values()) # s.root used as a mapping
-   >>> Listing: Entry<1,jack> Entry<2,joe>
+   #>>> Listing: Entry<1,jack> Entry<2,joe>
 
    with mysession() as s: # second session, possibly on another process (if not memory db)
      jack = s.root.pop(1) # remove jack (directly from mapping)
      print('Deleted: {}'.format(jack),'; Listing',*s.root.values())
-   >>> Deleted: Entry<1,jack> ; Listing: Entry<2,joe>
+   #>>> Deleted: Entry<1,jack> ; Listing: Entry<2,joe>
 
    with mysession() as s: # But of course direct sqlalchemy operations are available
      for x in s.query(Entry.name).filter(Entry.age>25): print(*x)
-   >>> joe
+   #>>> joe
   """
 #==================================================================================================
 
@@ -811,15 +812,16 @@ Example of use (assuming :func:`sessionmaker` as above has been imported)::
 #==================================================================================================
 class spark:
   r"""
-When class method :meth:`default_init` is invoked, it creates a :class:`pyspark.context.SparkContext` instance with the same keyword arguments as the invocation, and stores it as attribute :attr:`sc`.
-
-By default, method :meth:`init` of this class is identical to method :meth:`default_init`. If a resource ``spark/pyspark.py`` exists in an XDG configuration file, that resource is executed (locally) and should define a function :func:`init` used as method :meth:`init` instead. The defined function can of course use method :meth:`default_init`.
+By default, class method :meth:`init` of this class is identical to :meth:`default_init`. If a resource ``spark/pyspark.py`` exists in an XDG configuration file, that resource is executed (locally) and should define a function :func:`init` used as class method :meth:`init` instead. The defined function can of course invoke method :meth:`default_init`.
   """
 #==================================================================================================
   sc = None
 
   @classmethod
   def default_init(cls,**ka):
+    r"""
+Creates a :class:`pyspark.context.SparkContext` instance with keyword arguments *ka*, and stores it as class attribute :attr:`sc`.
+    """
     import atexit
     from pyspark.context import SparkContext
     if cls.sc is not None: cls.sc.stop()
@@ -827,19 +829,22 @@ By default, method :meth:`init` of this class is identical to method :meth:`defa
     atexit.register(sc.stop)
 
   init = config_xdg('spark/pyspark.py')
-  if init:
+  if init is None: init = default_init
+  else:
     D = {}
     exec(init,D)
     init = classmethod(D['init'])
     del D
-  else: init = default_init
 
 #==================================================================================================
 def iso2date(iso):
   r"""
-:param iso: triple as returned by :meth:`datetime.isocalendar`
+:param iso: triple as returned by :meth:`datetime.date.isocalendar`
 
-Returns the :class:`datetime` instance for which the :meth:`datetime.isocalendar` method returns *iso*.
+Returns the :class:`datetime.date` instance for which the :meth:`datetime.date.isocalendar` method returns *iso*::
+
+   from datetime import datetime
+   d = datetime.now().date(); assert iso2date(d.isocalendar()) == d
   """
 #==================================================================================================
   from datetime import date,timedelta
@@ -858,7 +863,10 @@ def size_fmt(size,binary=True,precision=4,suffix='B'):
 :param precision: number of digits displayed (at least 4)
 :type precision: :class:`int`
 
-Returns the representation of *size* with IEC prefix. Each prefix is ``K`` times the previous one for some constant ``K`` which depends on the convention: ``K``\ =1024 with the binary convention (marked with an ``i`` before the prefix); ``K``\ =1000 with the decimal convention.
+Returns the representation of *size* with IEC prefix. Each prefix is ``K`` times the previous one for some constant ``K`` which depends on the convention: ``K``\ =1024 with the binary convention (marked with an ``i`` before the prefix); ``K``\ =1000 with the decimal convention. Example::
+
+   print(size_fmt(2**30), size_fmt(5300), size_fmt(5300,binary=False), size_fmt(42897.3,binary=False,suffix='m')
+   #>>> 1GiB 5.176KiB 5.3KB 42.9Km
   """
 #==================================================================================================
   thr,mark = (1024.,'i') if binary else (1000.,'')
@@ -871,21 +879,27 @@ Returns the representation of *size* with IEC prefix. Each prefix is ``K`` times
   return fmt(size,'Y') # :-)
 
 #==================================================================================================
-def time_fmt(time):
+def time_fmt(time,precision=3):
   r"""
 :param time: a number representing a time in seconds
 :type time: :class:`int`\|\ :class:`float`
+:param precision: number of digits displayed
+:type precision: :class:`int`
 
-Returns the representation of *time* in one of days,hours,minutes,seconds (depending on magnitude).
+Returns the representation of *time* in one of days,hours,minutes,seconds (depending on magnitude). Example::
+
+   print(time_fmt(100000,4),time_fmt(4238.45,2),time_fmt(5.35))
+   #>>> 1.157day 1.2hr 5sec
   """
 #==================================================================================================
-  if time < 60.: return '{:.0f}sec'.format(time)
+  fmt = '{{:.{}g}}'.format(precision).format
+  if time < 60.: return '{}sec'.format(fmt(time))
   time /= 60.
-  if time < 60.: return '{:.1f}min'.format(time)
+  if time < 60.: return '{}min'.format(fmt(time))
   time /= 60.
-  if time < 24.: return '{:.1f}hr'.format(time)
+  if time < 24.: return '{}hr'.format(fmt(time))
   time /= 24.
-  return '{:.1f}day'.format(time)
+  return '{}day'.format(fmt(time))
 
 def loggingBasicConfig(level=None,**ka):
   if isinstance(level,str): level = getattr(logging,level)

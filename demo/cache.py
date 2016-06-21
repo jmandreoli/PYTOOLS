@@ -14,7 +14,7 @@ if __name__=='__main__':
 
 from pathlib import Path; DIR = Path(__file__).resolve().parent/'cache.dir'
 from collections import ChainMap
-from .. import MapProcess
+from .. import MapExpr
 from ..cache import lru_persistent_cache
 automatic = False
 
@@ -37,10 +37,10 @@ def stepB(E,fr=None,to=None,r=0):
   return ChainMap({to:E[p]+E[q]+r},E)
 
 def proc(rab=1,rbc=2,rabc=3):
-  P_ini = MapProcess(stepA,a=1,b=2,c=3)
-  P_ab = MapProcess(stepB,P_ini,fr=('a','b'),to='ab',r=rab)
-  P_bc = MapProcess(stepB,P_ini,fr=('b','c'),to='bc',r=rbc)
-  P_abc = MapProcess(stepB,MapProcess(ChainMap,P_ab,P_bc),fr=('ab','bc'),to='abc',r=rabc)
+  P_ini = MapExpr(stepA,a=1,b=2,c=3)
+  P_ab = MapExpr(stepB,P_ini,fr=('a','b'),to='ab',r=rab)
+  P_bc = MapExpr(stepB,P_ini,fr=('b','c'),to='bc',r=rbc)
+  P_abc = MapExpr(stepB,MapExpr(ChainMap,P_ab,P_bc),fr=('ab','bc'),to='abc',r=rabc)
   return P_abc
 
 #--------------------------------------------------------------------------------------------------
@@ -61,8 +61,8 @@ def demo():
   from sys import executable as python
   DEMOS = (
       ((simplefunc.cache,),'simplefunc(1,2) ; simplefunc(1,y=2,z=36)'),
-      ((stepA.cache,stepB.cache),'proc()["abc"] ; proc(rabc=4)["abc"] ; proc(rbc=5)["abc"]'),
       ((longfunc.cache,),'longfunc(42,6) ; longfunc(None,4)'),
+      ((stepA.cache,stepB.cache),'proc()["abc"] ; proc(rabc=4)["abc"] ; proc(rbc=5)["abc"]'),
   )
   for caches,tests in DEMOS:
     print(80*'-')

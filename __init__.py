@@ -820,11 +820,14 @@ By default, class method :meth:`init` of this class is identical to :meth:`defau
   @classmethod
   def default_init(cls,**ka):
     r"""
-Creates a :class:`pyspark.context.SparkContext` instance with keyword arguments *ka*, and stores it as class attribute :attr:`sc`.
+Creates a :class:`pyspark.context.SparkContext` instance with keyword arguments *ka*, and stores it as class attribute :attr:`sc`. The value of key ``conf`` in *ka*, if present, is converted to an instance of :class:`SparkConf`, if not already one, by applying method :meth:`SparkConf.setAll`.
     """
     import atexit
-    from pyspark.context import SparkContext
+    from pyspark import SparkContext, SparkConf
     if cls.sc is not None: cls.sc.stop()
+    conf = ka.get('conf')
+    if conf is not None and not isinstance(conf,SparkConf):
+      ka['conf'] = oconf = SparkConf(); oconf.setAll(conf)
     cls.sc = sc = SparkContext(**ka)
     atexit.register(sc.stop)
 

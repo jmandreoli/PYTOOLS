@@ -134,7 +134,7 @@ Note that this constructor is locally cached on the resolved path *spec*.
           with path.open('rb') as u: storage = pickle.loads(u)
         else: raise Exception('Cache repository specification path must be directory or file')
         dbpath = str(storage.dbpath)
-        with storage: SQliteNew(dbpath,SCHEMA)
+        SQliteNew(dbpath,SCHEMA)
         self = super(CacheDB,cls).__new__(cls)
         self.path = path
         self.dbpath = dbpath
@@ -437,7 +437,7 @@ Methods:
 
   def __init__(self,path):
     self.path = path
-    self.umask = ~path.stat().st_mode&0o666
+    self.umask = ~path.stat().st_mode|0o111
 
   def __enter__(self): self.umask = os.umask(self.umask)
   def __exit__(self,*a): self.umask = os.umask(self.umask)
@@ -486,7 +486,8 @@ The *size* parameter has the following meaning:
     if size is None:
       with self:
         vfile = rpath.open('wb')
-        synch = sqlite3.connect(str(tpath))
+        tpath.open('wb').close()
+      synch = sqlite3.connect(str(tpath))
       synch.execute('BEGIN EXCLUSIVE TRANSACTION')
     else:
       vfile = rpath.open('rb')
@@ -519,8 +520,9 @@ Attributes:
   def __init__(self,path):
     super(Storage,self).__init__(path)
     self.dbpath = path/'index.db'
-    if not self.dbpath.is_file() and any(path.iterdir()):
-      raise Exception('Cannot create new index in non empty directory')
+    if not self.dbpath.is_file():
+      if any(path.iterdir()): raise Exception('Cannot create new index in non empty directory')
+      with self: self.dbpath.open('wb').close()
 
 #==================================================================================================
 # Utilities

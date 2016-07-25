@@ -134,7 +134,7 @@ Note that this constructor is locally cached on the resolved path *spec*.
           with path.open('rb') as u: storage = pickle.loads(u)
         else: raise Exception('Cache repository specification path must be directory or file')
         dbpath = str(storage.dbpath)
-        SQliteNew(dbpath,SCHEMA)
+        with storage: SQliteNew(dbpath,SCHEMA)
         self = super(CacheDB,cls).__new__(cls)
         self.path = path
         self.dbpath = dbpath
@@ -437,6 +437,10 @@ Methods:
 
   def __init__(self,path):
     self.path = path
+    self.umask = ~path.stat().st_mode&0o666
+
+  def __enter__(self): self.umask = os.umask(self.umask)
+  def __exit__(self,*a): self.umask = os.umask(self.umask)
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self,cell,size,typ=namedtuple('StoreAPI',('waitval','getval','setval'))):
@@ -480,8 +484,9 @@ The *size* parameter has the following meaning:
         else: synch.close(); raise Exception('synch file removed')
     tpath,rpath = self.getpaths(cell)
     if size is None:
-      vfile = rpath.open('wb')
-      synch = sqlite3.connect(str(tpath))
+      with self:
+        vfile = rpath.open('wb')
+        synch = sqlite3.connect(str(tpath))
       synch.execute('BEGIN EXCLUSIVE TRANSACTION')
     else:
       vfile = rpath.open('rb')

@@ -81,7 +81,7 @@ Instances of this class manage cache repositories. There is at most one instance
 
 ``Block`` entries correspond to clusters of ``Cell`` entries (call events) sharing the same functor. They have the following fields
 
-- ``signature``: the persistent functor (callable) producing all the cells in the block; different blocks always have signatures with different pickle byte-strings;
+- ``signature``: the persistent functor producing all the cells in the block; different blocks always have signatures with different pickle byte-strings;
 - ``misses``: number of call events with that functor where the argument had not been seen before;
 - ``hits``: number of call events with that functor where the argument had previously been seen; such a call does not generate a new ``Cell``, but reuses the existing one;
 - ``maxsize``: maximum number of cells attached to the block; when overflow occurs, the cells with the oldest ``hitdate`` are discarded (this amounts to the Least Recently Used policy, a.k.a. LRU, currently hardwired).
@@ -100,6 +100,10 @@ Attributes:
 
    the path to the sqlite database holding the index, as a string
 
+.. attribute:: storage
+
+   the object managing the actual storage of the values
+
 Methods:
 
 .. automethod:: __new__
@@ -109,14 +113,14 @@ Methods:
   timeout = 120.
 
   def __new__(cls,spec,listing={},lock=threading.Lock()):
-    """
+    r"""
 Generates a :class:`CacheDB` object.
 
 :param spec: specification of the cache folder
 :type spec: :class:`CacheDB`\|\ :class:`pathlib.Path`\|\ :class:`str`
 
 * If *spec* is a :class:`CacheDB` instance, that instance is returned
-* If *spec* is a path to a directory, returns a :class:`CacheDB` instance whose storage is an instance of :class:`Storage` pointing to that directory
+* If *spec* is a path to a directory, returns a :class:`CacheDB` instance whose storage is an instance of :class:`DefaultStorage` pointing to that directory
 * Otherwise, *spec* must be a path to a file, returns a :class:`CacheDB` instance whose storage is unpickled from the file at *spec*.
 
 Note that this constructor is locally cached on the resolved path *spec*.
@@ -129,7 +133,7 @@ Note that this constructor is locally cached on the resolved path *spec*.
     with lock:
       self = listing.get(path)
       if self is None:
-        if path.is_dir(): storage = Storage(path)
+        if path.is_dir(): storage = DefaultStorage(path)
         elif path.is_file():
           with path.open('rb') as u: storage = pickle.loads(u)
         else: raise Exception('Cache repository specification path must be directory or file')
@@ -217,19 +221,27 @@ Instances of this class implements blocks of cells sharing the same functor (sig
 :param clear: if :const:`True`, clears the block at initialisation
 :type clear: :class:`bool`
 
-A block object is callable. When a new call is submitted to a block with argument *arg*, the following sequence happens:
+A block object is callable, and calls take a single argument. Method :meth:`__call__` implements the cacheing mechanism.
 
-- method :meth:`getkey` of the signature is invoked with argument *arg*. It must return a python byte string used as ``ckey`` in the corresponding index database cell.
-- Then a transaction is begun on the index database.
-- If there already exists a cell with the same ``ckey``, and its value has been computed, the transaction is immediately terminated and its value is extracted and returned.
-- If there already exists a cell with the same ``ckey``, but its value is still being computed in another thread/process, the transaction is terminated, then the current thread waits until completion of the other thread/process, then the obtained value is extracted and returned, or raised if it is an exception.
-- If there does not exist a cell with the same ``ckey``, a cell with this ``ckey`` is immediately created, then the transaction is terminated. Then method :meth:`getval` of the signature is invoked with argument *arg*. The result is stored, even if it is an exception, and a new transaction informs the database cell that its result has been computed. If the result was an exception, it is raised, otherwise it is returned.
+* Duplicate detection of arguments and computation of the value attached to an argument is delegated to a dedicated signature object which must implement the following api (e.g. implemented by class :class:`Signature`):
+
+  - method :meth:`getkey` takes as input an argument and produces a byte string which represents it uniquely.
+  - method :meth:`getval` takes as input an argument and produces its associated value (to cache).
+  - method :meth:`html` takes as input a byte string as returned by invocation of method :meth:`getkey` and returns an HTML formatted representation of the argument of that invocation.
+
+* The actual storage of values is delegated to a dedicated storage object which must implement the following api (e.g. implemented by class :class:`FileStorage`):
+
+  - method :meth:`insert` takes as input a cell id and returns the function to call to set its value. This method is called inside the transaction which creates the cell in the index, hence exactly once overall for a given cell. The returned function is called exactly once, but outside the transaction. The returned function is passed the computed value and returns the size in bytes of its storage. The cell may have disappeared from the cache when called, or may disappear while executing, so the assignment may have to later be rollbacked.
+  - method :meth:`lookup` takes as input a cell id and a boolean flag and retuns the function to call to get its value. The flag indicates whether the cell value is currently being computed by a concurrent thread and should therefore wait for the completion of that computation to return the value. This method is called inside the transaction which looks up the cell in the index, and that can be multiple times in concurrent threads for a given cell. The returned function is called exactly once, but outside the transaction.
+  - method :meth:`remove` takes as arguments a cell id and the size of its value as memorised in the index, and removes the cell. This method is exclusively called when a cell is deleted from the index, within the transaction which performs the deletion.
 
 Furthermore, a :class:`CacheBlock` object acts as a mapping where the keys are cell identifiers (:class:`int`) and values are triples ``hitdate``, ``ckey``, ``size``. When ``size`` is null, the value of the cell is still being computed, otherwise it represents its size in bytes.
 
 Finally, :class:`CacheBlock` instances have an HTML ipython display.
 
 Methods:
+
+.. automethod:: __call__
   """
 #==================================================================================================
 
@@ -268,6 +280,18 @@ Returns information about this block. Available attributes:
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self,arg):
+    """
+:param arg: arument of the call
+
+Implements cacheing as follows:
+
+- method :meth:`getkey` of the signature is invoked with argument *arg* to obtain a ``ckey``.
+- Then a transaction is begun on the index database.
+- If there already exists a cell with the same ``ckey``, the transaction is immediately terminated and its value is extracted and returned.
+- If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is immediately created, then the transaction is terminated. Then method :meth:`getval` of the signature is invoked with argument *arg*. The result is stored, even if it is an exception, and a new transaction informs the database cell that its result has been computed.
+
+If the result was an exception, it is raised, otherwise it is returned.
+    """
 #--------------------------------------------------------------------------------------------------
     ckey = self.sig.getkey(arg)
     with self.db.connect() as conn:
@@ -275,12 +299,12 @@ Returns information about this block. Available attributes:
       row = conn.execute('SELECT oid,size FROM Cell WHERE block=? AND ckey=?',(self.block,ckey,)).fetchone()
       if row is None:
         cell = conn.execute('INSERT INTO Cell (block,ckey) VALUES (?,?)',(self.block,ckey)).lastrowid
-        size = None
         conn.execute('UPDATE Block SET misses=misses+1 WHERE oid=?',(self.block,))
+        setval = self.db.storage.insert(cell)
       else:
         cell,size = row
         conn.execute('UPDATE Block SET hits=hits+1 WHERE oid=?',(self.block,))
-      store = self.db.storage(cell,size)
+        getval = self.db.storage.lookup(cell,size==0)
     if row is None:
       logger.info('%s MISS(%s)',self,cell)
       tm = process_time(),perf_counter()
@@ -288,7 +312,7 @@ Returns information about this block. Available attributes:
       except BaseException as e: cval = e; size = -1
       else: size = 1
       tm = process_time()-tm[0],perf_counter()-tm[1]
-      try: size *= store.setval(cval)
+      try: size *= setval(cval)
       except:
         with self.db.connect() as conn:
           conn.execute('DELETE FROM Cell WHERE oid=?',(cell,))
@@ -299,10 +323,8 @@ Returns information about this block. Available attributes:
       self.checkmax()
       if size<0: raise cval
     else:
-      if size==0:
-        logger.info('%s WAIT(%s)',self,cell)
-        store.waitval()
-      cval = store.getval()
+      if size==0: logger.info('%s WAIT(%s)',self,cell)
+      cval = getval()
       logger.info('%s HIT(%s)',self,cell)
       with self.db.connect() as conn:
         conn.execute('UPDATE Cell SET hitdate=datetime(\'now\') WHERE oid=?',(cell,))
@@ -367,10 +389,6 @@ Checks whether there is a cache overflow and applies the LRU policy.
   def __str__(self): return 'Cache<{}:{}>'.format(self.db.path,self.sig)
 
 #==================================================================================================
-# Signatures
-#==================================================================================================
-
-#--------------------------------------------------------------------------------------------------
 class Signature:
   r"""
 An instance of this class defines a functor attached to a python top-level function. Parameters which do not influence the result can be specified (they will be ignored in the caching mechanism).
@@ -382,32 +400,35 @@ The signature is entirely defined by the name of the function and of its module,
 
 Methods:
   """
-#--------------------------------------------------------------------------------------------------
+#==================================================================================================
   def __init__(self,func,ignore):
     func = inspect.unwrap(func)
     self.name, self.params = '{}.{}'.format(func.__module__, func.__name__), tuple(getparams(func,ignore))
     self.func = func
+#--------------------------------------------------------------------------------------------------
   def getkey(self,arg):
     r"""
 Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are matched against the definition of :attr:`func`. Returns the pickled representation of the resulting values of the parameter names of the function in the order in which they appear in its definition, omitting the ignored ones. If a parameter name in :attr:`func` is prefixed by \*\* (hence its assignment is a dict), it is replaced by its sorted list of items.
     """
+#--------------------------------------------------------------------------------------------------
     return pickle.dumps(tuple(self.genkey(arg)))
   def genkey(self,arg):
     a,ka = arg
     d = inspect.getcallargs(self.func,*a,**ka)
     for p,typ in self.params:
       if typ!=-1: yield sorted(d[p].items()) if typ==2 else d[p]
+#--------------------------------------------------------------------------------------------------
   def getval(self,arg):
     r"""
 Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. Returns the value of calling attribute :attr:`func` with that positional argument list and keyword argument dict. Note that this attribute is not restored when the signature is obtained by unpickling, so invcation of this method fails.
     """
+#--------------------------------------------------------------------------------------------------
     a,ka = arg
     return self.func(*a,**ka)
 
+#--------------------------------------------------------------------------------------------------
   def html(self,ckey,incontext):
-    r"""
-Argument *ckey* must have been obtained by invocation of method :meth:`getkey`. Returns an HTML formatted representation of the argument of that invocation.
-    """
+#--------------------------------------------------------------------------------------------------
     def h(ckey):
       for v,(p,typ) in zip(ckey,((p,typ) for p,typ in self.params if typ!=-1)):
         if typ==2: yield from v
@@ -427,9 +448,13 @@ Instances of this class manage the persistent storage of cache values using a fi
 :param path: the directory to store cached values
 :type path: :class:`pathlib.Path`
 
-Methods:
+The storage for a cell consists of 2 files with the same stem computed from the cell id and with extensions ``.pck`` and ``.tmp``. The former (content file) contains the value of the cell in pickled format. The latter (synchronisation file) is an empty sqlite database file used only to synchronise access to the content file between writer and possibly multiple readers.
 
-.. automethod:: __call__
+Attributes:
+
+.. attribute:: timeout
+
+   The time to wait for the value of a cell computed in another thread. 
   """
 #==================================================================================================
 
@@ -443,26 +468,9 @@ Methods:
   def __exit__(self,*a): self.umask = os.umask(self.umask)
 
 #--------------------------------------------------------------------------------------------------
-  def __call__(self,cell,size,typ=namedtuple('StoreAPI',('waitval','getval','setval'))):
+  def insert(self,cell):
     r"""
-Returns an incarnation of the API to manipulate the value of *cell* (see below).
-
-:param cell: oid of the cell
-:type cell: :class:`int`
-:param size: size status of the cell
-:type size: :class:`int`\|\ :class:`NoneType`
-
-The API to manipulate the value of a cell consists of:
-
-- :func:`waitval` invoked (possibly concurrently) to wait for the value of *cell* to be computed.
-- :func:`getval` invoked (possibly concurrently) to obtain the value of *cell*.
-- :func:`setval` invoked with an argument *val* to assign the value of *cell* to *val*. Invoked only once, but *cell* may have disappeared from the cache when invoked, or may disappear while executing, so the assignment may have to later be rollbacked.
-
-The *size* parameter has the following meaning:
-
-- When *size* is :const:`None`, the cell has just been created by the current thread, which will compute its value and invoke :func:`setval` to store it.
-- When *size* is :const:`0`, the cell is currently being computed by another thread (possibly in another process) and the current thread will invoke :func:`waitval` to wait until the value is available, then :func:`getval` to get its value.
-- Otherwise, the cell has been computed in the past and the current thread will invoke :func:`getval` to get its value.
+Opens the pickle file path in write mode and the sqlite file path in exclusive transaction mode, then returns a :func:`setval` function which dumps its argument in the pickle file, closes it and closes the exclusive transaction on the sqlite file.
     """
 #--------------------------------------------------------------------------------------------------
     def setval(val):
@@ -472,41 +480,52 @@ The *size* parameter has the following meaning:
       vfile.close()
       synch.close()
       return s
+    tpath,rpath = self.getpaths(cell)
+    with self:
+      vfile = rpath.open('wb')
+      tpath.open('wb').close()
+    synch = sqlite3.connect(str(tpath))
+    synch.execute('BEGIN EXCLUSIVE TRANSACTION')
+    return setval
+
+#--------------------------------------------------------------------------------------------------
+  def lookup(self,cell,wait):
+#--------------------------------------------------------------------------------------------------
     def getval():
       try: return pickle.load(vfile)
       finally: vfile.close()
-    def waitval():
+    def waitgetval(getval=getval):
       while True:
         if tpath.exists():
           try: synch.execute('BEGIN IMMEDIATE TRANSACTION')
           except sqlite3.OperationalError: pass
           else: synch.close(); break
         else: synch.close(); raise Exception('synch file removed')
+      return getval()
     tpath,rpath = self.getpaths(cell)
-    if size is None:
-      with self:
-        vfile = rpath.open('wb')
-        tpath.open('wb').close()
-      synch = sqlite3.connect(str(tpath))
-      synch.execute('BEGIN EXCLUSIVE TRANSACTION')
-    else:
-      vfile = rpath.open('rb')
-      synch = sqlite3.connect(str(tpath),timeout=self.timeout) if size==0 else None
-    return typ(waitval,getval,setval)
+    vfile = rpath.open('rb')
+    if wait:
+      synch = sqlite3.connect(str(tpath),timeout=self.timeout)
+      getval = waitgetval
+    return getval
 
+#--------------------------------------------------------------------------------------------------
   def remove(self,cell,size):
-    tpath,rpath = self.getpaths(cell)
-    try: rpath.unlink(); tpath.unlink()
-    except: pass
+#--------------------------------------------------------------------------------------------------
+    for p in self.getpaths(cell):
+      try: p.unlink()
+      except: pass
 
+#--------------------------------------------------------------------------------------------------
   def getpaths(self,cell):
+#--------------------------------------------------------------------------------------------------
     vpath = self.path/'V{:06d}'.format(cell)
     tpath = vpath.with_suffix('.tmp')
     rpath = vpath.with_suffix('.pck')
     return tpath,rpath
 
 #==================================================================================================
-class Storage (FileStorage):
+class DefaultStorage (FileStorage):
   r"""
 The default storage class for a cache repository. Stores the index database in the same directory as the values, with name ``index.db``.
 
@@ -518,7 +537,7 @@ Attributes:
   """
 #==================================================================================================
   def __init__(self,path):
-    super(Storage,self).__init__(path)
+    super().__init__(path)
     self.dbpath = path/'index.db'
     if not self.dbpath.is_file():
       if any(path.iterdir()): raise Exception('Cannot create new index in non empty directory')

@@ -232,7 +232,7 @@ A block object is callable, and calls take a single argument. Method :meth:`__ca
 * The actual storage of values is delegated to a dedicated storage object which must implement the following api (e.g. implemented by class :class:`FileStorage`):
 
   - method :meth:`insert` takes as input a cell id and returns the function to call to set its value. This method is called inside the transaction which creates the cell in the index, hence exactly once overall for a given cell. The returned function is called exactly once, but outside the transaction. The returned function is passed the computed value and returns the size in bytes of its storage. The cell may have disappeared from the cache when called, or may disappear while executing, so the assignment may have to later be rollbacked.
-  - method :meth:`lookup` takes as input a cell id and a boolean flag and retuns the function to call to get its value. The flag indicates whether the cell value is currently being computed by a concurrent thread and should therefore wait for the completion of that computation to return the value. This method is called inside the transaction which looks up the cell in the index, and that can be multiple times in concurrent threads for a given cell. The returned function is called exactly once, but outside the transaction.
+  - method :meth:`lookup` takes as input a cell id and a boolean flag and retuns the function to call to get its value. The flag indicates whether the cell value is currently being computed by a concurrent thread and should therefore wait for the completion of that computation to return the value. This method is called inside the transaction which looks up the cell in the index, and there may be multiple such transactions in concurrent threads/processes for a given cell. The returned function is called exactly once, but outside the transaction.
   - method :meth:`remove` takes as arguments a cell id and the size of its value as memorised in the index, and removes the cell. This method is exclusively called when a cell is deleted from the index, within the transaction which performs the deletion.
 
 Furthermore, a :class:`CacheBlock` object acts as a mapping where the keys are cell identifiers (:class:`int`) and values are triples ``hitdate``, ``ckey``, ``size``. When ``size`` is null, the value of the cell is still being computed, otherwise it represents its size in bytes.
@@ -448,17 +448,9 @@ Instances of this class manage the persistent storage of cache values using a fi
 :param path: the directory to store cached values
 :type path: :class:`pathlib.Path`
 
-The storage for a cell consists of 2 files with the same stem computed from the cell id and with extensions ``.pck`` and ``.tmp``. The former (content file) contains the value of the cell in pickled format. The latter (synchronisation file) is an empty sqlite database file used only to synchronise access to the content file between writer and possibly multiple readers.
-
-Attributes:
-
-.. attribute:: timeout
-
-   The time to wait for the value of a cell computed in another thread. 
+The storage for a cell consists of a content file which contains the value of the cell in pickled format and a cross process mechanism to synchronise access to the content file between writer and possibly multiple readers. The names of the content file as well as the file underlying the synch lock are built from the cell id, so as to be unique to that cell.
   """
 #==================================================================================================
-
-  timeout = 600.
 
   def __init__(self,path):
     self.path = path
@@ -466,11 +458,12 @@ Attributes:
 
   def __enter__(self): self.umask = os.umask(self.umask)
   def __exit__(self,*a): self.umask = os.umask(self.umask)
+  # not thread safe (should at least have a lock)
 
 #--------------------------------------------------------------------------------------------------
   def insert(self,cell):
     r"""
-Opens the pickle file path in write mode and the sqlite file path in exclusive transaction mode, then returns a :func:`setval` function which dumps its argument in the pickle file, closes it and closes the exclusive transaction on the sqlite file.
+Opens the content file path in write mode, acquires the synch lock, then returns a :func:`setval` function which pickle-dumps its argument into the content file, closes it and releases the synch lock.
     """
 #--------------------------------------------------------------------------------------------------
     def setval(val):
@@ -478,51 +471,64 @@ Opens the pickle file path in write mode and the sqlite file path in exclusive t
       except Exception as e: vfile.seek(0); vfile.truncate(); pickle.dump(e,vfile)
       s = vfile.tell()
       vfile.close()
-      synch.close()
+      release()
       return s
-    tpath,rpath = self.getpaths(cell)
     with self:
-      vfile = rpath.open('wb')
-      tpath.open('wb').close()
-    synch = sqlite3.connect(str(tpath))
-    synch.execute('BEGIN EXCLUSIVE TRANSACTION')
+      (acquire,release),vpath = self.open(cell,'set')
+      vfile = vpath.open('wb')
+    acquire()
     return setval
 
 #--------------------------------------------------------------------------------------------------
   def lookup(self,cell,wait):
+    r"""
+Opens the content file path in read mode and returns a :func:`getval` function which waits for the synch lock to be released (if *wait* is True), then pickle-loads the content file and returns the obtained value.
+    """
 #--------------------------------------------------------------------------------------------------
     def getval():
+      wait()
       try: return pickle.load(vfile)
       finally: vfile.close()
-    def waitgetval(getval=getval):
-      while True:
-        if tpath.exists():
-          try: synch.execute('BEGIN IMMEDIATE TRANSACTION')
-          except sqlite3.OperationalError: pass
-          else: synch.close(); break
-        else: synch.close(); raise Exception('synch file removed')
-      return getval()
-    tpath,rpath = self.getpaths(cell)
-    vfile = rpath.open('rb')
-    if wait:
-      synch = sqlite3.connect(str(tpath),timeout=self.timeout)
-      getval = waitgetval
+    wait,vpath = self.open(cell,'wget' if wait else 'get')
+    vfile = vpath.open('rb')
     return getval
 
 #--------------------------------------------------------------------------------------------------
   def remove(self,cell,size):
+    r"""
+Removes the content file path and as well as the synch lock.
+    """
 #--------------------------------------------------------------------------------------------------
-    for p in self.getpaths(cell):
-      try: p.unlink()
-      except: pass
+    none,vpath = self.open(cell,'del')
+    try: vpath.unlink()
+    except: pass
 
 #--------------------------------------------------------------------------------------------------
-  def getpaths(self,cell):
+  def open(self,cell,mode,timout=600.):
 #--------------------------------------------------------------------------------------------------
-    vpath = self.path/'V{:06d}'.format(cell)
-    tpath = vpath.with_suffix('.tmp')
-    rpath = vpath.with_suffix('.pck')
-    return tpath,rpath
+    cpath = self.path/'V{:06d}'.format(cell)
+    tpath = cpath.with_suffix('.tmp')
+    vpath = cpath.with_suffix('.pck')
+    if mode=='set':
+      tpath.open('w').close()
+      synch = sqlite3.connect(str(tpath))
+      res = (lambda: synch.execute('BEGIN EXCLUSIVE TRANSACTION')),synch.close
+    elif mode=='get':
+      res = (lambda:None)
+    elif mode=='wget':
+      synch = sqlite3.connect(str(tpath),timeout=timeout)
+      def res():
+        while True:
+          if not tpath.exists(): synch.close(); raise Exception('synch file lost!')
+          try: synch.execute('BEGIN IMMEDIATE TRANSACTION')
+          except sqlite3.OperationalError as e:
+            if e.args[0] != 'database is locked': raise
+          else: synch.close(); break
+    elif mode=='del':
+      try: tpath.unlink()
+      except: pass
+      res = None
+    return res,vpath
 
 #==================================================================================================
 class DefaultStorage (FileStorage):

@@ -226,16 +226,16 @@ A block object is callable, and calls take a single argument. Method :meth:`__ca
 * Duplicate detection of arguments and computation of the value attached to an argument is delegated to a dedicated signature object which must implement the following api (e.g. implemented by class :class:`Signature`):
 
   - method :meth:`getkey` takes as input an argument and produces a byte string which represents it uniquely.
-  - method :meth:`getval` takes as input an argument and produces its associated value (to cache).
+  - method :meth:`getval` takes as input an argument and produces its associated value (to be cached).
   - method :meth:`html` takes as input a byte string as returned by invocation of method :meth:`getkey` and returns an HTML formatted representation of the argument of that invocation.
 
 * The actual storage of values is delegated to a dedicated storage object which must implement the following api (e.g. implemented by class :class:`FileStorage`):
 
-  - method :meth:`insert` takes as input a cell id and returns the function to call to set its value. This method is called inside the transaction which creates the cell in the index, hence exactly once overall for a given cell. The returned function is called exactly once, but outside the transaction. The returned function is passed the computed value and returns the size in bytes of its storage. The cell may have disappeared from the cache when called, or may disappear while executing, so the assignment may have to later be rollbacked.
-  - method :meth:`lookup` takes as input a cell id and a boolean flag and retuns the function to call to get its value. The flag indicates whether the cell value is currently being computed by a concurrent thread and should therefore wait for the completion of that computation to return the value. This method is called inside the transaction which looks up the cell in the index, and there may be multiple such transactions in concurrent threads/processes for a given cell. The returned function is called exactly once, but outside the transaction.
-  - method :meth:`remove` takes as arguments a cell id and the size of its value as memorised in the index, and removes the cell. This method is exclusively called when a cell is deleted from the index, within the transaction which performs the deletion.
+  - method :meth:`insert` is called inside the transaction which inserts a new cell into the index, hence exactly once overall for a given cell. It takes as input the cell id and must return the function to call to set its value. The returned function is called exactly once, but outside the transaction. It is passed the computed value and must return the size in bytes of its storage. The cell may have disappeared from the cache when called, or may disappear while executing, so the assignment may have to later be rolled back.
+  - method :meth:`lookup` is called inside the transaction which looks up a cell from the index. There may be multiple such transactions in possibly concurrent threads/processes for a given cell. It takes as input a cell id and a boolean flag indicating whether the cell value is currently being computed by a concurrent thread/process, and must return the function to call to get its value. The returned function is called exactly once, but outside the transaction.
+  - method :meth:`remove` is called inside the transaction which deletes a cell from the index. It takes as arguments a cell id and the size of its value as memorised in the index.
 
-Furthermore, a :class:`CacheBlock` object acts as a mapping where the keys are cell identifiers (:class:`int`) and values are triples ``hitdate``, ``ckey``, ``size``. When ``size`` is null, the value of the cell is still being computed, otherwise it represents its size in bytes.
+Furthermore, a :class:`CacheBlock` object acts as a mapping where the keys are cell identifiers (:class:`int`) and values are triples ``hitdate``, ``ckey``, ``size``. When ``size`` is null, the value of the cell is still being computed, otherwise it represents its size in bytes. If negative, the stored value is an exception.
 
 Finally, :class:`CacheBlock` instances have an HTML ipython display.
 
@@ -288,7 +288,7 @@ Implements cacheing as follows:
 - method :meth:`getkey` of the signature is invoked with argument *arg* to obtain a ``ckey``.
 - Then a transaction is begun on the index database.
 - If there already exists a cell with the same ``ckey``, the transaction is immediately terminated and its value is extracted and returned.
-- If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is immediately created, then the transaction is terminated. Then method :meth:`getval` of the signature is invoked with argument *arg*. The result is stored, even if it is an exception, and a new transaction informs the database cell that its result has been computed.
+- If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is immediately created, then the transaction is terminated. Then method :meth:`getval` of the signature is invoked with argument *arg*. The result is stored, even if it is an exception, and a new transaction updates the database cell to record that its result has been computed.
 
 If the result was an exception, it is raised, otherwise it is returned.
     """
@@ -334,7 +334,7 @@ If the result was an exception, it is raised, otherwise it is returned.
 #--------------------------------------------------------------------------------------------------
   def checkmax(self):
     r"""
-Checks whether there is a cache overflow and applies the LRU policy.
+Checks whether there is a cache overflow and applies the LRU policy (hardwired).
     """
 #--------------------------------------------------------------------------------------------------
     with self.db.connect() as conn:
@@ -420,7 +420,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
 #--------------------------------------------------------------------------------------------------
   def getval(self,arg):
     r"""
-Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. Returns the value of calling attribute :attr:`func` with that positional argument list and keyword argument dict. Note that this attribute is not restored when the signature is obtained by unpickling, so invcation of this method fails.
+Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. Returns the value of calling attribute :attr:`func` with that positional argument list and keyword argument dict. Note that attribute :attr:`func` is not restored when the signature is obtained by unpickling, so invocation of this method disabled in that case.
     """
 #--------------------------------------------------------------------------------------------------
     a,ka = arg
@@ -448,7 +448,15 @@ Instances of this class manage the persistent storage of cache values using a fi
 :param path: the directory to store cached values
 :type path: :class:`pathlib.Path`
 
-The storage for a cell consists of a content file which contains the value of the cell in pickled format and a cross process mechanism to synchronise access to the content file between writer and possibly multiple readers. The names of the content file as well as the file underlying the synch lock are built from the cell id, so as to be unique to that cell.
+The storage for a cell consists of a content file which contains the value of the cell in pickled format and a cross process mechanism to synchronise access to the content file between writer and possibly multiple readers. The names of the content file as well as the file underlying the synch lock are built from the cell id, so as to be unique to that cell. They inherit the access rights of the *path* directory.
+
+Attributes:
+
+.. attribute:: path
+
+   Directory where values are stored, initialised from *path*
+
+Methods:
   """
 #==================================================================================================
 
@@ -471,12 +479,12 @@ Opens the content file path in write mode, acquires the synch lock, then returns
       except Exception as e: vfile.seek(0); vfile.truncate(); pickle.dump(e,vfile)
       s = vfile.tell()
       vfile.close()
-      release()
+      synch_close()
       return s
+    vpath = self.getpath(cell)
     with self:
-      (acquire,release),vpath = self.open(cell,'set')
       vfile = vpath.open('wb')
-    acquire()
+      synch_close = self.insert_synch(vpath)
     return setval
 
 #--------------------------------------------------------------------------------------------------
@@ -489,8 +497,9 @@ Opens the content file path in read mode and returns a :func:`getval` function w
       wait()
       try: return pickle.load(vfile)
       finally: vfile.close()
-    wait,vpath = self.open(cell,'wget' if wait else 'get')
+    vpath = self.getpath(cell)
     vfile = vpath.open('rb')
+    wait = self.lookup_synch(vpath) if wait else lambda: None
     return getval
 
 #--------------------------------------------------------------------------------------------------
@@ -499,36 +508,44 @@ Opens the content file path in read mode and returns a :func:`getval` function w
 Removes the content file path and as well as the synch lock.
     """
 #--------------------------------------------------------------------------------------------------
-    none,vpath = self.open(cell,'del')
-    try: vpath.unlink()
+    vpath = self.getpath(cell)
+    try: vpath.unlink(); self.remove_synch(vpath)
     except: pass
 
+  def getpath(self,cell):
+    return self.path/'V{:06d}.pck'.format(cell)
+
 #--------------------------------------------------------------------------------------------------
-  def open(self,cell,mode,timout=600.):
+# Synchronisation mechanism based on sqlite (for portability: could be simplified)
 #--------------------------------------------------------------------------------------------------
-    cpath = self.path/'V{:06d}'.format(cell)
-    tpath = cpath.with_suffix('.tmp')
-    vpath = cpath.with_suffix('.pck')
-    if mode=='set':
-      tpath.open('w').close()
-      synch = sqlite3.connect(str(tpath))
-      res = (lambda: synch.execute('BEGIN EXCLUSIVE TRANSACTION')),synch.close
-    elif mode=='get':
-      res = (lambda:None)
-    elif mode=='wget':
-      synch = sqlite3.connect(str(tpath),timeout=timeout)
-      def res():
-        while True:
-          if not tpath.exists(): synch.close(); raise Exception('synch file lost!')
-          try: synch.execute('BEGIN IMMEDIATE TRANSACTION')
-          except sqlite3.OperationalError as e:
-            if e.args[0] != 'database is locked': raise
-          else: synch.close(); break
-    elif mode=='del':
-      try: tpath.unlink()
-      except: pass
-      res = None
-    return res,vpath
+
+  @staticmethod
+  def insert_synch(vpath):
+    tpath = vpath.with_suffix('.tmp')
+    tpath.open('w').close()
+    synch = sqlite3.connect(str(tpath))
+    synch.execute('BEGIN EXCLUSIVE TRANSACTION')
+    return synch.close
+
+  @staticmethod
+  def lookup_synch(vpath,timeout=600.):
+    tpath = vpath.with_suffix('.tmp')
+    synch = sqlite3.connect(str(tpath),timeout=timeout)
+    def wait():
+      while True:
+        if not tpath.exists(): synch.close(); raise Exception('synch file lost!')
+        try: synch.execute('BEGIN IMMEDIATE TRANSACTION')
+        except sqlite3.OperationalError as e:
+          if e.args[0] != 'database is locked': synch.close(); raise
+          continue
+        break
+      synch.close()
+    return wait
+
+  @staticmethod
+  def remove_synch(vpath):
+    tpath = vpath.with_suffix('.tmp')
+    tpath.unlink()
 
 #==================================================================================================
 class DefaultStorage (FileStorage):

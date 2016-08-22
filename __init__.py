@@ -149,6 +149,7 @@ Methods:
 #==================================================================================================
   def __new__(cls,*a,**ka):
     return super(ARG,cls).__new__(cls,(a,ka))
+  def __getnewargs_ex__(self): return tuple(self)
 
   def variant(self,*a,**ka):
     r"""
@@ -166,10 +167,7 @@ Returns a variant of *self* where *a* is appended to the positional arguments an
     sep = ',' if a and ka else ''
     return 'ARG({}{}{})'.format(a,sep,ka)
 
-  def __str__(self):
-    return self.__repr__()
-
-  def __getnewargs_ex__(self): return tuple(self)
+  def __str__(self): return self.__repr__()
 
 #==================================================================================================
 def zipaxes(L,fig,sharex=False,sharey=False,**ka):
@@ -330,16 +328,15 @@ Returns a subclass of :class:`list` with an IPython pretty printer for columns. 
 #==================================================================================================
 def ipysetup(D,helpers={},types={},_sort=(lambda x:x),**buttons):
   r"""
-Sets values in a dictionary through an interface.
-
-:param D: target dictionary
-:type D: :class:`dict`
-:param helpers: dictionary of helpers (same keys as target dictionary)
-:param types: dictionary of vtypes (same keys as target dictionary)
-:param buttons: a dictionary of dictionaries with same keys as the target (see below)
+:param D: an updatable target mapping object
+:param helpers: dictionary of helpers (same keys as target)
+:type helpers: :class:`dict`
+:param types: dictionary of vtypes (same keys as target)
+:type types: :class:`dict`
+:param buttons: dictionary of button specs (see below)
 :type buttons: :class:`dict`
 
-A helper is any string. A vtype is either a python basic type (\ :class:`bool`, :class:`str`, :class:`int`, :class:`float`), or a tuple of strings, or an instance of :class:`slice` (possibly with float arguments). When a button is specified by a key and a dict value, a button labeled with that key is displayed, which, when clicked, updates the target dictionary with its value.
+Sets values in the target object through an graphical interface in IPython. A helper is any string. A vtype is either a python basic type (\ :class:`bool`, :class:`str`, :class:`int`, :class:`float`), or a tuple of strings, or an instance of :class:`slice` (possibly with float arguments). When a button is specified by a key and a dict value, a button labeled with that key is displayed, which, when clicked, updates the target with its value.
   """
 #==================================================================================================
   from ipywidgets.widgets import Text, Textarea, IntText, FloatText, IntSlider, FloatSlider, Dropdown, Checkbox, Button, HBox, VBox
@@ -461,14 +458,12 @@ Returns an HTML safe representation of *x*.
 #==================================================================================================
 def html_table(irows,fmts,hdrs=None,title=None):
   r"""
-Returns an HTML table object.
-
 :param irows: a generator of pairs of an object (key) and a tuple of objects (value)
 :param fmts: a tuple of format functions matching the length of the value tuples
 :param hdrs: a tuple of strings matching the length of the value tuples
 :param title: a string
 
-The format functions in *fmts* are explected to return HTML objects (as understood by :mod:`lxml`).
+Returns an HTML table object with one row for each pair generated from *irow*. The key of each pair is in a column of its own with no header, and the value must be a tuple whose length matches the number of columns. The format functions in *fmts*, one for each column, are expected to return HTML objects (as understood by :mod:`lxml`). *hdrs* may specify headers as a tuple of strings, one for each column.
   """
 #==================================================================================================
   from lxml.builder import E
@@ -483,10 +478,10 @@ The format functions in *fmts* are explected to return HTML objects (as understo
 #==================================================================================================
 def html_stack(*a,**ka):
   r"""
-Returns a stack of HTML objects.
-
-:param a: a list of HTML objects (as understood by :mod:`lxml`)
+:param a: a list of (lists of) HTML objects (as understood by :mod:`lxml`)
 :param ka: a dictionary of HTML attributes for the DIV encapsulating each object
+
+Merges the list of HTML objects into a single HTML object, which is returned.
   """
 #==================================================================================================
   from lxml.builder import E
@@ -561,10 +556,7 @@ Declares a module :mod:`pyqt` in the package of this file equivalent to :mod:`Py
       except ImportError:
         raise ImportError('No QT binding found (PyQt4 or PySide)',name='pyqt')
   else:
-    b = b.lower()
-    if b=='pyside': mod = pyside()
-    elif b=='pyqt4': mod = pyqt4()
-    else: raise ValueError('QT binding must be \'pyside\' or \'pyqt4\'')
+    mod = dict(pyside=pyside,pyqt4=pyqt4)[b.lower()]()
   sys.modules[__name__+'.pyqt'] = mod
   return mod
 

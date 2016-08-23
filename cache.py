@@ -86,7 +86,7 @@ Instances of this class manage cache repositories. There is at most one instance
 - ``hits``: number of call events with that functor where the argument had previously been seen; such a call does not generate a new ``Cell``, but reuses the existing one;
 - ``maxsize``: maximum number of cells attached to the block; when overflow occurs, the cells with the oldest ``hitdate`` are discarded (this amounts to the Least Recently Used policy, a.k.a. LRU, currently hardwired).
 
-Furthermore, a :class:`CacheDB` instance acts as a mapping object, where the keys are block identifiers (:class:`int`) and values are :class:`CacheBlock` objects for the corresponding blocks. Such :class:`CacheBlock` objects are normally deactivated (i.e. their signatures do not support calls).
+Furthermore, a :class:`CacheDB` instance acts as a mapping object, where the keys are block identifiers (:class:`int`) and values are :class:`CacheBlock` objects for the corresponding blocks. Such :class:`CacheBlock` objects may be deactivated (i.e. their signatures do not support calls).
 
 Finally, :class:`CacheDB` instances have an HTML ipython display.
 
@@ -225,17 +225,17 @@ A block object is callable, and calls take a single argument. Method :meth:`__ca
 
 * Duplicate detection of arguments and computation of the value attached to an argument is delegated to a dedicated signature object which must implement the following api (e.g. implemented by class :class:`Signature`):
 
-  - method :meth:`getkey` takes as input an argument and produces a byte string which represents it uniquely.
-  - method :meth:`getval` takes as input an argument and produces its associated value (to be cached).
-  - method :meth:`html` takes as input a byte string as returned by invocation of method :meth:`getkey` and returns an HTML formatted representation of the argument of that invocation.
+  - method :meth:`getkey` takes as input an argument and must return a byte string which represents it uniquely.
+  - method :meth:`getval` takes as input an argument and must return its associated value (to be cached).
+  - method :meth:`html` takes as input a byte string as returned by invocation of method :meth:`getkey` and must return an HTML formatted representation of the argument of that invocation.
 
 * The actual storage of values is delegated to a dedicated storage object which must implement the following api (e.g. implemented by class :class:`FileStorage`):
 
   - method :meth:`insert` is called inside the transaction which inserts a new cell into the index, hence exactly once overall for a given cell. It takes as input the cell id and must return the function to call to set its value. The returned function is called exactly once, but outside the transaction. It is passed the computed value and must return the size in bytes of its storage. The cell may have disappeared from the cache when called, or may disappear while executing, so the assignment may have to later be rolled back.
-  - method :meth:`lookup` is called inside the transaction which looks up a cell from the index. There may be multiple such transactions in possibly concurrent threads/processes for a given cell. It takes as input a cell id and a boolean flag indicating whether the cell value is currently being computed by a concurrent thread/process, and must return the function to call to get its value. The returned function is called exactly once, but outside the transaction.
-  - method :meth:`remove` is called inside the transaction which deletes a cell from the index. It takes as arguments a cell id and the size of its value as memorised in the index.
+  - method :meth:`lookup` is called inside the transaction which looks up a cell from the index. There may be multiple such transactions in possibly concurrent threads/processes for a given cell. It takes as input the cell id and a boolean flag indicating whether the cell value is currently being computed by a concurrent thread/process, and must return the function to call to get its value. The returned function is called exactly once, but outside the transaction.
+  - method :meth:`remove` is called inside the transaction which deletes a cell from the index. It takes as arguments the cell id and the size of its value as memorised in the index.
 
-Furthermore, a :class:`CacheBlock` object acts as a mapping where the keys are cell identifiers (:class:`int`) and values are triples ``hitdate``, ``ckey``, ``size``. When ``size`` is null, the value of the cell is still being computed, otherwise it represents its size in bytes. If negative, the stored value is an exception.
+Furthermore, a :class:`CacheBlock` object acts as a mapping where the keys are cell identifiers (:class:`int`) and values are triples ``hitdate``, ``ckey``, ``size``. When ``size`` is null, the value of the cell is still being computed, otherwise it represents its size in bytes, possibly with a negative sign if the stored value is an exception.
 
 Finally, :class:`CacheBlock` instances have an HTML ipython display.
 
@@ -287,10 +287,10 @@ Implements cacheing as follows:
 
 - method :meth:`getkey` of the signature is invoked with argument *arg* to obtain a ``ckey``.
 - Then a transaction is begun on the index database.
-- If there already exists a cell with the same ``ckey``, the transaction is immediately terminated and its value is extracted and returned.
-- If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is immediately created, then the transaction is terminated. Then method :meth:`getval` of the signature is invoked with argument *arg*. The result is stored, even if it is an exception, and a new transaction updates the database cell to record that its result has been computed.
+- If there already exists a cell with the same ``ckey``, the transaction is immediately terminated and its value is extracted, using method :meth:`lookup` of the storage, and returned.
+- If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is immediately created, then the transaction is terminated. Then method :meth:`getval` of the signature is invoked with argument *arg*. The result is stored, even if it is an exception, using method :meth:`insert` of the storage, and completion is recorded in the database.
 
-If the result was an exception, it is raised, otherwise it is returned.
+If the result was an exception, it is raised, otherwise it is returned. In all cases, hit status is updated in the database (for the LRU policy).
     """
 #--------------------------------------------------------------------------------------------------
     ckey = self.sig.getkey(arg)
@@ -420,7 +420,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
 #--------------------------------------------------------------------------------------------------
   def getval(self,arg):
     r"""
-Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. Returns the value of calling attribute :attr:`func` with that positional argument list and keyword argument dict. Note that attribute :attr:`func` is not restored when the signature is obtained by unpickling, so invocation of this method disabled in that case.
+Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. Returns the value of calling attribute :attr:`func` with that positional argument list and keyword argument dict. Note that attribute :attr:`func` is not restored when the signature is obtained by unpickling, so invocation of this method is disabled in that case.
     """
 #--------------------------------------------------------------------------------------------------
     a,ka = arg

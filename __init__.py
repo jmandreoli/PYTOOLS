@@ -215,7 +215,7 @@ Caveat: function *func* should be defined at the top-level of its module, and th
 
   def __init__(self,func,*a,**ka):
     self.reset()
-    self.config = [func,a,ka.copy()]
+    self.config = [func,a,ka]
     self.key = None
 
   def rearg(self,*a,**ka):
@@ -245,32 +245,35 @@ Replaces the config function of this process. Raises an error if the process is 
     self.value = None
 
   def freeze(self):
-    if self.key is None:
-      from inspect import getcallargs, unwrap, signature
+    k = self.key
+    if k is None:
       func,a,ka = self.config
-      f = unwrap(func)
-      d = getcallargs(f,*a,**ka)
-      self.key = func,tuple((tuple(sorted(d[p.name].items())) if p.kind==p.VAR_KEYWORD else d[p.name]) for p in signature(f).parameters.values())
+      self.key = k = func,a,tuple(sorted(ka.items()))
+    return k
 
   def as_html(self,incontext):
     from lxml.builder import E
     func,a,ka = self.config
     x = html_parlist(a,sorted(ka.items()),incontext,deco=('[|','|',']'))
+    x.insert(0,E.B('::'))
     x.insert(0,(E.SPAN if self.incarnated else E.EM)('{}.{}'.format(func.__module__,func.__name__),style='padding:5px;'))
-    x.insert(1,E.B('::'))
     return x
 
-  def __getstate__(self):
-    self.freeze()
-    func,a,ka = self.config
-    return func,a,tuple(sorted(ka.items())),self.key
+  def __getstate__(self): return self.freeze()
   def __setstate__(self,state):
     self.reset()
-    func,a,ka,self.key = state
-    self.config = func,a,dict(ka)
-  def __hash__(self): self.freeze(); return hash(self.key)
-  def __eq__(self,other): return isinstance(other,Expr) and (self.config == other.config if (self.key is None or other.key is None) else self.key == other.key)
+    func,a,ka = self.key = state
+    self.config = [func,a,dict(ka)]
+  def __hash__(self): return hash(self.freeze())
+  def __eq__(self,other): return isinstance(other,Expr) and self.config == other.config
   def __repr__(self): return repr(self.value) if self.incarnated else super().__repr__()
+
+  # for legacy purpose:
+  def __setstate2__(self,state):
+    self.reset()
+    func,a,ka,key = state
+    self.config = func,a,dict(ka)
+    self.key = func,a,ka
 
 class MapExpr (Expr,Mapping):
   r"""

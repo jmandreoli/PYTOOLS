@@ -218,8 +218,8 @@ Instances of this class implements blocks of cells sharing the same functor (sig
 :type signature: :class:`Signature`
 :param maxsize: if not :const:`None`, resizes the block at initialisation
 :type maxsize: :class:`int`\|\ :class:`NoneType`
-:param clear: if :const:`True`, clears the block at initialisation
-:type clear: :class:`bool`
+:param cacheonly: if :const:`True`, cell creation is disallowed
+:type cacheonly: :class:`bool`
 
 A block object is callable, and calls take a single argument. Method :meth:`__call__` implements the cacheing mechanism.
 
@@ -245,12 +245,12 @@ Methods:
   """
 #==================================================================================================
 
-  def __init__(self,db=None,signature=None,block=None,maxsize=None,clear=False):
+  def __init__(self,db=None,signature=None,block=None,maxsize=None,cacheonly=False):
     self.sig = signature
     self.db = db = CacheDB(db)
     self.block = db.getblock(signature) if block is None else block
     if maxsize is not None: self.resize(maxsize)
-    if clear: self.clear()
+    self.cacheonly = cacheonly
 
   def __hash__(self): return hash((self.db,self.block))
   def __eq__(self,other): return isinstance(other,CacheBlock) and self.db is other.db and self.block == other.block
@@ -268,7 +268,7 @@ Clears all the cells from this block which cache an exception.
       conn.execute('UPDATE Block SET maxsize=? WHERE oid=?',(n,self.block,))
     self.checkmax()
 
-  def info(self,typ=namedtuple('CellInfo',('signature','hits','misses','maxsize','currsize'))):
+  def info(self,typ=namedtuple('BlockInfo',('signature','hits','misses','maxsize','currsize'))):
     r"""
 Returns information about this block. Available attributes:
 :attr:`signature`, :attr:`hits`, :attr:`misses`, :attr:`maxsize`, :attr:`currsize`
@@ -298,6 +298,7 @@ If the result was an exception, it is raised, otherwise it is returned. In all c
       conn.execute('BEGIN IMMEDIATE TRANSACTION')
       row = conn.execute('SELECT oid,size FROM Cell WHERE block=? AND ckey=?',(self.block,ckey,)).fetchone()
       if row is None:
+        if self.cacheonly: raise Exception('Cache cell creation disallowed')
         cell = conn.execute('INSERT INTO Cell (block,ckey) VALUES (?,?)',(self.block,ckey)).lastrowid
         conn.execute('UPDATE Block SET misses=misses+1 WHERE oid=?',(self.block,))
         setval = self.db.storage.insert(cell)

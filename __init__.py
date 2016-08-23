@@ -268,13 +268,6 @@ Replaces the config function of this process. Raises an error if the process is 
   def __eq__(self,other): return isinstance(other,Expr) and self.config == other.config
   def __repr__(self): return repr(self.value) if self.incarnated else super().__repr__()
 
-  # for legacy purpose:
-  def __setstate2__(self,state):
-    self.reset()
-    func,a,ka,key = state
-    self.config = func,a,dict(ka)
-    self.key = func,a,ka
-
 class MapExpr (Expr,Mapping):
   r"""
 Symbolic expressions of this class are also (read-only) mappings and trigger incarnation on all the mapping operations, then delegate such operations to their value (expected to be a mapping).

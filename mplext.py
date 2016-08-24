@@ -379,7 +379,7 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
     s.update(save)
     pth = Path(s.pop('dirname'))
     try:
-      assert pth.isdir()
+      assert pth.is_dir()
       for f in list(pth.iterdir()): rmtree(str(f))
     except Exception as e:
       logger.warn('Error on save directory %s: %s',path,e)

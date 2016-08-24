@@ -38,7 +38,7 @@ def display(*l,**ka): # l must be a list of Distr instances (probability distrib
       ax.set_xlim(D.domv)
       ax.set_title('pdf: {}'.format(D.name))
       # automagically create an axes-cell for i-th entry cdf: rowspan S(i), right col
-      ax = view[S(i),1].make_axes()
+      ax = view[S(i),1].make_axes(sharex=ax)
       ax.plot(x,D.cdf(x))
       ax.set_title('cdf: {}'.format(D.name))
     # automagically create an axes-cell for the message: bottom row, both cols

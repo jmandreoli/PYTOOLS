@@ -46,13 +46,13 @@ Instances of this class are persistent and represent a bunch of performance expe
 #--------------------------------------------------------------------------------------------------
   def run(self,name,seq,smax,host=None,exc=None,**ka):
     r"""
-Launches one experiment, i.e. a sequence of tests. Each test takes one input (a number) and produces a pair of a result (any object) and a size (a number). The latter must be an increasing function of the input. The test loop stops when the test size exceeds a threshold.
-
 :param name: the name of the test in the testbed
 :param seq: a generator of test inputs (floats) which must be in increasing order
 :param smax: threshold on test size
 :param host: a machine name accessible by ssh (default: current machine)
 :param exc: the path to the python executable to run on the host (default: current executable)
+
+Launches one experiment, i.e. a sequence of tests. Each test takes one input (a number) and produces a pair of a result (any object) and a size (a number). The latter must be an increasing function of the input. The test loop stops when the test size exceeds a threshold.
     """
 #--------------------------------------------------------------------------------------------------
     def rcall(sub,m,protocol=2):
@@ -78,8 +78,6 @@ Launches one experiment, i.e. a sequence of tests. Each test takes one input (a 
 #--------------------------------------------------------------------------------------------------
   def display(self,fig,target,meter=(lambda x: x),filtr=(lambda exp: True),fmt={},**kfiltr):
     r"""
-Displays the results of selected experiments in this context. The selection test is the conjunction of the filter function *filtr* applied to the experiment object, and for each item *s*,\ *v* of the dictionary *kfiltr*, whether slot *k* of the experiment is equal to *v*. If *v* is :const:`None`, it is replaced by a default value: the current host for ``host``, the current python executable for ``exc``, an empty dictionary for ``args`` and an empty string for ``name``.
-
 :param fig: a matplotlib figure
 :param target: the slot to plot
 :type target: ``host`` | ``name`` | ``args`` | ``exc``
@@ -87,6 +85,8 @@ Displays the results of selected experiments in this context. The selection test
 :type meter: callable|\ :class:`str`
 :param filtr: a function which maps an experiment into a boolean
 :param kfiltr: a dict with keys in ``host``, ``name``, ``args``, ``exc``
+
+Displays the results of selected experiments in this context. The selection test is the conjunction of the filter function *filtr* applied to the experiment object, and for each item *s*,\ *v* of the dictionary *kfiltr*, whether slot *k* of the experiment is equal to *v*. If *v* is :const:`None`, it is replaced by a default value: the current host for ``host``, the current python executable for ``exc``, an empty dictionary for ``args`` and an empty string for ``name``.
     """
 #--------------------------------------------------------------------------------------------------
     def mkfiltr(u,dflt=dict(host=gethostname(),exc=sys.executable,args={},name='')):

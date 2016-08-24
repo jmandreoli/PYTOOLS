@@ -220,7 +220,7 @@ Caveat: function *func* should be defined at the top-level of its module, and th
 
   def rearg(self,*a,**ka):
     r"""
-Updates the config arguments of this process. Raises an error if the process is frozen.
+Updates the config arguments of this instance: *a* is appended to the list of positional arguments and *ka* is updated into the dictionary of keyword arguments. Raises an error if the instance is frozen.
     """
     assert self.key is None
     self.config[1] += a
@@ -228,7 +228,7 @@ Updates the config arguments of this process. Raises an error if the process is 
 
   def refunc(self,f):
     r"""
-Replaces the config function of this process. Raises an error if the process is frozen.
+Set *f* as the config function of this instance. Raises an error if the instance is frozen.
     """
     assert self.key is None
     self.config[0] = f
@@ -594,9 +594,9 @@ def SQLinit(engine,meta):
 :param engine: a sqlalchemy engine (or its url)
 :param meta: a sqlalchemy metadata structure
 
-* When the database is empty, is is populated using *meta*
+* When the database is empty, a ``Metainfo`` table with a single row matching exactly the :attr:`info` attribute of *meta* is created, then the database is populated using *meta*.
 
-* When the database is not empty, it must contain a ``Metainfo`` table with a single row matching exactly the ``info`` attribute of *meta*, otherwise an exception is raised.
+* When the database is not empty, it must contain a ``Metainfo`` table with a single row matching exactly the :attr:`info` attribute of *meta*, otherwise an exception is raised.
   """
 #==================================================================================================
   from datetime import datetime
@@ -647,7 +647,7 @@ A logging handler class which writes the log messages into a database.
   def __init__(self,engine,label,*a,**ka):
     from datetime import datetime
     from sqlalchemy.sql import select, insert, update, delete, and_
-    meta = SQLHandlerMeta()
+    meta = SQLHandlerMetadata()
     engine = SQLinit(engine,meta)
     session_table = meta.tables['Session']
     log_table = meta.tables['Log']

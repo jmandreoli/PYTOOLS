@@ -313,11 +313,11 @@ Returns a subclass of :class:`list` with an IPython pretty printer for columns. 
   """
 #==================================================================================================
   from lxml.etree import tostring
-  if parse is None: parse = getattr
+  if parse is None: parse = getattr(x,c)
   t = type(name,(list,),{})
-  fmts = len(columns)*((lambda s:s),)
+  fmts = len(columns)*((lambda s: s),)
   parsec=(lambda x: (parse(x,c) for c in columns))
-  t._repr_html_ = lambda self: tostring(html_table(enumerate(map(parsec(self))),fmts,hdrs=columns),encoding='unicode')
+  t._repr_html_ = lambda self: tostring(html_table(enumerate(map(parsec,self)),fmts,hdrs=columns),encoding='unicode')
   t.__getitem__ = lambda self,s,t=t: t(super(t,self).__getitem__(s)) if isinstance(s,slice) else super(t,self).__getitem__(s)
   return t
 

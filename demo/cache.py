@@ -18,10 +18,10 @@ from .. import MapExpr
 from ..cache import lru_persistent_cache
 automatic = False
 
-@lru_persistent_cache(db=DIR,ignore=('z',))
-def simplefunc(x,y=3,z=8): return x,y
+@lru_persistent_cache(db=DIR)
+def simplefunc(x,y=3): return x,y
 
-@lru_persistent_cache(db=DIR,ignore=('delay',))
+@lru_persistent_cache(db=DIR)
 def longfunc(x,delay=10):
   from time import sleep
   sleep(delay)
@@ -60,7 +60,7 @@ def demo():
   import subprocess
   from sys import executable as python
   DEMOS = (
-      ((simplefunc.cache,),'simplefunc(1,2) ; simplefunc(1,y=2,z=36)'),
+      ((simplefunc.cache,),'simplefunc(1,2) ; simplefunc(1,y=2)'),
       ((longfunc.cache,),'longfunc(42,6) ; longfunc(None,4)'),
       ((stepA.cache,stepB.cache),'proc()["abc"] ; proc(rabc=4)["abc"] ; proc(rbc=5)["abc"]'),
   )

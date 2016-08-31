@@ -1,4 +1,4 @@
-from collections.abc import Mapping, MutableMapping
+import collections
 import logging
 logger = logging.getLogger(__name__)
 
@@ -196,6 +196,63 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
     if sharey and axrefy is None: axrefy = ax
     yield o,ax
 
+def getversion(f):
+  v = inspect.signature(f).parameters.get('_version')
+  return None if v is None else v.default
+
+#==================================================================================================
+class LazyFunc:
+  r"""
+Instances of this class implement lazy functions defined only by their module, name and version.
+
+:param func: a function, defined at the top-level of its module (hence pickable)
+
+The version of a function is the default value of its formal parameter ``_version`` if it exists, otherwise :const:`None`. It must be a simple value.
+  """
+#==================================================================================================
+
+  def __init__(self,func):
+    self.config = func.__module__,func.__name__,self.getversion(func)
+    self.uptodate_ = True
+    self.func = func
+
+  @property
+  def uptodate(self):
+    u = self.uptodate_
+    if u is None:
+      from importlib import import_module
+      module,name,version = self.config
+      try:
+        func = getattr(import_module(module),name)
+        v = self.getversion(func)
+        u = v == version
+        if u: self.func = func
+        else: self.mismatch = v,version
+      except: u = False; self.mismatch = None
+      self.uptodate_ = u
+    return u
+
+  def __str__(self):
+    module,name,version = self.config
+    return '{}.{}{}'.format(module,name,'' if self.uptodate else '!')
+
+  def __call__(self,*a,**ka):
+    if not self.uptodate: raise Exception('Version mismatch',self.mismatch)
+    return self.func(*a,**ka)
+
+  def __getstate__(self): return self.config
+  def __setstate__(self,state): self.config = state; self.uptodate_ = None
+
+  def __hash__(self): return hash(self.config)
+  def __eq__(self,other):
+    return self.config==other.config if isinstance(other,LazyFunc) else (callable(other) and self.config==LazyFunc(other).config)
+
+  @staticmethod
+  def getversion(func):
+    from inspect import signature
+    v = signature(func).parameters.get('_version')
+    return (None if v is None else v.default)
+
 #==================================================================================================
 class Expr (HtmlPlugin):
   r"""
@@ -214,6 +271,7 @@ Caveat: function *func* should be defined at the top-level of its module, and th
 #==================================================================================================
 
   def __init__(self,func,*a,**ka):
+    assert callable(func)
     self.reset()
     self.config = [func,a,ka]
     self.key = None
@@ -248,7 +306,7 @@ Set *f* as the config function of this instance. Raises an error if the instance
     k = self.key
     if k is None:
       func,a,ka = self.config
-      self.key = k = func,a,tuple(sorted(ka.items()))
+      self.key = k = LazyFunc(func),a,tuple(sorted(ka.items()))
     return k
 
   def as_html(self,incontext):
@@ -256,19 +314,30 @@ Set *f* as the config function of this instance. Raises an error if the instance
     func,a,ka = self.config
     x = html_parlist(a,sorted(ka.items()),incontext,deco=('[|','|',']'))
     x.insert(0,E.B('::'))
-    x.insert(0,(E.SPAN if self.incarnated else E.EM)('{}.{}'.format(func.__module__,func.__name__),style='padding:5px;'))
+    x.insert(0,(E.SPAN if self.incarnated else E.EM)(str(func),style='padding:5px;'))
     return x
 
   def __getstate__(self): return self.freeze()
-  def __setstate__(self,state):
+  def __setstate__(self,key):
+    self.reset()
+    func,a,ka = self.key = key
+    self.config = [func,a,dict(ka)]
+  def __oldgetstate__(self): return self.freeze()
+  def __oldsetstate__(self,state):
     self.reset()
     func,a,ka = self.key = state
     self.config = [func,a,dict(ka)]
+  def __newsetstate__(self,state):
+    self.__oldsetstate__(state[:3])
+    func,a,ka = self.key
+    lfunc = LazyFunc(func)
+    self.key = lfunc,a,ka
+    self.config[0] = lfunc
   def __hash__(self): return hash(self.freeze())
   def __eq__(self,other): return isinstance(other,Expr) and self.config == other.config
   def __repr__(self): return repr(self.value) if self.incarnated else super().__repr__()
 
-class MapExpr (Expr,Mapping):
+class MapExpr (Expr,collections.abc.Mapping):
   r"""
 Symbolic expressions of this class are also (read-only) mappings and trigger incarnation on all the mapping operations, then delegate such operations to their value (expected to be a mapping).
   """
@@ -322,7 +391,7 @@ Returns a subclass of :class:`list` with an IPython pretty printer for columns. 
   return t
 
 #==================================================================================================
-def ipysetup(D,helpers={},types={},_sort=(lambda x:x),**buttons):
+def ipysetup(D,helpers={},types={},_sort=(lambda x:x),_width='20cm',**buttons):
   r"""
 :param D: an updatable target mapping object
 :param helpers: dictionary of helpers (same keys as target)
@@ -335,7 +404,7 @@ def ipysetup(D,helpers={},types={},_sort=(lambda x:x),**buttons):
 Sets values in the target object through an graphical interface in IPython. A helper is any string. A vtype is either a python basic type (\ :class:`bool`, :class:`str`, :class:`int`, :class:`float`), or a tuple of strings, or an instance of :class:`slice` (possibly with float arguments). When a button is specified by a key and a dict value, a button labeled with that key is displayed, which, when clicked, updates the target with its value.
   """
 #==================================================================================================
-  from ipywidgets.widgets import Text, Textarea, IntText, FloatText, IntSlider, FloatSlider, Dropdown, Checkbox, Button, HBox, VBox
+  from ipywidgets.widgets import Text, Textarea, IntText, FloatText, IntSlider, FloatSlider, Dropdown, Checkbox, Button, HBox, VBox, Layout
   from functools import partial
   def upd(ev): w = ev['owner']; D[w.description] = w.value
   def updw(w,x): w.value = x
@@ -355,15 +424,17 @@ Sets values in the target object through an graphical interface in IPython. A he
       elif isinstance(typ,slice):
         slider = IntSlider if isinstance(v,int) else FloatSlider
         F = partial(slider,min=(typ.start or 0),max=typ.stop,step=(typ.step or 0))
-      elif isinstance(typ,(tuple,list)): F = partial(Dropdown,options=typ)
+      elif isinstance(typ,(tuple,list,dict)): F = partial(Dropdown,options=typ)
       else: raise TypeError('Key: {}'.format(k))
-      w = F(description=k,value=v)
+      w = F(description=k,value=v,layout=layout)
       W.append(w)
       w.observe(upd, 'value')
-      yield HBox(children=(Action(partial(updw,w,v),description='?',tooltip=helpers.get(k,'')),w))
+      yield HBox(children=(Action(partial(updw,w,v),description='?',tooltip=helpers.get(k,''),layout=hblayout),w))
     if buttons:
       yield HBox(children=[Action(partial(upda,data),description=label) for label,data in sorted(buttons.items())])
   W = []
+  layout = Layout(width=_width)
+  hblayout = Layout(width='.5cm',padding='0cm')
   return VBox(children=list(row()))
 
 #==================================================================================================
@@ -690,7 +761,7 @@ def SQLHandlerMetadata(info=dict(origin=__name__+'.SQLHandler',version=1)):
   return meta
 
 #==================================================================================================
-class ormsroot (MutableMapping,HtmlPlugin):
+class ormsroot (collections.abc.MutableMapping,HtmlPlugin):
   r"""
 Instances of this class implement very simple persistent object managers based on the sqlalchemy ORM. This class should not be instantiated directly.
 

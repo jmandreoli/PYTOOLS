@@ -25,7 +25,7 @@ from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlis
 SCHEMA = '''
 CREATE TABLE Block (
   oid INTEGER PRIMARY KEY AUTOINCREMENT,
-  signature PICKLE UNIQUE NOT NULL,
+  functor PICKLE UNIQUE NOT NULL,
   hits INTEGER DEFAULT 0,
   misses INTEGER DEFAULT 0,
   maxsize INTEGER DEFAULT 10
@@ -81,12 +81,12 @@ Instances of this class manage cache repositories. There is at most one instance
 
 ``Block`` entries correspond to clusters of ``Cell`` entries (call events) sharing the same functor. They have the following fields
 
-- ``signature``: the persistent functor producing all the cells in the block; different blocks always have signatures with different pickle byte-strings;
+- ``functor``: the persistent functor producing all the cells in the block; different blocks always have functors with different pickle byte-strings;
 - ``misses``: number of call events with that functor where the argument had not been seen before;
 - ``hits``: number of call events with that functor where the argument had previously been seen; such a call does not generate a new ``Cell``, but reuses the existing one;
 - ``maxsize``: maximum number of cells attached to the block; when overflow occurs, the cells with the oldest ``hitdate`` are discarded (this amounts to the Least Recently Used policy, a.k.a. LRU, currently hardwired).
 
-Furthermore, a :class:`CacheDB` instance acts as a mapping object, where the keys are block identifiers (:class:`int`) and values are :class:`CacheBlock` objects for the corresponding blocks. Such :class:`CacheBlock` objects may be deactivated (i.e. their signatures do not support calls).
+Furthermore, a :class:`CacheDB` instance acts as a mapping object, where the keys are block identifiers (:class:`int`) and values are :class:`CacheBlock` objects for the corresponding blocks.
 
 Finally, :class:`CacheDB` instances have an HTML ipython display.
 
@@ -155,13 +155,13 @@ Note that this constructor is locally cached on the resolved path *spec*.
     conn.create_function('cellrm',2,self.storage.remove)
     return conn
 
-  def getblock(self,sig):
-    sigp = pickle.dumps(sig)
+  def getblock(self,functor):
+    p = pickle.dumps(functor)
     with self.connect() as conn:
       conn.execute('BEGIN IMMEDIATE TRANSACTION')
-      row = conn.execute('SELECT oid FROM Block WHERE signature=?',(sigp,)).fetchone()
+      row = conn.execute('SELECT oid FROM Block WHERE functor=?',(p,)).fetchone()
       if row is None:
-        return conn.execute('INSERT INTO Block (signature) VALUES (?)',(sigp,)).lastrowid
+        return conn.execute('INSERT INTO Block (functor) VALUES (?)',(p,)).lastrowid
       else:
         return row[0]
 
@@ -171,9 +171,9 @@ Note that this constructor is locally cached on the resolved path *spec*.
 
   def __getitem__(self,block):
     with self.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
-      r = conn.execute('SELECT signature FROM Block WHERE oid=?',(block,)).fetchone()
+      r = conn.execute('SELECT functor FROM Block WHERE oid=?',(block,)).fetchone()
     if r is None: raise KeyError(block)
-    return CacheBlock(db=self,signature=r[0],block=block)
+    return CacheBlock(db=self,functor=r[0],block=block)
 
   def __delitem__(self,block):
     with self.connect() as conn:
@@ -193,8 +193,8 @@ Note that this constructor is locally cached on the resolved path *spec*.
 
   def items(self):
     with self.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
-      for block,sig in conn.execute('SELECT oid,signature FROM Block'):
-        yield block, CacheBlock(db=self,signature=sig,block=block)
+      for block,functor in conn.execute('SELECT oid,functor FROM Block'):
+        yield block, CacheBlock(db=self,functor=functor,block=block)
 
   def clear(self):
     with self.connect() as conn:
@@ -211,11 +211,11 @@ Note that this constructor is locally cached on the resolved path *spec*.
 #==================================================================================================
 class CacheBlock (MutableMapping,HtmlPlugin):
   r"""
-Instances of this class implements blocks of cells sharing the same functor (signature).
+Instances of this class implements blocks of cells sharing the same functor.
 
 :param db: specification of the cache repository where the block resides
-:param signature: signature of the block, describing its functor
-:type signature: :class:`Signature`
+:param functor: functor of the block
+:type functor: :class:`Functor`
 :param maxsize: if not :const:`None`, resizes the block at initialisation
 :type maxsize: :class:`int`\|\ :class:`NoneType`
 :param cacheonly: if :const:`True`, cell creation is disallowed
@@ -223,7 +223,7 @@ Instances of this class implements blocks of cells sharing the same functor (sig
 
 A block object is callable, and calls take a single argument. Method :meth:`__call__` implements the cacheing mechanism.
 
-* Duplicate detection of arguments and computation of the value attached to an argument is delegated to a dedicated signature object which must implement the following api (e.g. implemented by class :class:`Signature`):
+* Duplicate detection of arguments and computation of the value attached to an argument is delegated to a dedicated functor object which must implement the following api (e.g. implemented by class :class:`Functor`):
 
   - method :meth:`getkey` takes as input an argument and must return a byte string which represents it uniquely.
   - method :meth:`getval` takes as input an argument and must return its associated value (to be cached).
@@ -245,10 +245,10 @@ Methods:
   """
 #==================================================================================================
 
-  def __init__(self,db=None,signature=None,block=None,maxsize=None,cacheonly=False):
-    self.sig = signature
+  def __init__(self,db=None,functor=None,block=None,maxsize=None,cacheonly=False):
+    self.functor = functor
     self.db = db = CacheDB(db)
-    self.block = db.getblock(signature) if block is None else block
+    self.block = db.getblock(functor) if block is None else block
     if maxsize is not None: self.resize(maxsize)
     self.cacheonly = cacheonly
 
@@ -268,14 +268,14 @@ Clears all the cells from this block which cache an exception.
       conn.execute('UPDATE Block SET maxsize=? WHERE oid=?',(n,self.block,))
     self.checkmax()
 
-  def info(self,typ=namedtuple('BlockInfo',('signature','hits','misses','maxsize','currsize'))):
+  def info(self,typ=namedtuple('BlockInfo',('functor','hits','misses','maxsize','currsize'))):
     r"""
 Returns information about this block. Available attributes:
-:attr:`signature`, :attr:`hits`, :attr:`misses`, :attr:`maxsize`, :attr:`currsize`
+:attr:`functor`, :attr:`hits`, :attr:`misses`, :attr:`maxsize`, :attr:`currsize`
     """
     with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
       sz = conn.execute('SELECT count(*) FROM Cell WHERE block=?',(self.block,)).fetchone()[0]
-      row = conn.execute('SELECT signature, hits, misses, maxsize FROM Block WHERE oid=?',(self.block,)).fetchone()
+      row = conn.execute('SELECT functor, hits, misses, maxsize FROM Block WHERE oid=?',(self.block,)).fetchone()
     return typ(row[0].info(),*row[1:],currsize=sz)
 
 #--------------------------------------------------------------------------------------------------
@@ -285,15 +285,15 @@ Returns information about this block. Available attributes:
 
 Implements cacheing as follows:
 
-- method :meth:`getkey` of the signature is invoked with argument *arg* to obtain a ``ckey``.
+- method :meth:`getkey` of the functor is invoked with argument *arg* to obtain a ``ckey``.
 - Then a transaction is begun on the index database.
 - If there already exists a cell with the same ``ckey``, the transaction is immediately terminated and its value is extracted, using method :meth:`lookup` of the storage, and returned.
-- If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is immediately created, then the transaction is terminated. Then method :meth:`getval` of the signature is invoked with argument *arg*. The result is stored, even if it is an exception, using method :meth:`insert` of the storage, and completion is recorded in the database.
+- If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is immediately created, then the transaction is terminated. Then method :meth:`getval` of the functor is invoked with argument *arg*. The result is stored, even if it is an exception, using method :meth:`insert` of the storage, and completion is recorded in the database.
 
 If the result was an exception, it is raised, otherwise it is returned. In all cases, hit status is updated in the database (for the LRU policy).
     """
 #--------------------------------------------------------------------------------------------------
-    ckey = self.sig.getkey(arg)
+    ckey = self.functor.getkey(arg)
     with self.db.connect() as conn:
       conn.execute('BEGIN IMMEDIATE TRANSACTION')
       row = conn.execute('SELECT oid,size FROM Cell WHERE block=? AND ckey=?',(self.block,ckey,)).fetchone()
@@ -309,7 +309,7 @@ If the result was an exception, it is raised, otherwise it is returned. In all c
     if row is None:
       logger.info('%s MISS(%s)',self,cell)
       tm = process_time(),perf_counter()
-      try: cval = self.sig.getval(arg)
+      try: cval = self.functor.getval(arg)
       except BaseException as e: cval = e; size = -1
       else: size = 1
       tm = process_time()-tm[0],perf_counter()-tm[1]
@@ -386,60 +386,87 @@ Checks whether there is a cache overflow and applies the LRU policy (hardwired).
 #--------------------------------------------------------------------------------------------------
 
   def as_html(self,incontext,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz)),time_fmt_=(lambda t: '' if t is None else time_fmt(t))):
-    return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,(lambda ckey,h=self.sig.html: h(ckey,incontext)),size_fmt_,time_fmt_,time_fmt_),title='{}: {}'.format(self.block,self.sig))
-  def __str__(self): return 'Cache<{}:{}>'.format(self.db.path,self.sig)
+    return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,(lambda ckey,h=self.functor.html: h(ckey,incontext)),size_fmt_,time_fmt_,time_fmt_),title='{}: {}'.format(self.block,self.functor))
+  def __str__(self): return 'Cache<{}:{}>'.format(self.db.path,self.functor)
 
 #==================================================================================================
-class Signature:
+class Functor:
   r"""
-An instance of this class defines a functor attached to a python top-level function. Parameters which do not influence the result can be specified (they will be ignored in the caching mechanism).
+An instance of this class defines a functor attached to a python top-level function.
 
 :param func: a function, defined at the top-level of its module (hence pickable)
-:param ignore: a list of parameter names among those of *func*
 
-The signature is entirely defined by the name of the function and of its module, as well as the sequence of parameter names, marked if ignored. Hence, two functions (possibly in different processes at different times) sharing these components produce the same signature.
+A functor is entirely defined by the name of the function, that of its module, and its signature. Hence, two functions (possibly in different processes at different times) sharing these components produce the same functor.
 
 Methods:
   """
 #==================================================================================================
-  def __init__(self,func,ignore):
-    func = inspect.unwrap(func)
-    self.name, self.params = '{}.{}'.format(func.__module__, func.__name__), tuple(getparams(func,ignore))
-    self.func = func
-#--------------------------------------------------------------------------------------------------
+  def __init__(self,func):
+    self.func = func = inspect.unwrap(func)
+    self.sig = sig = sig_norm(inspect.signature(func))
+    self.config = func.__module__,func.__name__
+    self.uptodate_ = True
+
   def getkey(self,arg):
+#--------------------------------------------------------------------------------------------------
     r"""
-Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are matched against the definition of :attr:`func`. Returns the pickled representation of the resulting values of the parameter names of the function in the order in which they appear in its definition, omitting the ignored ones. If a parameter name in :attr:`func` is prefixed by \*\* (hence its assignment is a dict), it is replaced by its sorted list of items.
+Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are normalised against the signature of :attr:`func` and the pickled value of the result is returned.
     """
 #--------------------------------------------------------------------------------------------------
-    return pickle.dumps(tuple(self.genkey(arg)))
-  def genkey(self,arg):
-    a,ka = arg
-    d = inspect.getcallargs(self.func,*a,**ka)
-    for p,typ in self.params:
-      if typ!=-1: yield sorted(d[p].items()) if typ==2 else d[p]
-#--------------------------------------------------------------------------------------------------
+    a,ka = self.norm(arg)
+    return pickle.dumps((a,sorted(ka.items())))
+
   def getval(self,arg):
+#--------------------------------------------------------------------------------------------------
     r"""
-Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. Returns the value of calling attribute :attr:`func` with that positional argument list and keyword argument dict. Note that attribute :attr:`func` is not restored when the signature is obtained by unpickling, so invocation of this method is disabled in that case.
+Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. Returns the value of calling attribute :attr:`func` with that positional argument list and keyword argument dict.
     """
 #--------------------------------------------------------------------------------------------------
+    if not self.uptodate: raise ObsoleteFunctorException(self.mismatch)
     a,ka = arg
     return self.func(*a,**ka)
 
 #--------------------------------------------------------------------------------------------------
   def html(self,ckey,incontext):
 #--------------------------------------------------------------------------------------------------
-    def h(ckey):
-      for v,(p,typ) in zip(ckey,((p,typ) for p,typ in self.params if typ!=-1)):
-        if typ==2: yield from v
-        else: yield p,v
-    return html_parlist((),h(pickle.loads(ckey)),incontext)
+    a,ka = pickle.loads(ckey)
+    return html_parlist(a,ka,incontext)
 
-  def info(self): return self.name
-  def __str__(self,mark={-1:'-',0:'',1:'*',2:'**'}): return '{}({})'.format(self.name,','.join(mark[typ]+p for p,typ in self.params))
-  def __getstate__(self): return self.name, self.params
-  def __setstate__(self,state): self.name, self.params = state
+  def norm(self,arg):
+    a,ka = arg
+    b = self.sig.bind(*a,**ka)
+    return b.args, b.kwargs
+
+  def info(self): return self.config,self.sig
+
+  def __str__(self): module,name = self.config; return '{}.{}({})'.format(module,name,self.sig)
+  def __repr__(self): module,name = self.config; return 'Functor<{},{},{}>'.format(module,name,self.sig)
+  def __getstate__(self): return self.config,sig_dump(self.sig)
+  def __setstate__(self,state):
+    self.config,x = state
+    self.sig = sig_load(x)
+    self.uptodate_ = None
+
+  @property
+  def uptodate(self):
+    u = self.uptodate_
+    if u is None:
+      from importlib import import_module
+      module,name = self.config
+      try:
+        func = getattr(import_module(module),name)
+        sig = sig_norm(inspect.signature(func))
+        u = sig == self.sig
+        if u: self.func = func
+        else: self.mismatch = sig,self.sig
+      except: u = False; self.mismatch = None
+      self.uptodate_ = u
+    return u
+
+def sig_dump(sig): return tuple((p.name,p.kind,p.default) for p in sig.parameters.values())
+def sig_load(x): return inspect.Signature(inspect.Parameter(name,kind,default=default) for name,kind,default in x)
+def sig_norm(sig): return sig_load(sig_dump(sig))
+class ObsoleteFunctorException (Exception): pass
 
 #==================================================================================================
 class FileStorage:
@@ -574,18 +601,12 @@ Attributes:
 #--------------------------------------------------------------------------------------------------
 def lru_persistent_cache(*a,**ka):
   r"""
-A decorator which applies to a function and returns a persistently cached version of it. The function must be defined at the top-level of its module, to be compatible with :class:`Signature`. When not applied to a function (as sole positional argument), returns a version of itself with default keyword arguments given by *ka*.
+A decorator which applies to a function and returns a persistently cached version of it. The function must be defined at the top-level of its module, to be compatible with :class:`Functor`. When not applied to a function (as sole positional argument), returns a version of itself with default keyword arguments given by *ka*.
   """
 #--------------------------------------------------------------------------------------------------
-  def transf(f,ignore=(),factory=CacheBlock,**ka):
-    c = factory(signature=Signature(f,ignore),**ka)
+  def transf(f,factory=CacheBlock,**ka):
+    c = factory(functor=Functor(f),**ka)
     F = lambda *a,**ka: c((a,ka))
     F.cache = c
     return update_wrapper(F,f)
   return transf(*a,**ka) if a else partial(lru_persistent_cache,**ka)
-
-#--------------------------------------------------------------------------------------------------
-def getparams(func,ignore=(),code={inspect.Parameter.VAR_POSITIONAL:1,inspect.Parameter.VAR_KEYWORD:2}):
-#--------------------------------------------------------------------------------------------------
-  for p in inspect.signature(func).parameters.values():
-    yield p.name,(-1 if p.name in ignore else code.get(p.kind,0))

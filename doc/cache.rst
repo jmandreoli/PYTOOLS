@@ -12,7 +12,7 @@ The following piece of code illustrates the use of this module.
    :language: python
    :tab-width: 2
 
-* Using the :func:`lru_persistent_cache` decorator, function :func:`simplefunc` is turned into a persistent cache, and invocations of that function use the cache. The cache is on disk (in folder *DIR*) and is shared across processes/threads. Observe that argument *z* is ignored, so calls differing only on that argument hit the same cache cell.
+* Using the :func:`lru_persistent_cache` decorator, function :func:`simplefunc` is turned into a persistent cache, and invocations of that function use the cache. The cache is on disk (in folder *DIR*) and is shared across processes/threads.
 
 * Function :func:`longfunc` is also turned into a persistent cache. Unlike :func:`simplefunc`, it takes some time to complete and may raise an exception. If a call is ongoing and a concurrent call sharing the same cache cell is invoked, the latter is suspended until the former completes. If a call results in an exception, that exception is cached and both that call and all those waiting on it eventually raise the exception.
 

@@ -322,17 +322,6 @@ Set *f* as the config function of this instance. Raises an error if the instance
     self.reset()
     func,a,ka = self.key = key
     self.config = [func,a,dict(ka)]
-  def __oldgetstate__(self): return self.freeze()
-  def __oldsetstate__(self,state):
-    self.reset()
-    func,a,ka = self.key = state
-    self.config = [func,a,dict(ka)]
-  def __newsetstate__(self,state):
-    self.__oldsetstate__(state[:3])
-    func,a,ka = self.key
-    lfunc = LazyFunc(func)
-    self.key = lfunc,a,ka
-    self.config[0] = lfunc
   def __hash__(self): return hash(self.freeze())
   def __eq__(self,other): return isinstance(other,Expr) and self.config == other.config
   def __repr__(self): return repr(self.value) if self.incarnated else super().__repr__()

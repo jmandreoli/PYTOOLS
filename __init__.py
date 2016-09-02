@@ -211,10 +211,17 @@ The version of a function is the default value of its formal parameter ``_versio
   """
 #==================================================================================================
 
-  def __init__(self,func):
-    self.config = func.__module__,func.__name__,self.getversion(func)
-    self.uptodate_ = True
-    self.func = func
+  __slots__ = 'config', 'uptodate_', 'func', 'mismatch', '__dict__'
+
+  def __new__(cls,spec,fromfunc=True):
+    self = super(LazyFunc,cls).__new__(cls)
+    self.uptodate_ = fromfunc
+    if fromfunc:
+      self.func = spec
+      spec = spec.__module__,spec.__name__,self.getversion(spec)
+    self.config = spec
+
+  def __getnewargs__(self): return self.config,False
 
   @property
   def uptodate(self):
@@ -234,14 +241,11 @@ The version of a function is the default value of its formal parameter ``_versio
 
   def __str__(self):
     module,name,version = self.config
-    return '{}.{}{}'.format(module,name,'' if self.uptodate else '!')
+    return '{}.{}{}'.format(module,name,'' if self.uptodate else '?' if self.mismatch is None else '!')
 
   def __call__(self,*a,**ka):
     if not self.uptodate: raise Exception('Version mismatch',self.mismatch)
     return self.func(*a,**ka)
-
-  def __getstate__(self): return self.config
-  def __setstate__(self,state): self.config = state; self.uptodate_ = None
 
   def __hash__(self): return hash(self.config)
   def __eq__(self,other):
@@ -251,7 +255,7 @@ The version of a function is the default value of its formal parameter ``_versio
   def getversion(func):
     from inspect import signature
     v = signature(func).parameters.get('_version')
-    return (None if v is None else v.default)
+    return None if v is None else v.default
 
 #==================================================================================================
 class Expr (HtmlPlugin):

@@ -402,10 +402,10 @@ Methods:
   """
 #==================================================================================================
   def __init__(self,func):
-    self.func = func = inspect.unwrap(func)
-    self.sig = sig = sig_norm(inspect.signature(func))
-    self.config = func.__module__,func.__name__
-    self.uptodate_ = True
+	self.func = func
+    self.sig = sig_norm(inspect.signature(func))
+	self.pname = str(func)
+	self.valid = True
 
   def getkey(self,arg):
 #--------------------------------------------------------------------------------------------------
@@ -413,8 +413,9 @@ Methods:
 Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are normalised against the signature of :attr:`func` and the pickled value of the result is returned.
     """
 #--------------------------------------------------------------------------------------------------
-    a,ka = self.norm(arg)
-    return pickle.dumps((a,sorted(ka.items())))
+	assert self.valid
+	a,ka = self.norm(arg)
+	return pickle.dumps((a,sorted(ka.items())))
 
   def getval(self,arg):
 #--------------------------------------------------------------------------------------------------
@@ -422,51 +423,34 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
 Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. Returns the value of calling attribute :attr:`func` with that positional argument list and keyword argument dict.
     """
 #--------------------------------------------------------------------------------------------------
-    if not self.uptodate: raise ObsoleteFunctorException(self.mismatch)
-    a,ka = arg
-    return self.func(*a,**ka)
+	assert self.valid
+	a,ka = arg
+	return self.func(*a,**ka)
 
 #--------------------------------------------------------------------------------------------------
   def html(self,ckey,incontext):
 #--------------------------------------------------------------------------------------------------
-    a,ka = pickle.loads(ckey)
-    return html_parlist(a,ka,incontext)
+	a,ka = pickle.loads(ckey)
+	return html_parlist(a,ka,incontext)
 
   def norm(self,arg):
-    a,ka = arg
-    b = self.sig.bind(*a,**ka)
-    return b.args, b.kwargs
+	a,ka = arg
+	b = self.sig.bind(*a,**ka)
+	return b.args, b.kwargs
 
-  def info(self): return self.config,self.sig
+  def info(self): return self.pname,self.sig,self.valid
+  def __str__(self): return '{}({})'.format(self.pname,self.sig)
+  def __repr__(self): return 'Functor<{},{}>'.format(self.pname,self.sig)
 
-  def __str__(self): module,name = self.config; return '{}.{}({})'.format(module,name,self.sig)
-  def __repr__(self): module,name = self.config; return 'Functor<{},{},{}>'.format(module,name,self.sig)
-  def __getstate__(self): return self.config,sig_dump(self.sig)
+  def __getstate__(self): return self.func,sig_dump(self.sig),self.pname
   def __setstate__(self,state):
-    self.config,x = state
-    self.sig = sig_load(x)
-    self.uptodate_ = None
-
-  @property
-  def uptodate(self):
-    u = self.uptodate_
-    if u is None:
-      from importlib import import_module
-      module,name = self.config
-      try:
-        func = getattr(import_module(module),name)
-        sig = sig_norm(inspect.signature(func))
-        u = sig == self.sig
-        if u: self.func = func
-        else: self.mismatch = sig,self.sig
-      except: u = False; self.mismatch = None
-      self.uptodate_ = u
-    return u
+	func,sig,pname = state
+	self.valid = sig_dump(inspect.signature(func))==sig and str(func)==pname
+	self.func,self.sig,self.pname = func,sig_load(sig),pname
 
 def sig_dump(sig): return tuple((p.name,p.kind,p.default) for p in sig.parameters.values())
 def sig_load(x): return inspect.Signature(inspect.Parameter(name,kind,default=default) for name,kind,default in x)
 def sig_norm(sig): return sig_load(sig_dump(sig))
-class ObsoleteFunctorException (Exception): pass
 
 #==================================================================================================
 class FileStorage:
@@ -605,8 +589,8 @@ A decorator which applies to a function and returns a persistently cached versio
   """
 #--------------------------------------------------------------------------------------------------
   def transf(f,factory=CacheBlock,**ka):
-    c = factory(functor=Functor(f),**ka)
-    F = lambda *a,**ka: c((a,ka))
-    F.cache = c
-    return update_wrapper(F,f)
+    c = factory(functor=Functor(LazyFunc(f)),**ka)
+    F = LazyFunc(update_wrapper((lambda *a,**ka: c((a,ka))),f))
+	F.cache = c
+    return F
   return transf(*a,**ka) if a else partial(lru_persistent_cache,**ka)

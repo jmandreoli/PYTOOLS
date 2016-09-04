@@ -214,14 +214,15 @@ The version of a function is the default value of its formal parameter ``_versio
   __slots__ = 'config', 'uptodate_', 'func', 'mismatch', '__dict__'
 
   def __new__(cls,spec,fromfunc=True):
-    self = super(LazyFunc,cls).__new__(cls)
-    self.uptodate_ = fromfunc
     if fromfunc:
-      self.func = spec
-      spec = spec.__module__,spec.__name__,self.getversion(spec)
+	  if isinstance(spec,LazyFunc): return spec
+	  self = super(LazyFunc,cls).__new__(cls)
+	  self.func = spec
+	  spec = spec.__module__,spec.__name__,self.getversion(spec)
+	self.uptodate_ = fromfunc
     self.config = spec
 
-  def __getnewargs__(self): return self.config,False
+  def __getnewargs__(self): return self.config,None
 
   @property
   def uptodate(self):
@@ -310,7 +311,7 @@ Set *f* as the config function of this instance. Raises an error if the instance
     k = self.key
     if k is None:
       func,a,ka = self.config
-      self.key = k = LazyFunc(func),a,tuple(sorted(ka.items()))
+      self.key = k = func,a,tuple(sorted(ka.items()))
     return k
 
   def as_html(self,incontext):

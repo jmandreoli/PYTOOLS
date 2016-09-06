@@ -80,6 +80,35 @@ Objects of this class act as dict objects, except their keys are also attributes
   def __setstate__(self,r): self.__dict__['_ref'] = r
 
 #==================================================================================================
+def configurable_decorator(decorator):
+  r"""
+Turns *decorator* into a configurable decorator. Example::
+
+   @configurable_decorator
+   def trace(f,message='hello'):
+     @wraps(f)
+     def F(*a,**ka): print(message); return f(*a,**ka)
+     return F
+
+   @trace
+   def g(x): return x+1
+   g(3)
+   #>>> hello
+   #>>> 4
+
+   @trace(message='hello world')
+   def h(x): return x+1
+   h(4)
+   #>>> hello word
+   #>>> 5   
+  """
+#==================================================================================================
+  from functools import update_wrapper, partial
+  def D(*a,**ka):
+    return decorator(*a,**ka) if a else partial(D,**ka)
+  return update_wrapper(D,decorator)
+
+#==================================================================================================
 def config_xdg(rsc,deflt=None):
   r"""
 :param rsc: the name of an XDG resource
@@ -196,33 +225,36 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
     if sharey and axrefy is None: axrefy = ax
     yield o,ax
 
-def getversion(f):
-  v = inspect.signature(f).parameters.get('_version')
-  return None if v is None else v.default
-
 #==================================================================================================
-class LazyFunc:
+def vfunction(f):
   r"""
-Instances of this class implement lazy functions defined only by their module, name and version.
+A decorator assigning a version to a function. The versioned function behaves as the original function except that its version is saved on pickling and checked on unpickling. The decorated function should not be wrapped (i.e. this decorator should not be included in the scope of another wrapping decorator).
 
-:param func: a function, defined at the top-level of its module (hence pickable)
+:param f: a function, defined at the top-level of its module (hence pickable)
 
 The version of a function is the default value of its formal parameter ``_version`` if it exists, otherwise :const:`None`. It must be a simple value.
   """
 #==================================================================================================
+  from functools import update_wrapper
+  return update_wrapper(VFunction(f),f)
+
+class VFunction:
 
   __slots__ = 'config', 'uptodate_', 'func', 'mismatch', '__dict__'
 
   def __new__(cls,spec,fromfunc=True):
+    self = super(VFunction,cls).__new__(cls)
     if fromfunc:
-	  if isinstance(spec,LazyFunc): return spec
-	  self = super(LazyFunc,cls).__new__(cls)
-	  self.func = spec
-	  spec = spec.__module__,spec.__name__,self.getversion(spec)
-	self.uptodate_ = fromfunc
+      self.func = spec
+      spec = spec.__module__,spec.__name__,self.getversion(spec)
+    self.uptodate_ = fromfunc
     self.config = spec
+    return self
 
   def __getnewargs__(self): return self.config,None
+  def __getstate__(self): return
+  def __hash__(self): return hash(self.config)
+  def __eq__(self,other): return isinstance(other,VFunction) and self.config==other.config
 
   @property
   def uptodate(self):
@@ -231,10 +263,10 @@ The version of a function is the default value of its formal parameter ``_versio
       from importlib import import_module
       module,name,version = self.config
       try:
-        func = getattr(import_module(module),name)
-        v = self.getversion(func)
-        u = v == version
-        if u: self.func = func
+        x = getattr(import_module(module),name)
+        assert isinstance(x,VFunction)
+        u = x.config[-1] == version
+        if u: self.func = x.func
         else: self.mismatch = v,version
       except: u = False; self.mismatch = None
       self.uptodate_ = u
@@ -242,15 +274,11 @@ The version of a function is the default value of its formal parameter ``_versio
 
   def __str__(self):
     module,name,version = self.config
-    return '{}.{}{}'.format(module,name,'' if self.uptodate else '?' if self.mismatch is None else '!')
+    return '{}.{}'.format(module,name)
 
   def __call__(self,*a,**ka):
     if not self.uptodate: raise Exception('Version mismatch',self.mismatch)
     return self.func(*a,**ka)
-
-  def __hash__(self): return hash(self.config)
-  def __eq__(self,other):
-    return self.config==other.config if isinstance(other,LazyFunc) else (callable(other) and self.config==LazyFunc(other).config)
 
   @staticmethod
   def getversion(func):

@@ -17,7 +17,7 @@ from functools import partial, update_wrapper
 from collections import namedtuple, defaultdict
 from collections.abc import MutableMapping
 from time import process_time, perf_counter
-from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlist, HtmlPlugin, configurable_decorator, vfunction, VFunction
+from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlist, HtmlPlugin, configurable_decorator
 
 SCHEMA = '''
 CREATE TABLE Block (
@@ -394,7 +394,7 @@ An instance of this class defines a functor attached to a python top-level funct
 
 :param func: a function, defined at the top-level of its module (hence pickable)
 
-A functor is entirely defined by the name of the function, that of its module, and its signature. Hence, two functions (possibly in different processes at different times) sharing these components produce the same functor.
+A functor is entirely defined by the name of the function, that of its module, its version and its signature. Hence, two functions (possibly in different processes at different times) sharing these components produce the same functor.
 
 Methods:
   """
@@ -407,16 +407,17 @@ Methods:
     if fromfunc:
       self.func = spec
       self.sig = sig = inspect.signature(spec)
-      spec = spec.__module__,spec.__name__,sig_dump(sig)
+      spec = Shadow(spec),sig_dump(sig)
     else:
       self.sig = sig_load(spec[-1])
     self.config = spec
     return self
 
-  def __getnewargs__(self): return self.config,None
+  def __getnewargs__(self): return self.config,False
   def __getstate__(self): return
   def __hash__(self): return hash(self.config)
   def __eq__(self,other): return isinstance(other,Functor) and self.config==other.config
+  def __repr__(self): return '{}{}'.format(self.config[0],self.sig)
 
   def getkey(self,arg):
 #--------------------------------------------------------------------------------------------------
@@ -425,7 +426,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
     """
 #--------------------------------------------------------------------------------------------------
     a,ka = self.norm(arg)
-    return pickle.dumps((a,sorted(ka.items())))
+    return fpickle.dumps((a,sorted(ka.items())))
 
   def getval(self,arg):
 #--------------------------------------------------------------------------------------------------
@@ -439,7 +440,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
 #--------------------------------------------------------------------------------------------------
   def html(self,ckey,incontext):
 #--------------------------------------------------------------------------------------------------
-    a,ka = pickle.loads(ckey)
+    a,ka = fpickle.loads(ckey)
     return html_parlist(a,ka,incontext)
 
 #--------------------------------------------------------------------------------------------------
@@ -450,10 +451,6 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
     a,ka = arg
     b = self.sig.bind(*a,**ka)
     return b.args, b.kwargs
-
-  def __str__(self):
-    module,name,sig = self.config
-    return '{}.{}({})'.format(module,name,self.sig)
 
 def sig_dump(sig): return tuple((p.name,p.kind,p.default) for p in sig.parameters.values())
 def sig_load(x): return inspect.Signature(inspect.Parameter(name,kind,default=default) for name,kind,default in x)
@@ -592,10 +589,69 @@ Attributes:
 @configurable_decorator
 def lru_persistent_cache(f,factory=CacheBlock,**ka):
   r"""
-A decorator which makes a function persistently cached. The cached function behaves as the original function except that its invocations are cached and reused when possible. Furthermore, the cached function is also versioned (see the :func:`vfunction` decorator). The original function must be defined at the top-level of its module, to be compatible with :class:`Functor`.
+A decorator which makes a function persistently cached. The cached function behaves as the original function except that its invocations are cached and reused when possible. The original function must be defined at the top-level of its module, to be compatible with :class:`Functor`. If it does not have a version already, it is assigned version :const:`None`.
   """
 #--------------------------------------------------------------------------------------------------
+  assert inspect.isfunction(f)
+  if not hasattr(f,'version'): f.version = None
   c = factory(functor=Functor(f),**ka)
-  F = VFunction(update_wrapper((lambda *a,**ka: c((a,ka))),f))
+  F = lambda *a,**ka: c((a,ka))
   F.cache = c
   return update_wrapper(F,f)
+
+#--------------------------------------------------------------------------------------------------
+class fpickle:
+  r"""
+This namespace class defines class methods :meth:`load`, :meth:`loads`, :meth:`dump`, :meth:`dumps`, which are similar to the corresponding methods in module :mod:`pickle`, except for versioned function objects, which are replaced by their shadow (see class :class:`Shadow`).
+  """
+#--------------------------------------------------------------------------------------------------
+
+  class Pickler (pickle.Pickler):
+    def persistent_id(self,obj):
+      if inspect.isfunction(obj) and hasattr(obj,'version'): return Shadow(obj)
+
+  class Unpickler (pickle.Unpickler):
+    def persistent_load(self,pid): return pid
+
+  @classmethod
+  def dump(cls,obj,v): cls.Pickler(v).dump(obj)
+
+  @classmethod
+  def load(cls,u): return cls.Unpickler(u).load()
+
+  @classmethod
+  def dumps(cls,obj):
+    from io import BytesIO
+    v = BytesIO()
+    try: cls.Pickler(v).dump(obj); s = v.getvalue()
+    finally: v.close()
+    return s
+
+  @classmethod
+  def loads(cls,s):
+    from io import BytesIO
+    u = BytesIO(s)
+    try: return cls.Unpickler(u).load()
+    finally: u.close()
+
+#--------------------------------------------------------------------------------------------------
+class Shadow:
+  r"""
+Instances of this class are defined from versioned functions (ie. functions defined at the toplevel of their module, and with an attribute :attr:`version` defined). Their state is composed of the name, the module name and the version of the original function. They can be arbitrarily pickled and unpickled and produce a string representation close to that of their origin. However, unpickling does not restore the calling capacity of their origin.
+  """
+#--------------------------------------------------------------------------------------------------
+
+  __slots__ = 'config',
+
+  def __new__(cls,spec,fromfunc=True):
+    self = super(Shadow,cls).__new__(cls)
+    if fromfunc: spec = spec.__module__,spec.__name__,spec.version
+    self.config = spec
+    return self
+  def __getnewargs__(self): return self.config,False
+  def __getstate__(self): return
+  def __hash__(self): return hash(self.config)
+  def __eq__(self,other): return isinstance(other,Shadow) and self.config==other.config
+  def __repr__(self):
+    module,name,version = self.config
+    return '{}.{}{}'.format(module,name,('' if version is None else '{{version={}}}'.format(version)))

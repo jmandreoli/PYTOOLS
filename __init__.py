@@ -191,12 +191,9 @@ Returns a variant of *self* where *a* is appended to the positional arguments an
 
   def __repr__(self):
     a,ka = self
-    a = ','.join(repr(v) for v in a) if a else ''
-    ka = ','.join('{}={}'.format(k,repr(v)) for k,v in ka.items()) if ka else ''
-    sep = ',' if a and ka else ''
-    return 'ARG({}{}{})'.format(a,sep,ka)
-
-  def __str__(self): return self.__repr__()
+    a = ','.join(repr(v) for v in a)
+    ka = ','.join('{}={}'.format(k,repr(v)) for k,v in ka.items())
+    return 'ARG({}{}{})'.format(a,(',' if a and ka else ''),ka)
 
 #==================================================================================================
 def zipaxes(L,fig,sharex=False,sharey=False,**ka):
@@ -224,67 +221,6 @@ Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. T
     if sharex and axrefx is None: axrefx = ax
     if sharey and axrefy is None: axrefy = ax
     yield o,ax
-
-#==================================================================================================
-def vfunction(f):
-  r"""
-A decorator assigning a version to a function. The versioned function behaves as the original function except that its version is saved on pickling and checked on unpickling. The decorated function should not be wrapped (i.e. this decorator should not be included in the scope of another wrapping decorator).
-
-:param f: a function, defined at the top-level of its module (hence pickable)
-
-The version of a function is the default value of its formal parameter ``_version`` if it exists, otherwise :const:`None`. It must be a simple value.
-  """
-#==================================================================================================
-  from functools import update_wrapper
-  return update_wrapper(VFunction(f),f)
-
-class VFunction:
-
-  __slots__ = 'config', 'uptodate_', 'func', 'mismatch', '__dict__'
-
-  def __new__(cls,spec,fromfunc=True):
-    self = super(VFunction,cls).__new__(cls)
-    if fromfunc:
-      self.func = spec
-      spec = spec.__module__,spec.__name__,self.getversion(spec)
-    self.uptodate_ = fromfunc
-    self.config = spec
-    return self
-
-  def __getnewargs__(self): return self.config,None
-  def __getstate__(self): return
-  def __hash__(self): return hash(self.config)
-  def __eq__(self,other): return isinstance(other,VFunction) and self.config==other.config
-
-  @property
-  def uptodate(self):
-    u = self.uptodate_
-    if u is None:
-      from importlib import import_module
-      module,name,version = self.config
-      try:
-        x = getattr(import_module(module),name)
-        assert isinstance(x,VFunction)
-        u = x.config[-1] == version
-        if u: self.func = x.func
-        else: self.mismatch = v,version
-      except: u = False; self.mismatch = None
-      self.uptodate_ = u
-    return u
-
-  def __str__(self):
-    module,name,version = self.config
-    return '{}.{}'.format(module,name)
-
-  def __call__(self,*a,**ka):
-    if not self.uptodate: raise Exception('Version mismatch',self.mismatch)
-    return self.func(*a,**ka)
-
-  @staticmethod
-  def getversion(func):
-    from inspect import signature
-    v = signature(func).parameters.get('_version')
-    return None if v is None else v.default
 
 #==================================================================================================
 class Expr (HtmlPlugin):
@@ -983,6 +919,18 @@ Returns the representation of *time* in one of days,hours,minutes,seconds (depen
   if time < 24.: return '{}hr'.format(fmt(time))
   time /= 24.
   return '{}day'.format(fmt(time))
+
+#==================================================================================================
+def versioned(v):
+  r"""
+A decorator which assigns a version attribute to a function. The function must be defined at the toplevel of its module. The version must be a simple value.
+  """
+#==================================================================================================
+  def transf(f):
+    from inspect import isfunction
+    assert isfunction(f)
+    f.version = v; return f
+  return transf
 
 def loggingBasicConfig(level=None,**ka):
   if isinstance(level,str): level = getattr(logging,level)

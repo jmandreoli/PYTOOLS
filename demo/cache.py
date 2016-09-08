@@ -14,7 +14,9 @@ if __name__=='__main__':
 
 from pathlib import Path; DIR = Path(__file__).resolve().parent/'cache.dir'
 from collections import ChainMap
-from .. import MapExpr
+from time import sleep
+from os import getpid
+from .. import MapExpr, versioned
 from ..cache import lru_persistent_cache
 automatic = False
 
@@ -23,7 +25,6 @@ def simplefunc(x,y=3): return x,y
 
 @lru_persistent_cache(db=DIR)
 def longfunc(x,delay=10):
-  from time import sleep
   sleep(delay)
   if x is None: raise Exception('longfunc error')
   return x
@@ -36,6 +37,11 @@ def stepB(E,fr=None,to=None,r=0):
   p,q = fr
   return ChainMap({to:E[p]+E[q]+r},E)
 
+V = getpid()
+@lru_persistent_cache(db=DIR)
+@versioned(V)
+def vfunc(x): return x+V
+
 def proc(rab=1,rbc=2,rabc=3):
   P_ini = MapExpr(stepA,a=1,b=2,c=3)
   P_ab = MapExpr(stepB,P_ini,fr=('a','b'),to='ab',r=rab)
@@ -45,11 +51,10 @@ def proc(rab=1,rbc=2,rabc=3):
 
 #--------------------------------------------------------------------------------------------------
 
-def demo_(t,*L):
-  import time, logging
+def demo_(*L):
+  import logging
   logging.basicConfig(level=logging.INFO,format='[proc %(process)d @ %(asctime)s] %(message)s',datefmt='%H:%M:%S')
   logger = logging.getLogger()
-  time.sleep(float(t))
   for x in L:
     logger.info('Computing: %s',x)
     try: v = eval(x)
@@ -57,18 +62,21 @@ def demo_(t,*L):
     logger.info('Result: %s = %s',x,v)
 
 def demo():
-  import subprocess
+  import subprocess,os,time
   from sys import executable as python
   DEMOS = (
-      ((simplefunc.cache,),'simplefunc(1,2) ; simplefunc(1,y=2)'),
-      ((longfunc.cache,),'longfunc(42,6) ; longfunc(None,4)'),
-      ((stepA.cache,stepB.cache),'proc()["abc"] ; proc(rabc=4)["abc"] ; proc(rbc=5)["abc"]'),
+    'simplefunc(1,2) ; simplefunc(1,y=2)',
+    'longfunc(42,6) ; longfunc(None,4)',
+    'vfunc(3)',
+    "proc()['abc'] ; proc(rabc=4)['abc'] ; proc(rbc=5)['abc']",
   )
-  for caches,tests in DEMOS:
+  for f in simplefunc,longfunc,vfunc,stepA,stepB: f.cache.clear()
+  for tests in DEMOS:
     print(80*'-')
-    for c in caches: print('Clearing',c); c.clear()
-    L = tests.split(' ; ')
-    for w in [subprocess.Popen([python,__file__,str(t)]+L) for t in (0.,2.)]: w.wait()
+    L = [python,__file__]+tests.split(' ; ')
+    def sched():
+      for t in (0.,2.): time.sleep(t); yield subprocess.Popen(L)
+    for w in list(sched()): w.wait()
     if not automatic:
       try: input('RET: continue; ^-C: stop')
       except: print(); break

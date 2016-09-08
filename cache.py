@@ -422,7 +422,7 @@ Methods:
   def getkey(self,arg):
 #--------------------------------------------------------------------------------------------------
     r"""
-Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are normalised against the signature of :attr:`func` and the pickled value of the result is returned.
+Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are normalised against the signature of :attr:`func` and the pickled value of the result is returned. To account for embedded versioned function objects, pickling is done using :class:`fpickle`.
     """
 #--------------------------------------------------------------------------------------------------
     a,ka = self.norm(arg)
@@ -654,4 +654,4 @@ Instances of this class are defined from versioned functions (ie. functions defi
   def __eq__(self,other): return isinstance(other,Shadow) and self.config==other.config
   def __repr__(self):
     module,name,version = self.config
-    return '{}.{}{}'.format(module,name,('' if version is None else '{{version={}}}'.format(version)))
+    return '{}.{}{}'.format(module,name,('' if version is None else '{{{}}}'.format(version)))

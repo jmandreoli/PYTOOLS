@@ -249,7 +249,7 @@ Caveat: function *func* should be defined at the top-level of its module, and th
     r"""
 Updates the config arguments of this instance: *a* is appended to the list of positional arguments and *ka* is updated into the dictionary of keyword arguments. Raises an error if the instance is frozen.
     """
-    assert self.key is None
+    assert self.key is None, 'attempt to update a frozen Expr instance'
     self.config[1] += a
     self.config[2].update(ka)
 
@@ -257,7 +257,7 @@ Updates the config arguments of this instance: *a* is appended to the list of po
     r"""
 Set *f* as the config function of this instance. Raises an error if the instance is frozen.
     """
-    assert self.key is None
+    assert self.key is None, 'attempt to update a frozen Expr instance'
     self.config[0] = f
 
   def incarnate(self):

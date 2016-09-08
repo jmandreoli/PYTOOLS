@@ -931,10 +931,3 @@ A decorator which assigns a version attribute to a function. The function must b
     assert isfunction(f)
     f.version = v; return f
   return transf
-
-def loggingBasicConfig(level=None,**ka):
-  if isinstance(level,str): level = getattr(logging,level)
-  logger = logging.getLogger()
-  for h in logger.handlers: logger.removeHandler(h)
-  logging.basicConfig(level=level,**ka)
-  return logger

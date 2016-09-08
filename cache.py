@@ -452,6 +452,8 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
     b = self.sig.bind(*a,**ka)
     return b.args, b.kwargs
 
+  def obsolete(self): return self.config[0].obsolete()
+
 def sig_dump(sig): return tuple((p.name,p.kind,p.default) for p in sig.parameters.values())
 def sig_load(x): return inspect.Signature(inspect.Parameter(name,kind,default=default) for name,kind,default in x)
 
@@ -655,3 +657,12 @@ Instances of this class are defined from versioned functions (ie. functions defi
   def __repr__(self):
     module,name,version = self.config
     return '{}.{}{}'.format(module,name,('' if version is None else '{{{}}}'.format(version)))
+  def obsolete(self):
+    from importlib import import_module
+    module,name,version = self.config
+    try:
+      f = getattr(import_module(module),name)
+      if inspect.isfunction(f) and f.__module__==module and f.__name__==name:
+        return int(f.version!=version)
+    except: pass 
+    return -1

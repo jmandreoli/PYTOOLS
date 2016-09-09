@@ -18,7 +18,7 @@ The code at the bottom runs each of the demos defined in `DEMOS` twice, in two d
 
 * Function :func:`longfunc` is also turned into a persistent cache. Unlike :func:`simplefunc`, it takes some time to complete and may raise an exception. The second run hits the same cache cell before the first run has finished to compute it. In that case, the former waits until the latter completes to reuse the cached value. In one demo, that value is an exception, which is raised in both runs.
 
-* Function :func:`vfunc` is assigned a version (here the process id, just to show the behaviour when the version changes). Therefore, the persistent cache creates distinct cache cells for the distinct versions, and there is no reuse of the cached value from one run to the other.
+* Function :func:`vfunc` is assigned a version (here the process id, just to show the behaviour when the version changes). Therefore, the persistent cache creates distinct cache blocks for the distinct versions, and there is no reuse of the cached values from one run to the other.
 
 * Function :const:`proc` builds a closed symbolic expression which chains function :func:`stepA` and :func:`stepB`, both persistently cached. The process consists of 4 steps:
 
@@ -29,7 +29,7 @@ The code at the bottom runs each of the demos defined in `DEMOS` twice, in two d
 
   Of course, cacheing such simple operations is not very interesting, but the purpose of the example is to illustrate dependencies between arbitrary tasks which could be much more complex (and computationaly heavy). The logged trace of the computation illustrates both the evaluation mechanism of symbolic expressions (called incarnation, see :class:`Expr`) and its subtle interaction with cacheing.
 
-When a cache cell is created for an invocation, any versioned function which appears in any of its arguments at any level is memorised together with its version, so the cache cell is later invalidated if the version of any of these functions is updated. For example, in the last demo, the result of :func:`proc` is a symbolic invocation of :func:`stepB` whose first argument embeds two other symbolic invocations of :func:`stepB` and one of :func:`stepA`. If :func:`stepA` were versioned, and its version changed between two incarnations of the result of :func:`proc`, the cell for the first incarnation (attached to :func:`stepB`) would be invalidated, even if the version of :func:`stepB` has not changed.
+When a cache cell is created by an invocation, any versioned function which appears in any of its arguments at any level is memorised together with its version, so the cache cell is later invalidated if the version of any of these functions is updated. For example, in the last demo, the result of :func:`proc` is a symbolic invocation of :func:`stepB` whose first argument embeds two other symbolic invocations of :func:`stepB` and one of :func:`stepA`. If :func:`stepA` were versioned, and its version changed between two incarnations of the result of :func:`proc`, the cell for the first incarnation (attached to :func:`stepB`) would be invalidated, even if the version of :func:`stepB` has not changed.
 
 Typical output:
 

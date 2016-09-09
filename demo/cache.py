@@ -29,6 +29,11 @@ def longfunc(x,delay=10):
   if x is None: raise Exception('longfunc error')
   return x
 
+V = getpid()
+@lru_persistent_cache(db=DIR)
+@versioned(V)
+def vfunc(x): return x+V
+
 @lru_persistent_cache(db=DIR)
 def stepA(**ini): return ini
 
@@ -36,11 +41,6 @@ def stepA(**ini): return ini
 def stepB(E,fr=None,to=None,r=0):
   p,q = fr
   return ChainMap({to:E[p]+E[q]+r},E)
-
-V = getpid()
-@lru_persistent_cache(db=DIR)
-@versioned(V)
-def vfunc(x): return x+V
 
 def proc(rab=1,rbc=2,rabc=3):
   P_ini = MapExpr(stepA,a=1,b=2,c=3)

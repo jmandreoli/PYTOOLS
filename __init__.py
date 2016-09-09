@@ -177,7 +177,7 @@ Methods:
   """
 #==================================================================================================
   def __new__(cls,*a,**ka):
-    return super(ARG,cls).__new__(cls,(a,ka))
+    return super().__new__(cls,(a,ka))
   def __getnewargs_ex__(self): return tuple(self)
 
   def variant(self,*a,**ka):
@@ -328,23 +328,24 @@ A simple utility to browse sliceable objects page per page in IPython.
   else: interact((lambda page=start:display(D[(page-1)*pgsize:page*pgsize])),page=(1,P))
 
 #==================================================================================================
-def ipylist(name,columns,parse=None):
+def ipylist(name,columns):
   r"""
 :param name: name of the type
-:type name: :class:`str`
 :param columns: a tuple of column names
-:type columns: :class:`tuple`\ (\ :class:`str`)
-:param parse: a parsing function
 
-Returns a subclass of :class:`list` with an IPython pretty printer for columns. Function *parse* takes an object and a column name (from *columns*) as input and returns the representation of that column for that object. It defaults to :func:`getattr`.
+Returns a subclass of :class:`list` with an IPython pretty printer for columns. Each element of the list is 
   """
 #==================================================================================================
-  from lxml.etree import tostring
-  if parse is None: parse = getattr(x,c)
+  from lxml.etree import tostring, _Element
+  from lxml.builder import E
+  def parse(col):
+    if isinstance(col,str): return col.split(':')[0], '{{{}}}'.format(col).format
+    cn,cd = col; assert isinstance(cn,str) and callable(cd); return col
+  colnames,coldefns = zip(*map(parse,columns))
   t = type(name,(list,),{})
   fmts = len(columns)*((lambda s: s),)
-  parsec=(lambda x: (parse(x,c) for c in columns))
-  t._repr_html_ = lambda self: tostring(html_table(enumerate(map(parsec,self)),fmts,hdrs=columns),encoding='unicode')
+  def html(x): return x if isinstance(x,_Element) else E.SPAN(str(x))
+  t._repr_html_ = lambda self: tostring(html_table(enumerate((html(col(x)) for col in coldefns) for x in self),fmts,hdrs=colnames),encoding='unicode')
   t.__getitem__ = lambda self,s,t=t: t(super(t,self).__getitem__(s)) if isinstance(s,slice) else super(t,self).__getitem__(s)
   return t
 
@@ -690,7 +691,7 @@ A logging handler class which writes the log messages into a database.
       with engine.begin() as conn:
         conn.execute(insert(log_table).values(session=session,level=rec.levelno,created=datetime.fromtimestamp(rec.created),module=rec.module,funcName=rec.funcName,message=rec.message))
     self.dbrecord = dbrecord
-    super(SQLHandler,self).__init__(*a,**ka)
+    super().__init__(*a,**ka)
 
   def emit(self,rec):
     self.format(rec)

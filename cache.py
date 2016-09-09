@@ -11,7 +11,7 @@
 import logging
 logger = logging.getLogger(__name__)
 
-import os, sqlite3, pickle, inspect, threading
+import os, sqlite3, pickle, inspect, threading, io
 from pathlib import Path
 from functools import partial, update_wrapper
 from collections import namedtuple, defaultdict
@@ -136,7 +136,7 @@ Note that this constructor is locally cached on the resolved path *spec*.
         else: raise Exception('Cache repository specification path must be directory or file')
         dbpath = str(storage.dbpath)
         SQliteNew(dbpath,SCHEMA)
-        self = super(CacheDB,cls).__new__(cls)
+        self = super().__new__(cls)
         self.path = path
         self.dbpath = dbpath
         self.storage = storage
@@ -146,7 +146,6 @@ Note that this constructor is locally cached on the resolved path *spec*.
   def __getnewargs__(self): return self.path,
   def __getstate__(self): return
   def __hash__(self): return hash(self.path)
-  # __eq__ not needed because default behaviour ('is') is OK due to spec cacheing
 
   def connect(self,**ka):
     conn = sqlite3.connect(self.dbpath,timeout=self.timeout,**ka)
@@ -162,6 +161,12 @@ Note that this constructor is locally cached on the resolved path *spec*.
         return conn.execute('INSERT INTO Block (functor) VALUES (?)',(p,)).lastrowid
       else:
         return row[0]
+
+  def clear_obsolete(self,sel=(lambda x: True),*,strict=True):
+    if sel is None: sel = (lambda x: input('DEL {}? '.format(x))=='')
+    for k,c in list(self.items()):
+      o = c.functor.obsolete()
+      if (o==1 if strict else o!=0) and sel(c.functor): del self[k]
 
 #--------------------------------------------------------------------------------------------------
 # CacheDB as Mapping
@@ -403,7 +408,7 @@ Methods:
   __slots__ = 'config', 'sig', 'func'
 
   def __new__(cls,spec,fromfunc=True):
-    self = super(Functor,cls).__new__(cls)
+    self = super().__new__(cls)
     if fromfunc:
       self.func = spec
       self.sig = sig = inspect.signature(spec)
@@ -444,7 +449,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
     return html_parlist(a,ka,incontext)
 
 #--------------------------------------------------------------------------------------------------
-  def info(self): return self.config
+  def info(self): return self.config[0],self.sig
 #--------------------------------------------------------------------------------------------------
 
   def norm(self,arg):
@@ -623,18 +628,11 @@ This namespace class defines class methods :meth:`load`, :meth:`loads`, :meth:`d
 
   @classmethod
   def dumps(cls,obj):
-    from io import BytesIO
-    v = BytesIO()
-    try: cls.Pickler(v).dump(obj); s = v.getvalue()
-    finally: v.close()
-    return s
+    with io.BytesIO() as v: cls.Pickler(v).dump(obj); return v.getvalue()
 
   @classmethod
   def loads(cls,s):
-    from io import BytesIO
-    u = BytesIO(s)
-    try: return cls.Unpickler(u).load()
-    finally: u.close()
+    with io.BytesIO(s) as u: return cls.Unpickler(u).load()
 
 #--------------------------------------------------------------------------------------------------
 class Shadow:
@@ -646,7 +644,7 @@ Instances of this class are defined from versioned functions (ie. functions defi
   __slots__ = 'config',
 
   def __new__(cls,spec,fromfunc=True):
-    self = super(Shadow,cls).__new__(cls)
+    self = super().__new__(cls)
     if fromfunc: spec = spec.__module__,spec.__name__,spec.version
     self.config = spec
     return self

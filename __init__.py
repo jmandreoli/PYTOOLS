@@ -932,3 +932,26 @@ A decorator which assigns a version attribute to a function. The function must b
     assert isfunction(f)
     f.version = v; return f
   return transf
+
+#--------------------------------------------------------------------------------------------------
+class pickleclass:
+  r"""
+This namespace class defines class methods :meth:`load`, :meth:`loads`, :meth:`dump`, :meth:`dumps`, similar to those of the standard :mod:`pickle` module, but with class specific Pickler/Unpickler which must be defined in subclasses.
+  """
+#--------------------------------------------------------------------------------------------------
+
+  @classmethod
+  def dump(cls,obj,v): cls.Pickler(v).dump(obj)
+
+  @classmethod
+  def load(cls,u): return cls.Unpickler(u).load()
+
+  @classmethod
+  def dumps(cls,obj):
+    from io import BytesIO
+    with BytesIO() as v: cls.Pickler(v).dump(obj); return v.getvalue()
+
+  @classmethod
+  def loads(cls,s):
+    from io import BytesIO
+    with BytesIO(s) as u: return cls.Unpickler(u).load()

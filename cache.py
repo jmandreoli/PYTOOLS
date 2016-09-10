@@ -11,13 +11,13 @@
 import logging
 logger = logging.getLogger(__name__)
 
-import os, sqlite3, pickle, inspect, threading, io
+import os, sqlite3, pickle, inspect, threading
 from pathlib import Path
 from functools import partial, update_wrapper
 from collections import namedtuple, defaultdict
 from collections.abc import MutableMapping
 from time import process_time, perf_counter
-from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlist, HtmlPlugin, configurable_decorator
+from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlist, HtmlPlugin, pickleclass, configurable_decorator
 
 SCHEMA = '''
 CREATE TABLE Block (
@@ -166,7 +166,8 @@ Note that this constructor is locally cached on the resolved path *spec*.
     if sel is None: sel = (lambda x: input('DEL {}? '.format(x))=='')
     for k,c in list(self.items()):
       o = c.functor.obsolete()
-      if (o==1 if strict else o!=0) and sel(c.functor): del self[k]
+      if not strict: o = o is not None
+      if o and sel(c.functor): del self[k]
 
 #--------------------------------------------------------------------------------------------------
 # CacheDB as Mapping
@@ -424,14 +425,21 @@ Methods:
   def __eq__(self,other): return isinstance(other,Functor) and self.config==other.config
   def __repr__(self): return '{}{}'.format(self.config[0],self.sig)
 
+  class fpickle (pickleclass):
+    class Pickler (pickle.Pickler):
+      def persistent_id(self,obj):
+        if inspect.isfunction(obj) and hasattr(obj,'version'): return Shadow(obj)
+    class Unpickler (pickle.Unpickler):
+      def persistent_load(self,pid): return pid
+
   def getkey(self,arg):
 #--------------------------------------------------------------------------------------------------
     r"""
-Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are normalised against the signature of :attr:`func` and the pickled value of the result is returned. To account for embedded versioned function objects, pickling is done using :class:`fpickle`.
+Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are normalised against the signature of the functor and the pickled value of the result is returned. The pickling of versioned function objects is modified to embed their version.
     """
 #--------------------------------------------------------------------------------------------------
     a,ka = self.norm(arg)
-    return fpickle.dumps((a,sorted(ka.items())))
+    return self.fpickle.dumps((a,sorted(ka.items())))
 
   def getval(self,arg):
 #--------------------------------------------------------------------------------------------------
@@ -445,7 +453,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
 #--------------------------------------------------------------------------------------------------
   def html(self,ckey,incontext):
 #--------------------------------------------------------------------------------------------------
-    a,ka = fpickle.loads(ckey)
+    a,ka = self.fpickle.loads(ckey)
     return html_parlist(a,ka,incontext)
 
 #--------------------------------------------------------------------------------------------------
@@ -607,34 +615,6 @@ A decorator which makes a function persistently cached. The cached function beha
   return update_wrapper(F,f)
 
 #--------------------------------------------------------------------------------------------------
-class fpickle:
-  r"""
-This namespace class defines class methods :meth:`load`, :meth:`loads`, :meth:`dump`, :meth:`dumps`, which are similar to the corresponding methods in module :mod:`pickle`, except for versioned function objects, which are replaced by their shadow (see class :class:`Shadow`).
-  """
-#--------------------------------------------------------------------------------------------------
-
-  class Pickler (pickle.Pickler):
-    def persistent_id(self,obj):
-      if inspect.isfunction(obj) and hasattr(obj,'version'): return Shadow(obj)
-
-  class Unpickler (pickle.Unpickler):
-    def persistent_load(self,pid): return pid
-
-  @classmethod
-  def dump(cls,obj,v): cls.Pickler(v).dump(obj)
-
-  @classmethod
-  def load(cls,u): return cls.Unpickler(u).load()
-
-  @classmethod
-  def dumps(cls,obj):
-    with io.BytesIO() as v: cls.Pickler(v).dump(obj); return v.getvalue()
-
-  @classmethod
-  def loads(cls,s):
-    with io.BytesIO(s) as u: return cls.Unpickler(u).load()
-
-#--------------------------------------------------------------------------------------------------
 class Shadow:
   r"""
 Instances of this class are defined from versioned functions (ie. functions defined at the toplevel of their module, and with an attribute :attr:`version` defined). Their state is composed of the name, the module name and the version of the original function. They can be arbitrarily pickled and unpickled and produce a string representation close to that of their origin. However, unpickling does not restore the calling capacity of their origin.
@@ -661,6 +641,6 @@ Instances of this class are defined from versioned functions (ie. functions defi
     try:
       f = getattr(import_module(module),name)
       if inspect.isfunction(f) and f.__module__==module and f.__name__==name:
-        return int(f.version!=version)
-    except: pass 
-    return -1
+        return None if f.version==version else (f.version,version)
+    except: pass
+    return ()

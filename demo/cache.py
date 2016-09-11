@@ -17,27 +17,27 @@ from collections import ChainMap
 from time import sleep
 from os import getpid
 from .. import MapExpr, versioned
-from ..cache import lru_persistent_cache
+from ..cache import persistent_cache
 automatic = False
 
-@lru_persistent_cache(db=DIR)
+@persistent_cache(db=DIR)
 def simplefunc(x,y=3): return x,y
 
-@lru_persistent_cache(db=DIR)
+@persistent_cache(db=DIR)
 def longfunc(x,delay=10):
   sleep(delay)
   if x is None: raise Exception('longfunc error')
   return x
 
 V = getpid()
-@lru_persistent_cache(db=DIR)
+@persistent_cache(db=DIR)
 @versioned(V)
 def vfunc(x): return x+V
 
-@lru_persistent_cache(db=DIR)
+@persistent_cache(db=DIR)
 def stepA(**ini): return ini
 
-@lru_persistent_cache(db=DIR)
+@persistent_cache(db=DIR)
 def stepB(E,fr=None,to=None,r=0):
   p,q = fr
   return ChainMap({to:E[p]+E[q]+r},E)

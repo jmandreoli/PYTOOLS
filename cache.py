@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 import os, sqlite3, pickle, inspect, threading
 from pathlib import Path
 from functools import partial, update_wrapper
-from collections import namedtuple, defaultdict
+from collections import namedtuple
 from collections.abc import MutableMapping
 from time import process_time, perf_counter
 from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlist, HtmlPlugin, pickleclass, configurable_decorator
@@ -24,8 +24,7 @@ CREATE TABLE Block (
   oid INTEGER PRIMARY KEY AUTOINCREMENT,
   functor PICKLE UNIQUE NOT NULL,
   hits INTEGER DEFAULT 0,
-  misses INTEGER DEFAULT 0,
-  maxsize INTEGER DEFAULT 10
+  misses INTEGER DEFAULT 0
   )
 
 CREATE TABLE Cell (
@@ -37,13 +36,6 @@ CREATE TABLE Cell (
   tprc REAL,
   ttot REAL
   )
-
-CREATE VIEW Overflow AS
-  SELECT Block.oid AS block, count(*)-maxsize AS osize
-  FROM Block, Cell
-  WHERE block = Block.oid AND Cell.size>0
-  GROUP BY Block.oid, maxsize
-  HAVING osize>0
 
 CREATE UNIQUE INDEX CellIndex ON Cell (block, ckey)
 
@@ -81,7 +73,6 @@ Instances of this class manage cache repositories. There is at most one instance
 - ``functor``: the persistent functor producing all the cells in the block; different blocks always have functors with different pickle byte-strings;
 - ``misses``: number of call events with that functor where the argument had not been seen before;
 - ``hits``: number of call events with that functor where the argument had previously been seen; such a call does not generate a new ``Cell``, but reuses the existing one;
-- ``maxsize``: maximum number of cells attached to the block; when overflow occurs, the cells with the oldest ``hitdate`` are discarded (this amounts to the Least Recently Used policy, a.k.a. LRU, currently hardwired).
 
 Furthermore, a :class:`CacheDB` instance acts as a mapping object, where the keys are block identifiers (:class:`int`) and values are :class:`CacheBlock` objects for the corresponding blocks.
 
@@ -163,7 +154,7 @@ Note that this constructor is locally cached on the resolved path *spec*.
         return row[0]
 
   def clear_obsolete(self,sel=(lambda x: True),*,strict=True):
-    if sel is None: sel = (lambda x: input('DEL {}? '.format(x))=='')
+    if sel is None: sel = (lambda x: 'yes'.startswith(input('DEL {}? '.format(x)).strip().lower()))
     for k,c in list(self.items()):
       o = c.functor.obsolete()
       if not strict: o = o is not None
@@ -182,7 +173,7 @@ Note that this constructor is locally cached on the resolved path *spec*.
   def __delitem__(self,block):
     with self.connect() as conn:
       conn.execute('DELETE FROM Block WHERE oid=?',(block,))
-      if conn.total_changes==0: raise KeyError(block)
+      if not conn.total_changes: raise KeyError(block)
 
   def __setitem__(self,block,v):
     raise Exception('Direct create/update not permitted on Block')
@@ -210,7 +201,7 @@ Note that this constructor is locally cached on the resolved path *spec*.
 
   def as_html(self,incontext):
     return html_stack(*(v.as_html(incontext) for k,v in sorted(self.items())))
-  def __str__(self): return 'Cache<{}>'.format(self.path)
+  def __repr__(self): return 'Cache<{}>'.format(self.path)
 
 #==================================================================================================
 class CacheBlock (MutableMapping,HtmlPlugin):
@@ -220,8 +211,6 @@ Instances of this class implements blocks of cells sharing the same functor.
 :param db: specification of the cache repository where the block resides
 :param functor: functor of the block
 :type functor: :class:`Functor`
-:param maxsize: if not :const:`None`, resizes the block at initialisation
-:type maxsize: :class:`int`\|\ :class:`NoneType`
 :param cacheonly: if :const:`True`, cell creation is disallowed
 :type cacheonly: :class:`bool`
 
@@ -249,11 +238,10 @@ Methods:
   """
 #==================================================================================================
 
-  def __init__(self,db=None,functor=None,block=None,maxsize=None,cacheonly=False):
-    self.functor = functor
+  def __init__(self,db=None,functor=None,block=None,cacheonly=False):
     self.db = db = CacheDB(db)
+    self.functor = functor
     self.block = db.getblock(functor) if block is None else block
-    if maxsize is not None: self.resize(maxsize)
     self.cacheonly = cacheonly
 
   def __hash__(self): return hash((self.db,self.block))
@@ -265,22 +253,27 @@ Clears all the cells from this block which cache an exception.
     """
     with self.db.connect() as conn:
       conn.execute('DELETE FROM Cell WHERE block=? AND size<0',(self.block,))
+      deleted = conn.total_changes
+    if deleted>0: logger.info('%s DELETED(%s)',self,deleted)
+    return deleted
 
-  def resize(self,n):
+  def clear_overflow(self,n):
     assert isinstance(n,int) and n>=1
     with self.db.connect() as conn:
-      conn.execute('UPDATE Block SET maxsize=? WHERE oid=?',(n,self.block,))
-    self.checkmax()
+      conn.execute('DELETE FROM Cell WHERE oid IN (SELECT oid FROM Cell WHERE block=? AND size>0 ORDER BY hitdate DESC, oid DESC LIMIT -1 OFFSET ?)',(self.block,n))
+      deleted = conn.total_changes
+    if deleted>0: logger.info('%s DELETED(%s)',self,deleted)
+    return deleted
 
-  def info(self,typ=namedtuple('BlockInfo',('functor','hits','misses','maxsize','currsize'))):
+  def info(self,typ=namedtuple('BlockInfo',('functor','hits','misses','size'))):
     r"""
 Returns information about this block. Available attributes:
-:attr:`functor`, :attr:`hits`, :attr:`misses`, :attr:`maxsize`, :attr:`currsize`
+:attr:`functor`, :attr:`hits`, :attr:`misses`, :attr:`size`
     """
     with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
       sz = conn.execute('SELECT count(*) FROM Cell WHERE block=?',(self.block,)).fetchone()[0]
-      row = conn.execute('SELECT functor, hits, misses, maxsize FROM Block WHERE oid=?',(self.block,)).fetchone()
-    return typ(row[0].info(),*row[1:],currsize=sz)
+      row = conn.execute('SELECT functor, hits, misses FROM Block WHERE oid=?',(self.block,)).fetchone()
+    return typ(row[0].info(),*row[1:],size=sz)
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self,arg):
@@ -294,7 +287,7 @@ Implements cacheing as follows:
 - If there already exists a cell with the same ``ckey``, the transaction is immediately terminated and its value is extracted, using method :meth:`lookup` of the storage, and returned.
 - If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is immediately created, then the transaction is terminated. Then method :meth:`getval` of the functor is invoked with argument *arg*. The result is stored, even if it is an exception, using method :meth:`insert` of the storage, and completion is recorded in the database.
 
-If the result was an exception, it is raised, otherwise it is returned. In all cases, hit status is updated in the database (for the LRU policy).
+If the result was an exception, it is raised, otherwise it is returned. In all cases, hit status is updated in the database.
     """
 #--------------------------------------------------------------------------------------------------
     ckey = self.functor.getkey(arg)
@@ -325,7 +318,6 @@ If the result was an exception, it is raised, otherwise it is returned. In all c
       with self.db.connect() as conn:
         conn.execute('UPDATE Cell SET size=?, tprc=?, ttot=?, hitdate=datetime(\'now\') WHERE oid=?',(size,tm[0],tm[1],cell))
         if not conn.total_changes: logger.info('%s LOST(%s)',self,cell)
-      self.checkmax()
       if size<0: raise cval
     else:
       if size==0: logger.info('%s WAIT(%s)',self,cell)
@@ -335,20 +327,6 @@ If the result was an exception, it is raised, otherwise it is returned. In all c
         conn.execute('UPDATE Cell SET hitdate=datetime(\'now\') WHERE oid=?',(cell,))
       if isinstance(cval,BaseException): raise cval
     return cval
-
-#--------------------------------------------------------------------------------------------------
-  def checkmax(self):
-    r"""
-Checks whether there is a cache overflow and applies the LRU policy (hardwired).
-    """
-#--------------------------------------------------------------------------------------------------
-    with self.db.connect() as conn:
-      conn.execute('BEGIN IMMEDIATE TRANSACTION')
-      row = conn.execute('SELECT osize FROM Overflow WHERE block=?',(self.block,)).fetchone()
-      if row is not None:
-        osize = row[0]
-        logger.info('%s OVERFLOW(%s)',self,osize)
-        conn.execute('DELETE FROM Cell WHERE oid IN (SELECT oid FROM Cell WHERE block=? AND size>0 ORDER BY hitdate ASC, oid ASC LIMIT ?)',(self.block,osize,))
 
 #--------------------------------------------------------------------------------------------------
 # CacheBlock as Mapping
@@ -363,7 +341,7 @@ Checks whether there is a cache overflow and applies the LRU policy (hardwired).
   def __delitem__(self,cell):
     with self.db.connect() as conn:
       conn.execute('DELETE FROM Cell WHERE oid=?',(cell,))
-      if conn.total_changes==0: raise KeyError(cell)
+      if not conn.total_changes: raise KeyError(cell)
 
   def __setitem__(self,cell,v):
     raise Exception('Direct create/update not permitted on Cell')
@@ -391,7 +369,7 @@ Checks whether there is a cache overflow and applies the LRU policy (hardwired).
 
   def as_html(self,incontext,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz)),time_fmt_=(lambda t: '' if t is None else time_fmt(t))):
     return html_table(sorted(self.items()),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,(lambda ckey,h=self.functor.html: h(ckey,incontext)),size_fmt_,time_fmt_,time_fmt_),title='{}: {}'.format(self.block,self.functor))
-  def __str__(self): return 'Cache<{}:{}>'.format(self.db.path,self.functor)
+  def __repr__(self): return 'Cache<{}:{}>'.format(self.db.path,self.functor)
 
 #==================================================================================================
 class Functor:
@@ -602,7 +580,7 @@ Attributes:
 
 #--------------------------------------------------------------------------------------------------
 @configurable_decorator
-def lru_persistent_cache(f,factory=CacheBlock,**ka):
+def persistent_cache(f,factory=CacheBlock,**ka):
   r"""
 A decorator which makes a function persistently cached. The cached function behaves as the original function except that its invocations are cached and reused when possible. The original function must be defined at the top-level of its module, to be compatible with :class:`Functor`. If it does not have a version already, it is assigned version :const:`None`.
   """

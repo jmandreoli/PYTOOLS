@@ -2,7 +2,7 @@
 # Creation date:        2012-08-12
 # Contributors:         Jean-Marc Andreoli
 # Language:             python
-# Purpose:              Quick Qt4 UI design
+# Purpose:              Quick Qt5 UI design
 #
 # *** Copyright (c) 2012 Xerox Corporation  ***
 # *** Xerox Research Centre Europe - Grenoble ***
@@ -10,7 +10,7 @@
 
 import os,sys,logging,traceback,functools,collections
 from contextlib import contextmanager
-from .pyqt import QtCore, QtGui
+from qtpy import QtCore, QtGui, QtWidgets
 logger = logging.getLogger(__name__)
 
 #--------------------------------------------------------------------------------------------------
@@ -28,27 +28,27 @@ Methods:
 #--------------------------------------------------------------------------------------------------
 
   def __init__(self):
-    self.main = QtGui.QMainWindow()
+    self.main = QtWidgets.QMainWindow()
     self.main.setObjectName("MainWindow")
-    self.centralwidget = QtGui.QWidget(self.main)
+    self.centralwidget = QtWidgets.QWidget(self.main)
     self.centralwidget.setObjectName("centralwidget")
-    layout = QtGui.QVBoxLayout(self.centralwidget)
-    self.tabw = QtGui.QTabWidget(self.centralwidget)
+    layout = QtWidgets.QVBoxLayout(self.centralwidget)
+    self.tabw = QtWidgets.QTabWidget(self.centralwidget)
     self.tabw.setObjectName("tabw")
     layout.addWidget(self.tabw)
     self.main.setCentralWidget(self.centralwidget)
-    self.menubar = QtGui.QMenuBar(self.main)
+    self.menubar = QtWidgets.QMenuBar(self.main)
     self.menubar.setObjectName("menubar")
-    self.menuFile = QtGui.QMenu(self.menubar)
+    self.menuFile = QtWidgets.QMenu(self.menubar)
     self.menuFile.setObjectName("menuFile")
     self.main.setMenuBar(self.menubar)
-    self.statusbar = QtGui.QStatusBar(self.main)
+    self.statusbar = QtWidgets.QStatusBar(self.main)
     self.statusbar.setObjectName("statusbar")
     self.main.setStatusBar(self.statusbar)
-    self.toolbar = QtGui.QToolBar(self.main)
+    self.toolbar = QtWidgets.QToolBar(self.main)
     self.toolbar.setObjectName("toolbar")
     self.main.addToolBar(QtCore.Qt.TopToolBarArea, self.toolbar)
-    self.actionQuit = QtGui.QAction(self.main)
+    self.actionQuit = QtWidgets.QAction(self.main)
     self.actionQuit.setObjectName("actionQuit")
     self.menuFile.addAction(self.actionQuit)
     self.menubar.addAction(self.menuFile.menuAction())
@@ -56,19 +56,19 @@ Methods:
     QtCore.QObject.connect(self.actionQuit, QtCore.SIGNAL("triggered()"), self.main.close)
     QtCore.QMetaObject.connectSlotsByName(self.main)
 
-    self.main.setWindowTitle(QtGui.QApplication.translate("MainWindow", "MainWindow", None, QtGui.QApplication.UnicodeUTF8))
-    self.menuFile.setTitle(QtGui.QApplication.translate("MainWindow", "File", None, QtGui.QApplication.UnicodeUTF8))
-    self.toolbar.setWindowTitle(QtGui.QApplication.translate("MainWindow", "toolbar", None, QtGui.QApplication.UnicodeUTF8))
-    self.actionQuit.setText(QtGui.QApplication.translate("MainWindow", "Quit", None, QtGui.QApplication.UnicodeUTF8))
+    self.main.setWindowTitle(QtWidgets.QApplication.translate("MainWindow", "MainWindow", None, QtWidgets.QApplication.UnicodeUTF8))
+    self.menuFile.setTitle(QtWidgets.QApplication.translate("MainWindow", "File", None, QtWidgets.QApplication.UnicodeUTF8))
+    self.toolbar.setWindowTitle(QtWidgets.QApplication.translate("MainWindow", "toolbar", None, QtWidgets.QApplication.UnicodeUTF8))
+    self.actionQuit.setText(QtWidgets.QApplication.translate("MainWindow", "Quit", None, QtWidgets.QApplication.UnicodeUTF8))
 
     self.main.show()
 
   def addtab(self,label):
     r"""Adds a new tab with label *label* and returns it."""
-    w = QtGui.QWidget()
+    w = QtWidgets.QWidget()
     w.setObjectName('tab_'+label)
     self.tabw.addTab(w,'')
-    self.tabw.setTabText(self.tabw.indexOf(w), QtGui.QApplication.translate("MainWindow", label, None, QtGui.QApplication.UnicodeUTF8))
+    self.tabw.setTabText(self.tabw.indexOf(w), QtWidgets.QApplication.translate("MainWindow", label, None, QtWidgets.QApplication.UnicodeUTF8))
     return w
 
 #--------------------------------------------------------------------------------------------------
@@ -125,13 +125,13 @@ Methods:
     self.navig = None
     self.exper = None
 
-    self.configlayout = QtGui.QVBoxLayout(self.addtab('config'))
+    self.configlayout = QtWidgets.QVBoxLayout(self.addtab('config'))
     self.configlayout.parentWidget().setStyleSheet(self.configstylesheet)
-    self.navigbar = QtGui.QWidget()
+    self.navigbar = QtWidgets.QWidget()
     self.configlayout.addWidget(self.navigbar)
-    layout = QtGui.QHBoxLayout(self.navigbar)
-    self.navigpage = QtGui.QLabel('')
-    self.navigback = QtGui.QPushButton('<<')
+    layout = QtWidgets.QHBoxLayout(self.navigbar)
+    self.navigpage = QtWidgets.QLabel('')
+    self.navigback = QtWidgets.QPushButton('<<')
     layout.addWidget(self.navigpage)
     layout.addWidget(self.navigback)
     layout.addStretch(0)
@@ -148,7 +148,7 @@ Methods:
       for i in range(1,self.tabw.count()): self.tabw.setTabEnabled(i,flag)
 
   def run(self):
-    QtGui.QApplication.setOverrideCursor(QtGui.QCursor(QtCore.Qt.WaitCursor))
+    QtWidgets.QApplication.setOverrideCursor(QtGui.QCursor(QtCore.Qt.WaitCursor))
     self.statusbar.clearMessage()
     if self.navig[-1] is self.console: self.select(-1)
     s = 'failed'
@@ -156,7 +156,7 @@ Methods:
     except: self.consolemessage(); raise
     finally:
       self.statusbar.showMessage('Launch: {0}'.format(s),2000)
-      QtGui.QApplication.restoreOverrideCursor()
+      QtWidgets.QApplication.restoreOverrideCursor()
     self.setsynch(True)
     if self.tabw.currentIndex()==0: self.tabw.setCurrentIndex(1)
 
@@ -182,9 +182,9 @@ Methods:
 
   def action(self,label):
     label = label.capitalize()
-    a = QtGui.QAction(self.main)
+    a = QtWidgets.QAction(self.main)
     a.setObjectName("action"+label)
-    a.setText(QtGui.QApplication.translate("MainWindow", label, None, QtGui.QApplication.UnicodeUTF8))
+    a.setText(QtWidgets.QApplication.translate("MainWindow", label, None, QtWidgets.QApplication.UnicodeUTF8))
     return a
 
   def setup(self,c0,exper):
@@ -205,7 +205,7 @@ Completes the initialisation of *self*, using configurator *c0* and one-input, o
 class InfoPage (object):
 
   def __init__(self,parent=None,title=()):
-    self.widget = QtGui.QTextEdit(parent)
+    self.widget = QtWidgets.QTextEdit(parent)
     self.widget.setReadOnly(True)
     self.title = title
 
@@ -245,8 +245,7 @@ Methods:
     r"""Loads parameter of *self* from a file."""
     import pickle
     ka.setdefault('filter','Quickui config (*.qcfg)')
-    filen,sel = QtGui.QFileDialog.getOpenFileName(**ka)
-    filen = str(filen)
+    filen = str(QtWidgets.QFileDialog.getOpenFileName(**ka))
     if filen:
       with open(filen,'rb') as u: self.parset(pickle.load(u))
       return True
@@ -255,8 +254,7 @@ Methods:
     r"""Saves parameter of *self* into a file."""
     import pickle
     ka.setdefault('filter','Quickui config (*.qcfg)')
-    filen,sel = QtGui.QFileDialog.getSaveFileName(**ka)
-    filen = str(filen)
+    filen = str(QtWidgets.QFileDialog.getSaveFileName(**ka))
     if filen:
       if not os.path.splitext(filen)[1]: filen += '.qcfg'
       with open(filen,'wb') as v: pickle.dump(self.parget(),v)
@@ -293,7 +291,7 @@ class NonEmptyConfigurator (Configurator):
 
   def __init__(self):
     super(NonEmptyConfigurator,self).__init__()
-    self.widget = QtGui.QWidget()
+    self.widget = QtWidgets.QWidget()
 
   def hide(self,flag):
     self.widget.setDisabled(flag)
@@ -312,9 +310,9 @@ An instance of this class, when called, returns the value held by an editor widg
 
   def __init__(self,w,getval=None,setval=None,onchange=None):
     super(BaseConfigurator,self).__init__()
-    ws = QtGui.QStackedWidget()
+    ws = QtWidgets.QStackedWidget()
     ws.setProperty('configclass',w.__class__.__name__)
-    QtGui.QVBoxLayout(self.widget).addWidget(ws)
+    QtWidgets.QVBoxLayout(self.widget).addWidget(ws)
     ws.addWidget(w)
     if getval is None: getval = lambda: w.value
     if setval is None: setval = lambda v: w.setValue(v)
@@ -352,7 +350,7 @@ Methods:
     self.proc = proc
     self.anchors = []
     self.offspring = []
-    self.layout = layout = QtGui.QGridLayout(self.widget)
+    self.layout = layout = QtWidgets.QGridLayout(self.widget)
     layout.setColumnStretch(0,0)
     layout.setColumnStretch(1,1)
     layout.setContentsMargins(2,1,2,1)
@@ -361,7 +359,7 @@ Methods:
       self.onselchange = (lambda f: None)
     else:
       assert isinstance(multi,bool)
-      self.bgroup = bgroup = QtGui.QButtonGroup(self.widget)
+      self.bgroup = bgroup = QtWidgets.QButtonGroup(self.widget)
       bgroup.setExclusive(not multi)
       if multi:
         def onselchange(f):
@@ -427,19 +425,19 @@ If *sel* is not given, it defaults to *self*'s child activation status. If the l
     if sel==-1: sel = self.multi
     row = len(self.offspring)
     if sel is None:
-      qlabel = QtGui.QLabel(label)
+      qlabel = QtWidgets.QLabel(label)
       qlabel.setAlignment(QtCore.Qt.AlignVCenter|QtCore.Qt.AlignHCenter)
       button = None
     else:
       assert isinstance(sel,bool) and self.multi is not None
-      button = qlabel = QtGui.QPushButton(label)
+      button = qlabel = QtWidgets.QPushButton(label)
       qlabel.setCheckable(True)
       qlabel.setChecked(sel)
       self.bgroup.addButton(qlabel)
       self.bgroup.setId(qlabel,row)
       c.hide(not sel)
     if accept is not None: accept(self,label,c)
-    w = QtGui.QStackedWidget()
+    w = QtWidgets.QStackedWidget()
     self.layout.addWidget(w,row,0)
     w.setProperty('configlabel',button is not None)
     w.addWidget(qlabel)
@@ -448,7 +446,7 @@ If *sel* is not given, it defaults to *self*'s child activation status. If the l
     c.title = self.title+(label,)
     if isinstance(c,NonEmptyConfigurator):
       if anchor:
-        w = QtGui.QPushButton('>>')
+        w = QtWidgets.QPushButton('>>')
         #w.clicked.connect(lambda c=c: c.select()) # bug in python3
         w.clicked.connect(activeselect(c))
         self.anchors.append(c)
@@ -493,7 +491,7 @@ Configurator *cc* is appended as offspring to *c* with label *lbl* and *ka* pass
   return c
 
 #--------------------------------------------------------------------------------------------------
-class EditWidget (QtGui.QWidget):
+class EditWidget (QtWidgets.QWidget):
   r"""
 Abstract. An instance of this class is a widget which allows editing of some value.
 
@@ -543,7 +541,7 @@ An instance of this classes edits an arbitrary value which can be parsed from a 
 :param parent: parent widget.
 :param fmt: mapping from value space to informal strings (viewer).
 
-The widget consists of a viewer widget of class :class:`QtGui.QLabel` and an editor widget of class :class:`QtGui.QLineEdit`. The editor widget is hidden by default, and becomes visible when the viewer widget is clicked. Signal :attr:`ready` is emitted when the return key is hit in the editor.
+The widget consists of a viewer widget of class :class:`QtWidgets.QLabel` and an editor widget of class :class:`QtWidgets.QLineEdit`. The editor widget is hidden by default, and becomes visible when the viewer widget is clicked. Signal :attr:`ready` is emitted when the return key is hit in the editor.
 
 .. attribute:: editor
 
@@ -563,10 +561,10 @@ The widget consists of a viewer widget of class :class:`QtGui.QLabel` and an edi
     self.position = initv
     self.value = None
 
-    layout = QtGui.QBoxLayout(QtGui.QBoxLayout.Direction(dict(right=QtGui.QBoxLayout.LeftToRight,left=QtGui.QBoxLayout.RightToLeft,bottom=QtGui.QBoxLayout.TopToBottom,top=QtGui.QBoxLayout.BottomToTop)[editor_location]),self)
-    self.viewer = viewer = QtGui.QLabel()
+    layout = QtWidgets.QBoxLayout(QtWidgets.QBoxLayout.Direction(dict(right=QtWidgets.QBoxLayout.LeftToRight,left=QtWidgets.QBoxLayout.RightToLeft,bottom=QtWidgets.QBoxLayout.TopToBottom,top=QtWidgets.QBoxLayout.BottomToTop)[editor_location]),self)
+    self.viewer = viewer = QtWidgets.QLabel()
     self.viewer.setToolTip('Focus to edit')
-    self.editor = editor = QtGui.QLineEdit()
+    self.editor = editor = QtWidgets.QLineEdit()
     if tooltip is not None: self.editor.setToolTip(tooltip)
     layout.addWidget(viewer)
     layout.addWidget(editor)
@@ -602,7 +600,7 @@ The widget consists of a viewer widget of class :class:`QtGui.QLabel` and an edi
     def editoraction():
       try: v = transf(str(editor.text()))
       except:
-        QtGui.QMessageBox.warning(self.viewer,'Operation failed',traceback.format_exc())
+        QtWidgets.QMessageBox.warning(self.viewer,'Operation failed',traceback.format_exc())
       else:
         editor.setVisible(False)
         setPosition(v)
@@ -611,7 +609,7 @@ The widget consists of a viewer widget of class :class:`QtGui.QLabel` and an edi
     editor.returnPressed.connect(editoraction)
 
     def setOrientation(o):
-      d = QtGui.QBoxLayout.Direction(QtGui.QBoxLayout.LeftToRight if o == QtCore.Qt.Horizontal else QtGui.QBoxLayout.TopToBottom)
+      d = QtWidgets.QBoxLayout.Direction(QtWidgets.QBoxLayout.LeftToRight if o == QtCore.Qt.Horizontal else QtWidgets.QBoxLayout.TopToBottom)
       editor.setOrientation(o)
       layout.setDirection(d)
     self.setOrientation = setOrientation
@@ -632,7 +630,7 @@ An instance of this class edits an object in a value space which is iso-morphic 
 :param vtype: coercing mapping into value space.
 :param fmt: mapping from value space to informal strings (viewer).
 
-The ordering of values is assumed to follow the ordering of indices. The widget consists of a viewer widget of class :class:`QtGui.QLabel` and an editor widget of class :class:`QtGui.QSlider`. Signal :attr:`ready` is emitted  each time the slider is on one of its degrees.
+The ordering of values is assumed to follow the ordering of indices. The widget consists of a viewer widget of class :class:`QtWidgets.QLabel` and an editor widget of class :class:`QtWidgets.QSlider`. Signal :attr:`ready` is emitted  each time the slider is on one of its degrees.
 
 .. attribute:: editor
 
@@ -658,9 +656,9 @@ The ordering of values is assumed to follow the ordering of indices. The widget 
     self.value = None
     rng = itransf(vmin),itransf(vmax)
 
-    layout = QtGui.QBoxLayout(QtGui.QBoxLayout.Direction(QtGui.QBoxLayout.LeftToRight),self)
-    self.viewer = viewer = QtGui.QLabel(None)
-    self.editor = editor = QtGui.QSlider(None)
+    layout = QtWidgets.QBoxLayout(QtWidgets.QBoxLayout.Direction(QtWidgets.QBoxLayout.LeftToRight),self)
+    self.viewer = viewer = QtWidgets.QLabel(None)
+    self.editor = editor = QtWidgets.QSlider(None)
     layout.addWidget(editor)
     layout.addWidget(viewer)
 
@@ -693,7 +691,7 @@ The ordering of values is assumed to follow the ordering of indices. The widget 
     self.setSingleStep = lambda v: editor.setSingleStep(max(itransfd(v),1))
     self.setTickInterval = lambda v:editor.setTickInterval(max(itransfd(v),1))
     def setOrientation(o):
-      d = QtGui.QBoxLayout.Direction(QtGui.QBoxLayout.LeftToRight if o == QtCore.Qt.Horizontal else QtGui.QBoxLayout.TopToBottom)
+      d = QtWidgets.QBoxLayout.Direction(QtWidgets.QBoxLayout.LeftToRight if o == QtCore.Qt.Horizontal else QtWidgets.QBoxLayout.TopToBottom)
       editor.setOrientation(o)
       layout.setDirection(d)
     self.setOrientation = setOrientation
@@ -763,7 +761,7 @@ An instance of this class edits a subset from an explicit set of string options.
 :type multi: :const:`bool`
 :param parent: parent widget.
 
-The widget consists of one checkable widget of class :class:`QtGui.QPressButton` for each option. The edited value consists of the set of checked options. This editor does not support the :attr:`ready` signal.
+The widget consists of one checkable widget of class :class:`QtWidgets.QPressButton` for each option. The edited value consists of the set of checked options. This editor does not support the :attr:`ready` signal.
   """
 #--------------------------------------------------------------------------------------------------
 
@@ -777,13 +775,13 @@ The widget consists of one checkable widget of class :class:`QtGui.QPressButton`
     assert isinstance(multi,bool)
     super(SetEditWidget,self).__init__(parent)
 
-    layout = QtGui.QBoxLayout(QtGui.QBoxLayout.Direction(QtGui.QBoxLayout.TopToBottom),self)
-    bgroup = QtGui.QButtonGroup(self)
+    layout = QtWidgets.QBoxLayout(QtWidgets.QBoxLayout.Direction(QtWidgets.QBoxLayout.TopToBottom),self)
+    bgroup = QtWidgets.QButtonGroup(self)
     optval = {}
     for k,lbl in enumerate(options):
       if isinstance(lbl,tuple): lbl,tooltip = lbl
       else: tooltip = None
-      w = QtGui.QPushButton(lbl)
+      w = QtWidgets.QPushButton(lbl)
       layout.addWidget(w)
       bgroup.addButton(w)
       bgroup.setId(w,k)
@@ -844,7 +842,7 @@ The widget consists of one checkable widget of class :class:`QtGui.QPressButton`
     self.setValue = setValue
     self.getval = getval
     def setOrientation(o):
-      d = QtGui.QBoxLayout.Direction(QtGui.QBoxLayout.LeftToRight if o == QtCore.Qt.Horizontal else QtGui.QBoxLayout.TopToBottom)
+      d = QtWidgets.QBoxLayout.Direction(QtWidgets.QBoxLayout.LeftToRight if o == QtCore.Qt.Horizontal else QtWidgets.QBoxLayout.TopToBottom)
       layout.setDirection(d)
     self.setOrientation = setOrientation
 
@@ -855,7 +853,7 @@ An instance of this class edits a Boolean flag.
 
 :param parent: parent widget.
 
-The widget consists of a single widget of class :class:`QtGui.QCheckBox`. This editor does not support the :attr:`ready` signal.
+The widget consists of a single widget of class :class:`QtWidgets.QCheckBox`. This editor does not support the :attr:`ready` signal.
   """
 #--------------------------------------------------------------------------------------------------
 
@@ -867,8 +865,8 @@ The widget consists of a single widget of class :class:`QtGui.QCheckBox`. This e
 
   def __init__(self,parent=None):
     super(BooleanEditWidget,self).__init__(parent)
-    layout = QtGui.QVBoxLayout(self)
-    w = QtGui.QCheckBox()
+    layout = QtWidgets.QVBoxLayout(self)
+    w = QtWidgets.QCheckBox()
     layout.addWidget(w)
     self.getval = w.isChecked
     def setval(v):
@@ -885,7 +883,7 @@ An instance of this class edits a file path.
 
 :param parent: parent widget.
 
-The widget consists of a viewer widget of class :class:`QtGui.QLabel`. This editor does not support the :attr:`ready` signal.
+The widget consists of a viewer widget of class :class:`QtWidgets.QLabel`. This editor does not support the :attr:`ready` signal.
   """
 #--------------------------------------------------------------------------------------------------
 
@@ -898,9 +896,9 @@ The widget consists of a viewer widget of class :class:`QtGui.QLabel`. This edit
   def __init__(self,parent=None,op='open',**ka):
     assert op=='open' or op=='save'
     super(FilenameEditWidget,self).__init__(parent)
-    layout = QtGui.QHBoxLayout(self)
-    editbutton = QtGui.QPushButton('^')
-    viewer = QtGui.QLabel()
+    layout = QtWidgets.QHBoxLayout(self)
+    editbutton = QtWidgets.QPushButton('^')
+    viewer = QtWidgets.QLabel()
     layout.addWidget(editbutton)
     layout.addWidget(viewer)
     viewer.setTextFormat(QtCore.Qt.PlainText)
@@ -911,8 +909,7 @@ The widget consists of a viewer widget of class :class:`QtGui.QLabel`. This edit
         self.valueChanged.emit(v)
     self.setValue = setval
     def edit():
-      v,sel = (QtGui.QFileDialog.getOpenFileName if op=='open' else QtGui.QFileDialog.getSaveFileName)(viewer,**ka)
-      v = str(v)
+      v = str((QtWidgets.QFileDialog.getOpenFileName if op=='open' else QtWidgets.QFileDialog.getSaveFileName)(viewer,**ka))
       if v: setval(v)
     editbutton.clicked.connect(edit)
 
@@ -1024,15 +1021,15 @@ def figure(x,withtoolbar=True,**ka):
 Creates and returns a matplotlib figure.
 
 :parameter x: a layout or a widget.
-:type x: :class:`QtGui.QBoxLayout`\|\ :class:`QtGui.QWidget`
+:type x: :class:`QtWidgets.QBoxLayout`\|\ :class:`QtWidgets.QWidget`
 :parameter withtoolbar: whether a toolbar should also be added to the layout.
 :type withtoolbar: :const:`bool`
 :parameter ka: passed as keyword arguments to the figure constructor.
 
-The canvas widget of the created figure is added to *layout*, together with a matplotlib toolbar if *withtoolbar* is :const:`True`. *layout* is either *x* if that is a :class:`QtGui.QBoxLayout` instance or a :class:`QtGui.QVBoxLayout` instance associated to *x* if *x* is a :class:`QtGui.QWidget` instance.
+The canvas widget of the created figure is added to *layout*, together with a matplotlib toolbar if *withtoolbar* is :const:`True`. *layout* is either *x* if that is a :class:`QtWidgets.QBoxLayout` instance or a :class:`QtWidgets.QVBoxLayout` instance associated to *x* if *x* is a :class:`QtWidgets.QWidget` instance.
   """
-  if isinstance(x,QtGui.QWidget): layout = QtGui.QVBoxLayout(x)
-  else: layout = x ; assert isinstance(x,QtGui.QLayout)
+  if isinstance(x,QtWidgets.QWidget): layout = QtWidgets.QVBoxLayout(x)
+  else: layout = x ; assert isinstance(x,QtWidgets.QLayout)
   from matplotlib.figure import Figure
   from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg
   fig = Figure(**ka)
@@ -1048,7 +1045,7 @@ class AppError (Exception): pass
 
 @contextmanager
 def startup(*a):
-  app = QtGui.QApplication(list(a))
+  app = QtWidgets.QApplication(list(a))
   yield app
   n = app.exec_()
   if n: raise AppError(n)
@@ -1068,7 +1065,7 @@ Creates and returns a pausable matplotlib timer attached to a figure.
 :param fig: a figure with a canvas having a toolbar
 :type fig: :class:`matplotlib.figure.Figure`
 :param toolbar: a toolbar
-:type toolbar: :const:`NoneType`\|\ :class:`QtGui.QToolbar`
+:type toolbar: :const:`NoneType`\|\ :class:`QtWidgets.QToolbar`
 :rtype: :class:`myutil.mplext.Timer`
 
 A 'pause' and a `1-step` buttons are added to *toolbar*. The former allows to toggle the pause status of the timer, and the latter, only visible when the timer is paused, allows to simulate one tick of the timer. If *toolbar* is :const:`None`, the figure's own toolbar is used.

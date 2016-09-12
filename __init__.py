@@ -551,42 +551,6 @@ Makes sure the file at *path* is a SQlite3 database with schema exactly equal to
       for sql in schema: conn.execute(sql)
 
 #==================================================================================================
-def set_qtbinding(b=None):
-  r"""
-:param b: name of the qt interface
-:type b: 'pyside'\|\ 'pyqt4'
-
-Declares a module :mod:`pyqt` in the package of this file equivalent to :mod:`PySide` or :mod:`PyQt4` (depending on the value of *b*).
-  """
-#==================================================================================================
-  import sys
-  def pyside():
-    import PySide
-    from PySide import QtCore, QtGui
-    QtCore.pyqtSignal = QtCore.Signal
-    QtCore.pyqtSlot = QtCore.Slot
-    return PySide
-  def pyqt4():
-    import PyQt4
-    from PyQt4 import QtCore, QtGui
-    QtCore.Signal = QtCore.pyqtSignal
-    QtCore.Slot = QtCore.pyqtSlot
-    QtGui.QFileDialog.getOpenFileName = QtGui.QFileDialog.getOpenFileNameAndFilter
-    QtGui.QFileDialog.getOpenFileNames = QtGui.QFileDialog.getOpenFileNamesAndFilter
-    QtGui.QFileDialog.getSaveFileName = QtGui.QFileDialog.getSaveFileNameAndFilter
-    return PyQt4
-  if b is None:
-    try: mod = pyside()
-    except ImportError:
-      try: mod = pyqt4()
-      except ImportError:
-        raise ImportError('No QT binding found (PyQt4 or PySide)',name='pyqt')
-  else:
-    mod = dict(pyside=pyside,pyqt4=pyqt4)[b.lower()]()
-  sys.modules[__name__+'.pyqt'] = mod
-  return mod
-
-#==================================================================================================
 def gitcheck(pkgname):
   r"""
 :param pkgname: full name of a package

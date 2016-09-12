@@ -4,7 +4,8 @@
 # Purpose:              Illustration of the quickui module
 
 if __name__=='__main__':
-  import sys
+  import sys,os
+  os.environ['QT_API'] = 'pyqt'
   from myutil.demo.quickui import demo
   demo()
   sys.exit(0)
@@ -14,7 +15,7 @@ if __name__=='__main__':
 from pathlib import Path
 from functools import partial
 from ..quickui import ExperimentUI, cbook as Q, configuration, startup
-from ..pyqt import QtCore, QtGui
+from qtpy import QtCore, QtGui, QtWidgets
 automatic = False
 
 class Demo (ExperimentUI):
@@ -44,8 +45,8 @@ class Demo (ExperimentUI):
         )
 
     # the result tab ('main'): a simple QLabel widget
-    wr = QtGui.QLabel('')
-    QtGui.QVBoxLayout(self.addtab('main')).addWidget(wr)
+    wr = QtWidgets.QLabel('')
+    QtWidgets.QVBoxLayout(self.addtab('main')).addWidget(wr)
 
     # setting up the experiment: each time the "Relaunch" button is clicked
     # the configuration *c* is invoked and its result *r* displayed in the main widget *wr*.
@@ -63,8 +64,8 @@ def autoplay(w):
   from threading import Timer; from itertools import count
   def save(wid=w.main.winId(),DIR=Path(__file__).resolve().parent,cnt=count(1)):
     QtGui.QPixmap.grabWindow(wid).save(str(DIR/'quickui{}.png'.format(next(cnt))))
-  actionSave = QtGui.QAction(w.main)
+  actionSave = QtWidgets.QAction(w.main)
   QtCore.QObject.connect(actionSave, QtCore.SIGNAL("triggered()"), save)
-  for t,a in (.2,actionSave),(.4,w.actionRelaunch),(.6,actionSave),(.8,w.actionQuit):
+  for t,a in (.5,actionSave),(1.,w.actionRelaunch),(1.5,actionSave),(2.,w.actionQuit):
     Timer(t,a.trigger).start()
 

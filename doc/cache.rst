@@ -14,13 +14,13 @@ The following piece of code illustrates the use of this module.
 
 The code at the bottom runs each of the demos defined in `DEMOS` twice, in two distinct processes started within 2 seconds of each other.
 
-* Using the :func:`lru_persistent_cache` decorator, function :func:`simplefunc` is turned into a persistent cache, and invocations of that function reuse the cache from one run to the other. The cache is on disk (in folder *DIR*) and is shared across processes/threads.
+* Using the :func:`persistent_cache` decorator, function :func:`simplefunc` is turned into a persistent cache, and invocations of that function reuse the cache from one run to the other. The cache is on disk (in folder *DIR*) and is shared across processes/threads.
 
 * Function :func:`longfunc` is also turned into a persistent cache. Unlike :func:`simplefunc`, it takes some time to complete and may raise an exception. The second run hits the same cache cell before the first run has finished to compute it. In that case, the former waits until the latter completes to reuse the cached value. In one demo, that value is an exception, which is raised in both runs.
 
 * Function :func:`vfunc` is assigned a version (here the process id, just to show the behaviour when the version changes). Therefore, the persistent cache creates distinct cache blocks for the distinct versions, and there is no reuse of the cached values from one run to the other.
 
-* Function :const:`proc` builds a closed symbolic expression which chains function :func:`stepA` and :func:`stepB`, both persistently cached. The process consists of 4 steps:
+* Function :const:`proc` builds a closed symbolic expression (instance of :class:`Expr`) which chains function :func:`stepA` and :func:`stepB`, both persistently cached. The process consists of 4 steps:
 
   * `P_ini`: calls :func:`stepA` which returns a dictionary with keys `a`, `b`, `c`
   * `P_ab`: calls :func:`stepB` which chains to its first argument a dictionary with key `ab` assigned the sum of values of keys `a` and `b` plus some constant `rab`

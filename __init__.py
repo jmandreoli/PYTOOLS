@@ -159,6 +159,186 @@ Returns an object obtained from an environment variable with a name derived from
   else: return dflt
 
 #==================================================================================================
+class Config:
+  r"""
+Instances of this class represent configurations which can be consistently setup either from ipython widgets or from command line arguments.
+
+:param initv: an argument assignment applied at initialisation
+:type initv: dict(:class:`str`,:class:`object`)|list(pair(:class:`str`,:class:`object`))
+:param preset: a list of argument assignments controlled by button (widgets only)
+:type preset: list(pair(:class:`str`,(dict(:class:`str`,:class:`object`)|\ :class:`str`)))
+:param title: an html string
+:type title: :class:`str`
+:param conf: the specification of each argument passed to the :class:`ConfigElement` constructor
+  """
+#==================================================================================================
+
+  iwstyle = dict(width='20cm')
+  hbstyle = dict(width='.5cm',padding='0cm')
+  class Namespace:
+    def __init__(s,D): s.__dict__.update(D)
+    def __repr__(s): return 'Namespace({})'.format(','.join('{}={}'.format(k,repr(v)) for k,v in s.__dict__.items()))
+
+  def __init__(self,*conf,initv=(),preset=(),title=''):
+    from collections import OrderedDict
+    self.pconf = p = OrderedDict()
+    self.obj = None
+    self.widget = None
+    self.cparser = None
+    for a,ka in conf: p[a[0]] = ConfigElement(*a,**ka)
+    if isinstance(initv,dict): initv = initv.items()
+    for k,v in initv:
+      e = p.get(k)
+      if e is None: p[k] = ConfigElement(k,v)
+      else: e.value = v
+    self.preset = preset
+    self.title = title
+    self.initial = dict((e.name,e.value) for e in p.values())
+  def fromipyui(self):
+    from IPython.display import display
+    w = self.widget
+    if w is None: self.widget = w = self.makewidget()
+    display(w)
+  def fromcmdline(self,args):
+    p = self.cparser
+    if p is None: self.cparser = p = self.makecparser()
+    u = p.parse_args(args)
+    for k,e in self.pconf.items():
+      if hasattr(u,k): e.value = getattr(u,k)
+  def reset(self):
+    self.widget = None
+    self.cparser = None
+    for k,v in self.initial.items(): self.pconf[k].value = v
+  def makewidget(self):
+    from functools import partial
+    import ipywidgets
+    def upd(ev,D=self.pconf): w = ev['owner']; D[w.description].value = w.value
+    def updw(w,x): w.value = x
+    def upda(data):
+      for w in W:
+        k = w.description
+        if k not in data: continue
+        w.value = data[k]
+    def Action(action,**ka):
+      b = ipywidgets.Button(**ka); b.on_click(lambda b: action()); return b
+    def row(e):
+      w,ka = e.widget
+      w = getattr(ipywidgets,w)
+      w = w(description=e.name,value=e.value,layout=iwlayout,**ka)
+      W.append(w)
+      w.observe(upd,'value')
+      return ipywidgets.HBox(children=(Action(partial(updw,w,e.value),description='?',tooltip=e.helper,layout=hblayout),w))
+    W = []
+    iwlayout = ipywidgets.Layout(**self.iwstyle)
+    hblayout = ipywidgets.Layout(**self.hbstyle)
+    header,footer = [],[]
+    if self.preset:
+      preset = [(k,(getattr(self,v) if isinstance(v,str) else v)) for k,v in self.preset]
+      footer.append(ipywidgets.HBox(children=[Action(partial(upda,data),description=label) for label,data in preset]))
+    if self.title:
+      header.append(ipywidgets.HTML(self.title))
+    return ipywidgets.VBox(children=header+[row(e) for e in self.pconf.values()]+footer)
+  def makecparser(self):
+    from argparse import ArgumentParser
+    self.cparser = p = ArgumentParser(self.title)
+    for e in self.pconf.values():
+      if e.cparse is not None:
+       spec,ka = e.cparse
+       p.add_argument(*spec,dest=e.name,help=e.helper,**ka)
+    return p
+  def asdict(self):
+    return dict((e.name,e.value) for e in self.pconf.values())
+  def asobj(self):
+    return self.Namespace(self.asdict())
+
+class ConfigElement:
+  r"""
+Instances of this class are argument specifications for :class:`Config` instances.
+
+:param name: name of the argument
+:type name: :class:`str`
+:param value: the initial value of the argument
+:type value: :class:`object`
+:param cat: the category of the argument
+:type cat: :class:`NoneType`\ |\ :class:`slice`\ |\ :class:`tuple`\ |\ :class:`list`\ |\ :class:`dict`
+:param helper: the helper for the argument
+:type helper: :class:`str`
+:param widget: the widget specification for the argument (see below)
+:param cparse: the command line parser for the argument (see below)
+  """
+  def __init__(self,name,value,cat=None,helper='',widget=None,cparse=None):
+    from collections import OrderedDict
+    from functools import partial
+    type2widget = {
+      bool:('Checkbox','Togglebutton'),
+      int:('IntText',),
+      float:('FloatText',),
+      str:('Text','TextArea'),
+    }
+    def check(x,typ,vmin,vmax):
+      x = typ(x)
+      assert vmin<=x and x<=vmax
+      return x
+    self.name = name
+    self.value = value
+    self.helper = helper
+    if isinstance(widget,str): widget = widget,{}
+    if cparse is not None: cparse = ((cparse,),{}) if isinstance(cparse,str) else (cparse,{}) if isinstance(cparse[-1],str) else (cparse[:-1],cparse[-1])
+    if cat is None: 
+      typ = type(value)
+      L = type2widget.get(typ)
+      if L is None: raise ConfigException('Inconsistent cat for value type',name)
+      if widget is None: widget = L[0],{}
+      elif widget[0] not in L: raise ConfigException('Inconsistent widget for value type',name)
+      if cparse is not None:
+        spec,ka = cparse
+        cparse = spec,dict(type=typ,**ka)
+    elif isinstance(cat,slice):
+      start,stop,step = (cat.start or 0),cat.stop,cat.step
+      if isinstance(stop,int):
+        assert isinstance(start,int)
+        if step is None: step = 1
+        else: assert isinstance(step,int) and step>0
+        slider = 'IntSlider'
+        typ = int
+      elif isinstance(stop,float):
+        assert isinstance(start,(int,float)) and start<stop
+        if step is None: step = (stop-start)/100
+        elif isinstance(step,int): assert step>0; step = (stop-start)/step
+        else: assert isinstance(step,float) and step>0
+        slider = 'FloatSlider'
+        typ = (int,float)
+      if widget is None: ka = {}
+      else:
+        wslider,ka = widget
+        if wslider!=slider: raise ConfigException('Inconsistent widget for cat',name)
+      widget = slider,dict(min=start,max=stop,step=step,**ka)
+      if cparse is not None:
+        spec,ka = cparse
+        cparse = spec,dict(type=partial(check,typ=typ,vmin=start,vmax=stop),**ka)
+    elif isinstance(cat,(tuple,list,dict)):
+      if isinstance(cat,(tuple,list)): cat = OrderedDict((str(x),x) for x in cat)
+      if widget is None: selector = 'Dropdown'; ka = {}; values = (value,)
+      else:
+        selector,ka = widget
+        if selector in ('Select','Dropdown','RadioButton'): values = (value,)
+        else:
+          if selector != 'SelectMultiple': raise ConfigException('Inconsistent widget for cat',name)
+          values = value
+      cvalues = cat.values()
+      for v in values:
+        if v not in cvalues: raise ConfigException('Inconsistent value for cat',name)
+      widget = selector,dict(options=cat,**ka)
+      if cparse is not None:
+        spec,ka = cparse
+        cparse = spec,dict(type=(lambda x,D=cat: D[x]),choices=cat.values())
+    else: raise ConfigException('Unrecognised cat',name)
+    self.widget = widget
+    self.cparse = cparse
+
+class ConfigException (Exception): pass
+
+#==================================================================================================
 class HtmlPlugin:
   r"""
 Instances of this class have an ipython HTML representation based on :func:`html_incontext`.
@@ -348,53 +528,6 @@ Returns a subclass of :class:`list` with an IPython pretty printer for columns. 
   t._repr_html_ = lambda self: tostring(html_table(enumerate((html(col(x)) for col in coldefns) for x in self),fmts,hdrs=colnames),encoding='unicode')
   t.__getitem__ = lambda self,s,t=t: t(super(t,self).__getitem__(s)) if isinstance(s,slice) else super(t,self).__getitem__(s)
   return t
-
-#==================================================================================================
-def ipysetup(D,helpers={},types={},_sort=(lambda x:x),_width='20cm',**buttons):
-  r"""
-:param D: an updatable target mapping object
-:param helpers: dictionary of helpers (same keys as target)
-:type helpers: :class:`dict`
-:param types: dictionary of vtypes (same keys as target)
-:type types: :class:`dict`
-:param buttons: dictionary of button specs (see below)
-:type buttons: :class:`dict`
-
-Sets values in the target object through an graphical interface in IPython. A helper is any string. A vtype is either a python basic type (\ :class:`bool`, :class:`str`, :class:`int`, :class:`float`), or a tuple of strings, or an instance of :class:`slice` (possibly with float arguments). When a button is specified by a key and a dict value, a button labeled with that key is displayed, which, when clicked, updates the target with its value.
-  """
-#==================================================================================================
-  from ipywidgets.widgets import Text, Textarea, IntText, FloatText, IntSlider, FloatSlider, Dropdown, Checkbox, Button, HBox, VBox, Layout
-  from functools import partial
-  def upd(ev): w = ev['owner']; D[w.description] = w.value
-  def updw(w,x): w.value = x
-  def upda(data):
-    for w in W:
-      x = data.get(w.description)
-      if x is not None: w.value = x
-  def Action(action,**ka):
-    b = Button(**ka); b.on_click(lambda b: action()); return b
-  def row():
-    for k,v in _sort(D.items()):
-      typ = types.get(k,type(v))
-      if typ is bool: F = Checkbox
-      elif typ is str: F = Textarea if '\n' in str(v) else Text
-      elif typ is int: F = IntText
-      elif typ is float: F = FloatText
-      elif isinstance(typ,slice):
-        slider = IntSlider if isinstance(v,int) else FloatSlider
-        F = partial(slider,min=(typ.start or 0),max=typ.stop,step=(typ.step or 0))
-      elif isinstance(typ,(tuple,list,dict)): F = partial(Dropdown,options=typ)
-      else: raise TypeError('Key: {}'.format(k))
-      w = F(description=k,value=v,layout=layout)
-      W.append(w)
-      w.observe(upd, 'value')
-      yield HBox(children=(Action(partial(updw,w,v),description='?',tooltip=helpers.get(k,''),layout=hblayout),w))
-    if buttons:
-      yield HBox(children=[Action(partial(upda,data),description=label) for label,data in sorted(buttons.items())])
-  W = []
-  layout = Layout(width=_width)
-  hblayout = Layout(width='.5cm',padding='0cm')
-  return VBox(children=list(row()))
 
 #==================================================================================================
 def html_incontext(x,refstyle='color: blue; background-color: #e0e0e0;'):

@@ -169,90 +169,96 @@ Instances of this class represent configurations which can be consistently setup
 :type preset: list(pair(:class:`str`,(dict(:class:`str`,:class:`object`)|\ :class:`str`)))
 :param title: an html string
 :type title: :class:`str`
-:param conf: the specification of each argument passed to the :class:`ConfigElement` constructor
+:param conf: the specification of each argument passed to the :meth:`add_argument` method
   """
 #==================================================================================================
 
   iwstyle = dict(width='20cm')
   hbstyle = dict(width='.5cm',padding='0cm')
+  class Pconf:
+    __slots__ = 'name','value','helper','widget','cparse'
+    def __init__(s,*a):
+      for k,v in zip(s.__slots__,a): setattr(s,k,v)
   class Namespace:
     def __init__(s,D): s.__dict__.update(D)
     def __repr__(s): return 'Namespace({})'.format(','.join('{}={}'.format(k,repr(v)) for k,v in s.__dict__.items()))
-
+  @staticmethod
+  def checkbounds(x,typ,vmin,vmax,name):
+    try: x = typ(x)
+    except: raise ConfigException('Bounds constraint violated',name) from None
+    if not (vmin<=x and x<=vmax): raise ConfigException('Bounds constraint violated',name) from None
+    return x
+  @staticmethod
+  def checkchoice(x,options,name):
+    try: return options[x]
+    except KeyError: raise ConfigException('Choice constraint violated',name) from None
+  type2widget = {
+    bool:('Checkbox','ToggleButton'),
+    int:('IntText',),
+    float:('FloatText',),
+    str:('Text','TextArea',),
+  }
+  mult2widget = {
+    True:('SelectMultiple','ToggleButtons',),
+    False:('Dropdown','Select','RadioButtons',),
+  }
   def __init__(self,*conf,initv=(),preset=(),title=''):
     from collections import OrderedDict
     self.pconf = p = OrderedDict()
     self.obj = None
     self.widget = None
     self.cparser = None
-    for a,ka in conf: p[a[0]] = ConfigElement(*a,**ka)
+    for a,ka in conf: self.add_argument(*a,**ka)
     if isinstance(initv,dict): initv = initv.items()
     for k,v in initv:
       e = p.get(k)
-      if e is None: p[k] = ConfigElement(k,v)
+      if e is None: self.add_argument(k,v)
       else: e.value = v
     self.preset = preset
     self.title = title
     self.initial = dict((e.name,e.value) for e in p.values())
+
   def fromipyui(self):
+    r"""
+Instantiates the arguments through a ipython user interface.
+    """
     from IPython.display import display
     w = self.widget
     if w is None: self.widget = w = self.makewidget()
     display(w)
   def fromcmdline(self,args):
+    r"""
+Instantiates the arguments by parsing *args*.
+    """
     p = self.cparser
     if p is None: self.cparser = p = self.makecparser()
     u = p.parse_args(args)
     for k,e in self.pconf.items():
       if hasattr(u,k): e.value = getattr(u,k)
+
   def reset(self):
+    r"""
+Resets any argument instantiations and reinitialise the argument values.
+    """
     self.widget = None
     self.cparser = None
     for k,v in self.initial.items(): self.pconf[k].value = v
-  def makewidget(self):
-    from functools import partial
-    import ipywidgets
-    def upd(ev,D=self.pconf): w = ev['owner']; D[w.description].value = w.value
-    def updw(w,x): w.value = x
-    def upda(data):
-      for w in W:
-        k = w.description
-        if k not in data: continue
-        w.value = data[k]
-    def Action(action,**ka):
-      b = ipywidgets.Button(**ka); b.on_click(lambda b: action()); return b
-    def row(e):
-      w,ka = e.widget
-      w = getattr(ipywidgets,w)
-      w = w(description=e.name,value=e.value,layout=iwlayout,**ka)
-      W.append(w)
-      w.observe(upd,'value')
-      return ipywidgets.HBox(children=(Action(partial(updw,w,e.value),description='?',tooltip=e.helper,layout=hblayout),w))
-    W = []
-    iwlayout = ipywidgets.Layout(**self.iwstyle)
-    hblayout = ipywidgets.Layout(**self.hbstyle)
-    header,footer = [],[]
-    if self.preset:
-      preset = [(k,(getattr(self,v) if isinstance(v,str) else v)) for k,v in self.preset]
-      footer.append(ipywidgets.HBox(children=[Action(partial(upda,data),description=label) for label,data in preset]))
-    if self.title:
-      header.append(ipywidgets.HTML(self.title))
-    return ipywidgets.VBox(children=header+[row(e) for e in self.pconf.values()]+footer)
-  def makecparser(self):
-    from argparse import ArgumentParser
-    self.cparser = p = ArgumentParser(self.title)
-    for e in self.pconf.values():
-      if e.cparse is not None:
-       spec,ka = e.cparse
-       p.add_argument(*spec,dest=e.name,help=e.helper,**ka)
-    return p
-  def asdict(self):
-    return dict((e.name,e.value) for e in self.pconf.values())
-  def asobj(self):
-    return self.Namespace(self.asdict())
 
-class ConfigElement:
-  r"""
+  @property
+  def asdict(self):
+    r"""
+A view of this instance as a dict (argument name-value pairs = dict items).
+    """
+    return dict((e.name,e.value) for e in self.pconf.values())
+  @property
+  def asobj(self):
+    r"""
+A view of this instance as an object (argument name-value pairs = object attributes).
+    """
+    return self.Namespace(self.asdict)
+
+  def add_argument(self,name,value,cat=None,helper='',widget=None,cparse=None):
+    r"""
 Instances of this class are argument specifications for :class:`Config` instances.
 
 :param name: name of the argument
@@ -265,34 +271,29 @@ Instances of this class are argument specifications for :class:`Config` instance
 :type helper: :class:`str`
 :param widget: the widget specification for the argument (see below)
 :param cparse: the command line parser for the argument (see below)
-  """
-  def __init__(self,name,value,cat=None,helper='',widget=None,cparse=None):
+    """
     from collections import OrderedDict
     from functools import partial
-    type2widget = {
-      bool:('Checkbox','Togglebutton'),
-      int:('IntText',),
-      float:('FloatText',),
-      str:('Text','TextArea'),
-    }
-    def check(x,typ,vmin,vmax):
-      x = typ(x)
-      assert vmin<=x and x<=vmax
-      return x
-    self.name = name
-    self.value = value
-    self.helper = helper
-    if isinstance(widget,str): widget = widget,{}
-    if cparse is not None: cparse = ((cparse,),{}) if isinstance(cparse,str) else (cparse,{}) if isinstance(cparse[-1],str) else (cparse[:-1],cparse[-1])
-    if cat is None: 
+    if isinstance(helper,str): helper = helper,helper
+    elif isinstance(helper,tuple): helper = tuple(zip(*(((x,x) if isinstance(x,str) else x) for x in helper)))
+    else: raise ConfigException('Invalid helper spec',name)
+    if widget is None: widget = {}
+    elif isinstance(widget,str): widget = dict(type=widget)
+    elif isinstance(widget,dict): widget = widget.copy()
+    else: raise ConfigException('Invalid widget spec',name)
+    if cparse is not None:
+      if isinstance(cparse,str): cparse = dict(spec=(cparse,))
+      elif isinstance(cparse,tuple): cparse = dict(spec=cparse)
+      elif isinstance(cparse,dict): cparse = cparse.copy()
+      else: raise ConfigException('Invalid cparse spec',name)
+    if cat is None:
       typ = type(value)
-      L = type2widget.get(typ)
+      L = self.type2widget.get(typ)
       if L is None: raise ConfigException('Inconsistent cat for value type',name)
-      if widget is None: widget = L[0],{}
-      elif widget[0] not in L: raise ConfigException('Inconsistent widget for value type',name)
-      if cparse is not None:
-        spec,ka = cparse
-        cparse = spec,dict(type=typ,**ka)
+      if 'type' in widget:
+        if widget['type'] not in L: raise ConfigException('Inconsistent widget for value type',name)
+      else: widget.update(type=L[0])
+      if cparse is not None: cparse.update(type=typ)
     elif isinstance(cat,slice):
       start,stop,step = (cat.start or 0),cat.stop,cat.step
       if isinstance(stop,int):
@@ -307,34 +308,69 @@ Instances of this class are argument specifications for :class:`Config` instance
         elif isinstance(step,int): assert step>0; step = (stop-start)/step
         else: assert isinstance(step,float) and step>0
         slider = 'FloatSlider'
-        typ = (int,float)
-      if widget is None: ka = {}
-      else:
-        wslider,ka = widget
-        if wslider!=slider: raise ConfigException('Inconsistent widget for cat',name)
-      widget = slider,dict(min=start,max=stop,step=step,**ka)
+        typ = float
+      if 'type' in widget:
+        if widget['type']!=slider: raise ConfigException('Inconsistent widget for cat',name)
+      else: widget.update(type=slider)
+      widget.update(min=start,max=stop,step=step)
       if cparse is not None:
-        spec,ka = cparse
-        cparse = spec,dict(type=partial(check,typ=typ,vmin=start,vmax=stop),**ka)
+        cparse.update(type=partial(self.checkbounds,typ=typ,vmin=start,vmax=stop,name=name))
     elif isinstance(cat,(tuple,list,dict)):
-      if isinstance(cat,(tuple,list)): cat = OrderedDict((str(x),x) for x in cat)
-      if widget is None: selector = 'Dropdown'; ka = {}; values = (value,)
-      else:
-        selector,ka = widget
-        if selector in ('Select','Dropdown','RadioButton'): values = (value,)
-        else:
-          if selector != 'SelectMultiple': raise ConfigException('Inconsistent widget for cat',name)
-          values = value
+      if isinstance(cat,(tuple,list)): cat = OrderedDict((str(x),x) for x in cat); multiple = False
+      else: cat = cat.copy(); multiple = cat.pop('__multiple__',False)
+      L = self.mult2widget[multiple]
+      if 'type' in widget:
+        if widget['type'] not in L: raise ConfigException('Inconsistent widget for cat',name)
+      else: widget.update(type=L[0])
       cvalues = cat.values()
-      for v in values:
-        if v not in cvalues: raise ConfigException('Inconsistent value for cat',name)
-      widget = selector,dict(options=cat,**ka)
+      values = value if multiple else (value,)
+      if any(v not in cvalues for v in values): raise ConfigException('Inconsistent value for cat',name)
+      widget.update(options=cat)
       if cparse is not None:
-        spec,ka = cparse
-        cparse = spec,dict(type=(lambda x,D=cat: D[x]),choices=cat.values())
+        if multiple: cparse.update(type=(lambda x,D=cat: tuple(D[y] for y in x)))
+        else: cparse.update(type=partial(self.checkchoice,options=cat,name=name),choices=cvalues)
     else: raise ConfigException('Unrecognised cat',name)
-    self.widget = widget
-    self.cparse = cparse
+    self.pconf[name] = self.Pconf(name,value,helper,widget,cparse)
+
+  def makewidget(self):
+    from functools import partial
+    import ipywidgets
+    def upd(ev,D=self.pconf): w = ev['owner']; D[w.description].value = w.value
+    def updw(w,x): w.value = x
+    def upda(data):
+      for w in W:
+        k = w.description
+        if k in data: w.value = data[k]
+    def Action(action,**ka):
+      b = ipywidgets.Button(**ka); b.on_click(lambda b: action()); return b
+    def row(e):
+      ka = e.widget.copy()
+      w = getattr(ipywidgets,ka.pop('type'))
+      style = ka.pop('layout',None)
+      w = w(description=e.name,value=e.value,layout=(iwlayout if style is None else ipywidgets.Layout(**style)),**ka)
+      W.append(w)
+      w.observe(upd,'value')
+      return ipywidgets.HBox(children=(Action(partial(updw,w,e.value),description='?',tooltip=e.helper[0],layout=hblayout),w))
+    W = []
+    iwlayout = ipywidgets.Layout(**self.iwstyle)
+    hblayout = ipywidgets.Layout(**self.hbstyle)
+    header,footer = [],[]
+    if self.preset:
+      preset = [(k,(getattr(self,v) if isinstance(v,str) else v)) for k,v in self.preset]
+      footer.append(ipywidgets.HBox(children=[Action(partial(upda,data),description=label) for label,data in preset]))
+    if self.title:
+      header.append(ipywidgets.HTML(self.title))
+    return ipywidgets.VBox(children=header+[row(e) for e in self.pconf.values()]+footer)
+
+  def makecparser(self):
+    from argparse import ArgumentParser
+    self.cparser = p = ArgumentParser(self.title)
+    for e in self.pconf.values():
+      if e.cparse is not None:
+        ka = e.cparse.copy()
+        spec = ka.pop('spec')
+        p.add_argument(*spec,dest=e.name,help=e.helper[1],default=e.value,**ka)
+    return p
 
 class ConfigException (Exception): pass
 

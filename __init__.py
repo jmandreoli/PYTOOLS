@@ -711,7 +711,7 @@ Makes sure the file at *path* is a SQlite3 database with schema exactly equal to
       for sql in schema: conn.execute(sql)
 
 #==================================================================================================
-def gitcheck(pkgname):
+def gitcheck(pkgname,name='origin'):
   r"""
 :param pkgname: full name of a package
 :type pkgname: :class:`str`
@@ -730,7 +730,8 @@ Assumes that *pkgname* is the name of a python package contained in a git reposi
   else:
     raise GitException('target-not-found')
   if r.is_dirty(): raise GitException('target-dirty',r)
-  rr = Repo(r.remote().url)
+  try: rr =r.remote(name).repo
+  except ValueError: return
   if rr.is_dirty(): raise GitException('source-dirty',r,rr)
   if r.commit() != rr.commit():
     logger.info('Synching (git pull) %s ...',r)

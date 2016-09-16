@@ -256,7 +256,7 @@ Instances of this class are argument specifications for :class:`Config` instance
       bool:('Checkbox','ToggleButton'),
       int:('IntText',),
       float:('FloatText',),
-      str:('Text','TextArea',),
+      str:('Text','Textarea',),
     }
     mult2widget = {
       True:('SelectMultiple','ToggleButtons',),

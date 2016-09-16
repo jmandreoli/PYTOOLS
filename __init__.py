@@ -43,7 +43,7 @@ Use as a decorator to declare, in a class, a computable attribute which is compu
 #==================================================================================================
 class odict:
   r"""
-Objects of this class present an attribute oriented interface to an underlying proxy mapping object. Keys in the proxy are turned into attributes of the instance. Example::
+Objects of this class present an attribute oriented interface to an underlying proxy mapping object. Keys in the proxy are turned into attributes of the instance. If a positional argument is passed, it must be the only argument and is taken as proxy, otherwise the proxy is built from the keyword arguments. Example::
 
    x = odict(a=3,b=6); print(x.a)
    #>>> 3
@@ -51,6 +51,8 @@ Objects of this class present an attribute oriented interface to an underlying p
    #>>> {'b':6}
    x.b += 7; x.__proxy__
    #>>> {'b':13}
+   x == x.__proxy__
+   #>>> True
   """
 #==================================================================================================
   __slot__ = '__proxy__',
@@ -165,11 +167,11 @@ class Config (collections.abc.Mapping):
 Instances of this class represent configurations which can be consistently setup either from ipython widgets or from command line arguments.
 
 :param initv: an argument assignment applied at initialisation
-:type initv: dict(:class:`str`,:class:`object`)|list(pair(:class:`str`,:class:`object`))
+:type initv: dict(:class:`str`,\ :class:`object`)|list(pair(:class:`str`,\ :class:`object`))
 :param preset: a list of argument assignments controlled by button (widgets only)
-:type preset: list(pair(:class:`str`,(dict(:class:`str`,:class:`object`)|\ :class:`str`)))
+:type preset: list(pair(\ :class:`str`,(dict(\ :class:`str`,\ :class:`object`)\|\ :class:`str`)))
 :param title: an html string
-:type title: :class:`str`
+:type title: :class:`str`\|\ pair(\ :class:`str`,\ :class:`str`)
 :param conf: the specification of each argument passed to the :meth:`add_argument` method
   """
 #==================================================================================================
@@ -180,26 +182,7 @@ Instances of this class represent configurations which can be consistently setup
     __slots__ = 'name','value','helper','widget','cparse'
     def __init__(s,*a):
       for k,v in zip(s.__slots__,a): setattr(s,k,v)
-  @staticmethod
-  def checkbounds(x,typ,vmin,vmax,name):
-    try: x = typ(x)
-    except: raise ConfigException('Bounds constraint violated',name) from None
-    if not (vmin<=x and x<=vmax): raise ConfigException('Bounds constraint violated',name) from None
-    return x
-  @staticmethod
-  def checkchoice(x,options,name):
-    try: return options[x]
-    except KeyError: raise ConfigException('Choice constraint violated',name) from None
-  type2widget = {
-    bool:('Checkbox','ToggleButton'),
-    int:('IntText',),
-    float:('FloatText',),
-    str:('Text','TextArea',),
-  }
-  mult2widget = {
-    True:('SelectMultiple','ToggleButtons',),
-    False:('Dropdown','Select','RadioButtons',),
-  }
+    def __repr__(s): return 'Pconf<{}>'.format(','.join('{}={}'.format(k,repr(getattr(s,k))) for k in s.__slots__))
   def __init__(self,*conf,initv=(),preset=(),title=''):
     from collections import OrderedDict
     self.pconf = p = OrderedDict()
@@ -214,7 +197,7 @@ Instances of this class represent configurations which can be consistently setup
       if e is None: self.add_argument(k,v)
       else: e.value = v
     self.preset = preset
-    self.title = title
+    self.title = (title,title) if isinstance(title,str) else title
     self.initial = dict((e.name,e.value) for e in p.values())
 
   def __getitem__(self,k): return self.pconf[k].value
@@ -253,14 +236,32 @@ Instances of this class are argument specifications for :class:`Config` instance
 :param value: the initial value of the argument
 :type value: :class:`object`
 :param cat: the category of the argument
-:type cat: :class:`NoneType`\ |\ :class:`slice`\ |\ :class:`tuple`\ |\ :class:`list`\ |\ :class:`dict`
+:type cat: :class:`NoneType`\|\ :class:`slice`\|\ :class:`tuple`\|\ :class:`list`\|\ :class:`dict`
 :param helper: the helper for the argument
-:type helper: :class:`str`
+:type helper: :class:`str`\|\ tuple(\ :class:`str`\|\ pair(\ :class:`str`,\ :class:`str`))
 :param widget: the widget specification for the argument (see below)
 :param cparse: the command line parser for the argument (see below)
     """
     from collections import OrderedDict
     from functools import partial
+    def checkbounds(x,typ,vmin,vmax,name):
+      try: x = typ(x)
+      except: raise ConfigException('Bounds constraint violated',name) from None
+      if not (vmin<=x and x<=vmax): raise ConfigException('Bounds constraint violated',name) from None
+      return x
+    def checkchoice(x,options,name):
+      try: return options[x]
+      except KeyError: raise ConfigException('Choice constraint violated',name) from None
+    type2widget = {
+      bool:('Checkbox','ToggleButton'),
+      int:('IntText',),
+      float:('FloatText',),
+      str:('Text','TextArea',),
+    }
+    mult2widget = {
+      True:('SelectMultiple','ToggleButtons',),
+      False:('Dropdown','Select','RadioButtons',),
+    }
     if isinstance(helper,str): helper = helper,helper
     elif isinstance(helper,tuple): helper = tuple(map(''.join,zip(*(((x,x) if isinstance(x,str) else x) for x in helper))))
     else: raise ConfigException('Invalid helper spec',name)
@@ -275,7 +276,7 @@ Instances of this class are argument specifications for :class:`Config` instance
       else: raise ConfigException('Invalid cparse spec',name)
     if cat is None:
       typ = type(value)
-      L = self.type2widget.get(typ)
+      L = type2widget.get(typ)
       if L is None: raise ConfigException('Inconsistent cat for value type',name)
       if 'type' in widget:
         if widget['type'] not in L: raise ConfigException('Inconsistent widget for value type',name)
@@ -301,11 +302,11 @@ Instances of this class are argument specifications for :class:`Config` instance
       else: widget.update(type=slider)
       widget.update(min=start,max=stop,step=step)
       if cparse is not None:
-        cparse.update(type=partial(self.checkbounds,typ=typ,vmin=start,vmax=stop,name=name))
+        cparse.update(type=partial(checkbounds,typ=typ,vmin=start,vmax=stop,name=name))
     elif isinstance(cat,(tuple,list,dict)):
       if isinstance(cat,(tuple,list)): cat = OrderedDict((str(x),x) for x in cat); multiple = False
       else: cat = cat.copy(); multiple = cat.pop('__multiple__',False)
-      L = self.mult2widget[multiple]
+      L = mult2widget[multiple]
       if 'type' in widget:
         if widget['type'] not in L: raise ConfigException('Inconsistent widget for cat',name)
       else: widget.update(type=L[0])
@@ -315,7 +316,7 @@ Instances of this class are argument specifications for :class:`Config` instance
       widget.update(options=cat)
       if cparse is not None:
         if multiple: cparse.update(type=(lambda x,D=cat: tuple(D[y] for y in x)))
-        else: cparse.update(type=partial(self.checkchoice,options=cat,name=name),choices=cvalues)
+        else: cparse.update(type=partial(checkchoice,options=cat,name=name),choices=cvalues)
     else: raise ConfigException('Unrecognised cat',name)
     self.pconf[name] = self.Pconf(name,value,helper,widget,cparse)
     if self.initial is not None: self.widget_ = self.cparser_ = None; self.initial[name] = value
@@ -348,8 +349,8 @@ Instances of this class are argument specifications for :class:`Config` instance
     if self.preset:
       preset = [(k,(getattr(self,v) if isinstance(v,str) else v)) for k,v in self.preset]
       footer.append(ipywidgets.HBox(children=[Action(partial(upda,data),description=label) for label,data in preset]))
-    if self.title:
-      header.append(ipywidgets.HTML(self.title))
+    if self.title[0]:
+      header.append(ipywidgets.HTML(self.title[0]))
     self.widget_ = ipywidgets.VBox(children=header+[row(e) for e in self.pconf.values()]+footer)
     return self.widget_
 
@@ -357,7 +358,7 @@ Instances of this class are argument specifications for :class:`Config` instance
   def cparser(self):
     if self.cparser_ is not None: return self.cparser_
     from argparse import ArgumentParser
-    self.cparser_ = p = ArgumentParser(self.title)
+    self.cparser_ = p = ArgumentParser(self.title[1])
     for e in self.pconf.values():
       if e.cparse is not None:
         ka = e.cparse.copy()

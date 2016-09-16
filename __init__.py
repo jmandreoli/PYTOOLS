@@ -43,41 +43,42 @@ Use as a decorator to declare, in a class, a computable attribute which is compu
 #==================================================================================================
 class odict:
   r"""
-Objects of this class act as dict objects, except their keys are also attributes. Keys must be strings and must not override dict standard methods, but no check is performed. Example::
+Objects of this class present an attribute oriented interface to an underlying proxy mapping object. Keys in the proxy are turned into attributes of the instance. Example::
 
    x = odict(a=3,b=6); print(x.a)
    #>>> 3
-   print(x['a'])
-   #>>> 3
    del x.a; print(x)
    #>>> {'b':6}
-   x.b += 7; print(x['b'])
-   #>>> 13
+   x.b += 7; x.__proxy__
+   #>>> {'b':13}
   """
 #==================================================================================================
+  __slot__ = '__proxy__',
   def __init__(self,*a,**ka):
     if a:
       n = len(a)
       if n>1: raise TypeError('expected at most 1 positional argument, got {}'.format(n))
       if ka: raise TypeError('expected no keyword arguments, got {}'.format(len(ka)))
       r = a[0]
+      while isinstance(r,odict): r = r.__proxy__
+      assert isinstance(r,collections.abc.Mapping)
     else: r = dict(**ka)
-    self.__dict__['_ref'] = r
-  def __getitem__(self,k): return self._ref[k]
-  def __setitem__(self,k,v): self._ref[k] = v
-  def __delitem__(self,k): del self._ref[k]
-  def __contains__(self,k): return k in self._ref
-  def __eq__(self,other): return self._ref == other
-  def __ne__(self,other): return self._ref != other
-  def __getattr__(self,a): return self._ref[a]
-  def __setattr__(self,a,v): self._ref[a] = v
-  def __delattr__(self,a): del self._ref[a]
-  def __str__(self): return str(self._ref)
-  def __repr__(self): return repr(self._ref)
-  def __len__(self): return len(self._ref)
-  def __iter__(self): return iter(self._ref)
-  def __getstate__(self): return self._ref.copy()
-  def __setstate__(self,r): self.__dict__['_ref'] = r
+    object.__setattr__(self,'__proxy__',r)
+  def __eq__(self,other):
+    return self.__proxy__ == (other.__proxy__ if isinstance(other,odict) else other)
+  def __ne__(self,other):
+    return self.__proxy__ != (other.__proxy__ if isinstance(other,odict) else other)
+  def __getattr__(self,a):
+    try: return self.__proxy__[a]
+    except KeyError: raise AttributeError(a) from None
+  def __setattr__(self,a,v):
+    if a=='__proxy__': raise AttributeError(a)
+    self.__proxy__[a] = v
+  def __delattr__(self,a):
+    try: del self.__proxy__[a]
+    except KeyError: raise AttributeError(a) from None
+  def __str__(self): return str(self.__proxy__)
+  def __repr__(self): return repr(self.__proxy__)
 
 #==================================================================================================
 def configurable_decorator(decorator):
@@ -159,7 +160,7 @@ Returns an object obtained from an environment variable with a name derived from
   else: return dflt
 
 #==================================================================================================
-class Config:
+class Config (collections.abc.Mapping):
   r"""
 Instances of this class represent configurations which can be consistently setup either from ipython widgets or from command line arguments.
 
@@ -179,9 +180,6 @@ Instances of this class represent configurations which can be consistently setup
     __slots__ = 'name','value','helper','widget','cparse'
     def __init__(s,*a):
       for k,v in zip(s.__slots__,a): setattr(s,k,v)
-  class Namespace:
-    def __init__(s,D): s.__dict__.update(D)
-    def __repr__(s): return 'Namespace({})'.format(','.join('{}={}'.format(k,repr(v)) for k,v in s.__dict__.items()))
   @staticmethod
   def checkbounds(x,typ,vmin,vmax,name):
     try: x = typ(x)
@@ -206,8 +204,9 @@ Instances of this class represent configurations which can be consistently setup
     from collections import OrderedDict
     self.pconf = p = OrderedDict()
     self.obj = None
-    self.widget = None
-    self.cparser = None
+    self.widget_ = None
+    self.cparser_ = None
+    self.initial = None
     for a,ka in conf: self.add_argument(*a,**ka)
     if isinstance(initv,dict): initv = initv.items()
     for k,v in initv:
@@ -218,21 +217,22 @@ Instances of this class represent configurations which can be consistently setup
     self.title = title
     self.initial = dict((e.name,e.value) for e in p.values())
 
+  def __getitem__(self,k): return self.pconf[k].value
+  def __iter__(self): return iter(self.pconf)
+  def __len__(self): return len(self.pconf)
+  def __repr__(self): return 'Config<{}>'.format(','.join('{}={}'.format(k,repr(e.value)) for k,e in self.pconf.items()))
+
   def fromipyui(self):
     r"""
 Instantiates the arguments through a ipython user interface.
     """
     from IPython.display import display
-    w = self.widget
-    if w is None: self.widget = w = self.makewidget()
-    display(w)
+    display(self.widget)
   def fromcmdline(self,args):
     r"""
 Instantiates the arguments by parsing *args*.
     """
-    p = self.cparser
-    if p is None: self.cparser = p = self.makecparser()
-    u = p.parse_args(args)
+    u = self.cparser.parse_args(args)
     for k,e in self.pconf.items():
       if hasattr(u,k): e.value = getattr(u,k)
 
@@ -240,22 +240,9 @@ Instantiates the arguments by parsing *args*.
     r"""
 Resets any argument instantiations and reinitialise the argument values.
     """
-    self.widget = None
-    self.cparser = None
+    self.widget_ = None
+    self.cparser_ = None
     for k,v in self.initial.items(): self.pconf[k].value = v
-
-  @property
-  def asdict(self):
-    r"""
-A view of this instance as a dict (argument name-value pairs = dict items).
-    """
-    return dict((e.name,e.value) for e in self.pconf.values())
-  @property
-  def asobj(self):
-    r"""
-A view of this instance as an object (argument name-value pairs = object attributes).
-    """
-    return self.Namespace(self.asdict)
 
   def add_argument(self,name,value,cat=None,helper='',widget=None,cparse=None):
     r"""
@@ -275,7 +262,7 @@ Instances of this class are argument specifications for :class:`Config` instance
     from collections import OrderedDict
     from functools import partial
     if isinstance(helper,str): helper = helper,helper
-    elif isinstance(helper,tuple): helper = tuple(zip(*(((x,x) if isinstance(x,str) else x) for x in helper)))
+    elif isinstance(helper,tuple): helper = tuple(map(''.join,zip(*(((x,x) if isinstance(x,str) else x) for x in helper))))
     else: raise ConfigException('Invalid helper spec',name)
     if widget is None: widget = {}
     elif isinstance(widget,str): widget = dict(type=widget)
@@ -331,8 +318,11 @@ Instances of this class are argument specifications for :class:`Config` instance
         else: cparse.update(type=partial(self.checkchoice,options=cat,name=name),choices=cvalues)
     else: raise ConfigException('Unrecognised cat',name)
     self.pconf[name] = self.Pconf(name,value,helper,widget,cparse)
+    if self.initial is not None: self.widget_ = self.cparser_ = None; self.initial[name] = value
 
-  def makewidget(self):
+  @property
+  def widget(self):
+    if self.widget_ is not None: return self.widget_
     from functools import partial
     import ipywidgets
     def upd(ev,D=self.pconf): w = ev['owner']; D[w.description].value = w.value
@@ -360,16 +350,19 @@ Instances of this class are argument specifications for :class:`Config` instance
       footer.append(ipywidgets.HBox(children=[Action(partial(upda,data),description=label) for label,data in preset]))
     if self.title:
       header.append(ipywidgets.HTML(self.title))
-    return ipywidgets.VBox(children=header+[row(e) for e in self.pconf.values()]+footer)
+    self.widget_ = ipywidgets.VBox(children=header+[row(e) for e in self.pconf.values()]+footer)
+    return self.widget_
 
-  def makecparser(self):
+  @property
+  def cparser(self):
+    if self.cparser_ is not None: return self.cparser_
     from argparse import ArgumentParser
-    self.cparser = p = ArgumentParser(self.title)
+    self.cparser_ = p = ArgumentParser(self.title)
     for e in self.pconf.values():
       if e.cparse is not None:
         ka = e.cparse.copy()
-        spec = ka.pop('spec')
-        p.add_argument(*spec,dest=e.name,help=e.helper[1],default=e.value,**ka)
+        spec = ka.pop('spec',())
+        p.add_argument(*spec,dest=e.name,default=e.value,help=e.helper[1],**ka)
     return p
 
 class ConfigException (Exception): pass

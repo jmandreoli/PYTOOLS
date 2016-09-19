@@ -253,8 +253,8 @@ Instances of this class are argument specifications for :class:`Config` instance
       str:('Text','Textarea',),
     }
     mult2widget = {
-      True:('SelectMultiple','ToggleButtons',),
-      False:('Dropdown','Select','RadioButtons',),
+      True:('SelectMultiple',),
+      False:('Dropdown','Select','RadioButtons','ToggleButtons',),
     }
     def set_widget_type(*L):
       if 'type' in widget:
@@ -711,7 +711,7 @@ Makes sure the file at *path* is a SQlite3 database with schema exactly equal to
       for sql in schema: conn.execute(sql)
 
 #==================================================================================================
-def gitcheck(pkgname,name='origin'):
+def gitcheck(pkgname):
   r"""
 :param pkgname: full name of a package
 :type pkgname: :class:`str`
@@ -730,8 +730,10 @@ Assumes that *pkgname* is the name of a python package contained in a git reposi
   else:
     raise GitException('target-not-found')
   if r.is_dirty(): raise GitException('target-dirty',r)
-  try: rr =r.remote(name).repo
+  try: url = r.remote().url
   except ValueError: return
+  if ':' in url: raise GitException('source-not-local',url)
+  rr = Repo(url)
   if rr.is_dirty(): raise GitException('source-dirty',r,rr)
   if r.commit() != rr.commit():
     logger.info('Synching (git pull) %s ...',r)

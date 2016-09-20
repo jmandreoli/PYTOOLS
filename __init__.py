@@ -179,20 +179,12 @@ Instances of this class represent configurations which can be consistently setup
     def __init__(s,*a):
       for k,v in zip(s.__slots__,a): setattr(s,k,v)
     def __repr__(s): return 'Pconf<{}>'.format(','.join('{}={}'.format(k,repr(getattr(s,k))) for k in s.__slots__))
-  def __init__(self,*conf,initv=()):
+  def __init__(self,*conf,**initv):
     from collections import OrderedDict
-    self.pconf = p = OrderedDict()
-    self.obj = None
-    self.widget_ = None
-    self.cparser_ = None
-    self.initial = None
+    self.pconf = OrderedDict()
+    self.initial = {}
     for a,ka in conf: self.add_argument(*a,**ka)
-    if isinstance(initv,dict): initv = initv.items()
-    for k,v in initv:
-      e = p.get(k)
-      if e is None: self.add_argument(k,v)
-      else: e.value = v
-    self.initial = dict((e.name,e.value) for e in p.values())
+    self.reset(**initv)
 
   def __getitem__(self,k): return self.pconf[k].value
   def __iter__(self): return iter(self.pconf)
@@ -213,13 +205,15 @@ Instantiates the arguments by parsing *args*.
     for k,e in self.pconf.items():
       if hasattr(u,k): e.value = getattr(u,k)
 
-  def reset(self):
+  def reset(self,**ka):
     r"""
 Resets any argument instantiations and reinitialise the argument values.
     """
-    self.widget_ = None
-    self.cparser_ = None
-    for k,v in self.initial.items(): self.pconf[k].value = v
+    for k in ka:
+      if k not in self.initial: raise KeyError(k)
+    self.widget_ = self.cparser_ = None
+    for k,v in ka.items(): self.initial[k] = self.pconf[k].value = v
+    return self
 
   def add_argument(self,name,value,cat=None,helper='',widget=None,cparse=None):
     r"""
@@ -307,7 +301,7 @@ Instances of this class are argument specifications for :class:`Config` instance
         else: cparse.update(type=partial(checkchoice,options=cat,name=name),choices=cvalues)
     else: raise ConfigException('Unrecognised cat',name)
     self.pconf[name] = self.Pconf(name,value,helper,widget,cparse)
-    if self.initial is not None: self.widget_ = self.cparser_ = None; self.initial[name] = value
+    self.initial[name] = value
 
   @property
   def widget(self):

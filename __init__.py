@@ -716,7 +716,7 @@ def gitcheck(pkgname):
 :param pkgname: full name of a package
 :type pkgname: :class:`str`
 
-Assumes that *pkgname* is the name of a python package contained in a git repository which is a local, passive copy of a remote repository. Checks that the package is up-to-date, and updates it if needed using the git pull operation. Call before loading the package... Use the ``GIT_PYTHON_GIT_EXECUTABLE`` environment variable to set the Git executable if it is not the default ``/usr/bin/git``.
+Assumes that *pkgname* is the name of a python package contained in a git repository which is a passive copy of another repository on the same file system. Checks that the package is up-to-date, and updates it if needed using the git pull operation. Call before loading the package... Use the ``GIT_PYTHON_GIT_EXECUTABLE`` environment variable to set the Git executable if it is not the default ``/usr/bin/git``.
   """
 #==================================================================================================
   from git import Repo
@@ -729,16 +729,16 @@ Assumes that *pkgname* is the name of a python package contained in a git reposi
     break
   else:
     raise GitException('target-not-found')
-  if r.is_dirty(): raise GitException('target-dirty',r)
   try: url = r.remote().url
-  except ValueError: return
-  if ':' in url: raise GitException('source-not-local',url)
-  rr = Repo(url)
-  if rr.is_dirty(): raise GitException('source-dirty',r,rr)
-  if r.commit() != rr.commit():
+  except ValueError: return # no remote
+  if ':' in url: return # remote not on file system
+  rsrc = Repo(url)
+  if rsrc.is_dirty(): raise GitException('source-dirty',r,rsrc)
+  if r.is_dirty(): raise GitException('target-dirty',r,rsrc)
+  if r.commit() != rsrc.commit():
     logger.info('Synching (git pull) %s ...',r)
     r.remote().pull()
-    if r.commit() != rr.commit(): raise GitException('synch-failed',r,rr)
+    if r.commit() != rsrc.commit(): raise GitException('synch-failed',r,rsrc)
     m = modules.get(pkgname)
     if m is not None:
       logger.warn('Reloading %s ...',pkgname)

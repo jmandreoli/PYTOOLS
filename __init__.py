@@ -166,12 +166,10 @@ class Config (collections.abc.Mapping):
   r"""
 Instances of this class represent configurations which can be consistently setup either from ipython widgets or from command line arguments.
 
-:param initv: an argument assignment applied at initialisation
-:type initv: dict(:class:`str`,\ :class:`object`)|list(pair(:class:`str`,\ :class:`object`))
 :param conf: the specification of each argument passed to the :meth:`add_argument` method
+:param initv: an argument assignment applied at initialisation
   """
 #==================================================================================================
-
   iwstyle = dict(width='20cm')
   hbstyle = dict(width='.5cm',padding='0cm')
   class Pconf:
@@ -179,6 +177,7 @@ Instances of this class represent configurations which can be consistently setup
     def __init__(s,*a):
       for k,v in zip(s.__slots__,a): setattr(s,k,v)
     def __repr__(s): return 'Pconf<{}>'.format(','.join('{}={}'.format(k,repr(getattr(s,k))) for k in s.__slots__))
+
   def __init__(self,*conf,**initv):
     from collections import OrderedDict
     self.pconf = OrderedDict()
@@ -217,8 +216,6 @@ Reinitialises the argument values.
 
   def add_argument(self,name,value,cat=None,helper='',widget=None,cparse=None):
     r"""
-Instances of this class are argument specifications for :class:`Config` instances.
-
 :param name: name of the argument
 :type name: :class:`str`
 :param value: the initial value of the argument
@@ -227,8 +224,22 @@ Instances of this class are argument specifications for :class:`Config` instance
 :type cat: :class:`NoneType`\|\ :class:`slice`\|\ :class:`tuple`\|\ :class:`list`\|\ :class:`dict`
 :param helper: the helper for the argument
 :type helper: :class:`str`\|\ tuple(\ :class:`str`\|\ pair(\ :class:`str`,\ :class:`str`))
-:param widget: the widget specification for the argument (see below)
-:param cparse: the command line parser for the argument (see below)
+:param widget: the widget specification for the argument
+:type widget: :class:`NoneType`\|\ :class:`str`\|\ :class:`dict`
+:param cparse: the command line parser specification for the argument
+:type cparse: :class:`NoneType`\|\ :class:`str`\|\ :class:`dict`
+
+* If *cat* is a :class:`slice`, the argument ranges over a subset of numbers.
+
+  - If the ``stop`` attribute of *cat* is an integer, the target range is the set of integers between the values of *cat* attributes ``start`` (default 0)  and ``stop`` minus 1. The ``step`` attribute (default 1) only specifies a sampling step.
+  - If the ``stop`` attribute of *cat* is real, the target range is the set of reals between the values of *cat* attributes ``start`` (default 0) and ``stop``. The ``step`` attribute (default 100) specifies a sampling step, directly if it is a real or adjusted so as to obtain exactly that number of samples if it is an integer.
+
+* If *cat* is a :class:`tuple` or :class:`list`, it is turned into a :class:`collections.OrderedDict` whose keys are the string values of its elements.
+* If *cat* is a :class:`dict` (which includes :class:`collections.OrderedDict`), the range is the set of values of *cat*. The keys are simply string names to denote these values. If the special key ``__multiple__`` is set to :const:`True`, it is deleted and the target range is in fact the set of tuples of the other values of *cat*.
+
+If *widget* is :const:`None`, it is replaced by an empty dict, and if it is a string, it is replaced with a dict with a single key ``type`` assigned that string. The ``type`` key, if present, must be the name of a widget constructor in module :mod:`ipywidgets` and must be compatible with *cat* and *value*. If not present, a default value is guessed from *cat* and *value*. The ``layout`` key, if present, must be a dict passed to :class:`ipywidgets.Layout`, itself passed to the widget constructor. The other key-value pairs of *widget* are passed to the widget constructor as keyword arguments.
+
+If *cparse* is :const:`None`, the argument is ignored by the command line parser. If it is a string, it is replaced by a dict with a single key ``spec`` assigned that string. The ``spec`` key holds the name of the argument as it appears in the command line. The other key-value pairs of *cparse* are passed to the :meth:`add_argument` method of the constructed parser.
     """
     from collections import OrderedDict
     from functools import partial
@@ -263,7 +274,6 @@ Instances of this class are argument specifications for :class:`Config` instance
     else: raise ConfigException('Invalid widget spec',name)
     if cparse is not None:
       if isinstance(cparse,str): cparse = dict(spec=(cparse,))
-      elif isinstance(cparse,tuple): cparse = dict(spec=cparse)
       elif isinstance(cparse,dict): cparse = cparse.copy()
       else: raise ConfigException('Invalid cparse spec',name)
     if cat is None:
@@ -292,7 +302,7 @@ Instances of this class are argument specifications for :class:`Config` instance
       if isinstance(cat,(tuple,list)): cat = OrderedDict((str(x),x) for x in cat); multiple = False
       else: cat = cat.copy(); multiple = bool(cat.pop('__multiple__',False))
       set_widget_type(*mult2widget[multiple])
-      cvalues = cat.values()
+      cvalues = tuple(cat.values())
       values = value if multiple else (value,)
       if any(v not in cvalues for v in values): raise ConfigException('Inconsistent value for cat',name)
       widget.update(options=cat)
@@ -331,6 +341,9 @@ Instances of this class are argument specifications for :class:`Config` instance
     w.pconf = dict(W)
     return w
   def widget_context(self):
+    r"""
+Returns a triple of a list of prolog widgets, a list of buttons and a list of epilog widgets, put around the argument widgets. This implementations returns no prolog, no epilog and a single button resetting the configuration to its initial value. Subclasses can refine that behaviour.
+    """
     return [],[self.make_widget_reset_button('default',self.initial)],[]
   def make_widget_reset_button(self,label,data):
     from ipywidgets import Button
@@ -355,7 +368,11 @@ Instances of this class are argument specifications for :class:`Config` instance
         spec = ka.pop('spec',())
         p.add_argument(*spec,dest=e.name,default=e.value,help=e.helper[1],**ka)
     return p
-  def cparser_context(self): return None, None
+  def cparser_context(self):
+    r"""
+Returns a pair of a prolog and an epilog (both :class:`str` or :class:`NoneType`) for the command line parser. This implemetation returns :const:`None` for both prolog and epilog. Subclasses can refine that behaviour.
+    """
+    return None, None
 
 class ConfigException (Exception): pass
 
@@ -434,9 +451,9 @@ Instances of this class implement closed symbolic expressions.
 
 The triple *func*, *a*, *ka* forms the configuration of the :class:`Expr` instance. Its value is defined as the result of calling function *func* with positional and keyword arguments *a* and *ka*. The value is actually computed only once (and cached), and only when method :meth:`incarnate` is invoked. Subclasses should define automatic triggers of incarnation (see e.g. class :class:`MapExpr`). The incarnation cache can be reset by invoking method :meth:`reset`.
 
-Initially, a :class:`Expr` instance is mutable, and its configuration can be changed. It becomes immutable (frozen) after any of the following operations: incarnation (even after it is reset), hashing, and pickling. Incarnation is not saved on pickling, hence lost on unpickling, but can of course be restored using method :meth:`incarnate`. Thus, when receiving a foreign :class:`Expr` instance, a process can decide whether it wants to access its value or only inspect its definition. If recomputing the value is costly, use a persistent cache for *func*.
+Initially, a :class:`Expr` instance is mutable, and its configuration can be changed. It becomes immutable (frozen) after any of the following operations: incarnation (even after it is reset), hashing, and pickling. Incarnation is not saved on pickling, hence lost on unpickling, but can of course be restored using method :meth:`incarnate`. Thus, when receiving a foreign :class:`Expr` instance, a process can decide whether it wants to access its value or only inspect its configuration. If recomputing the value is costly, use a persistent cache for *func*.
 
-Caveat: function *func* should be defined at the top-level of its module, and the values in *a* and *ka* should be picklable and hashable (in particular: no dicts nor lists). Hence, any :class:`Expr` instance is itself picklable and hashable. In particular, it can be used as argument in the configuration of another :class:`Expr` instance.
+Caveat: function *func* should be defined at the top-level of its module, and the values in *a* and *ka* should be deterministically picklable and hashable (in particular: no dicts nor lists). Hence, any :class:`Expr` instance is itself deterministically picklable and hashable, and can thus be used as argument in the configuration of another :class:`Expr` instance.
   """
 #==================================================================================================
 
@@ -529,26 +546,57 @@ A simple utility to browse sliceable objects page per page in IPython.
   else: interact((lambda page=start:display(D[(page-1)*pgsize:page*pgsize])),page=(1,P))
 
 #==================================================================================================
-def ipylist(name,columns):
+def exploredb(spec):
   r"""
-:param name: name of the type
-:param columns: a tuple of column names
+:param spec: an sqlalchemy url or engine or metadata structure, defining the database to explore
+:type engine: :class:`sqlalchemy.engine.Engine`\|\ :class:`str`\|\ :class:`sqlalchemy.MetaData`
 
-Returns a subclass of :class:`list` with an IPython pretty printer for columns. Each element of the list is 
+Display a GUI for basic database exploration. If a metadata structure is specified, it must be bound to an existing engine, and it will be reflected.
   """
 #==================================================================================================
-  from lxml.etree import tostring, _Element
-  from lxml.builder import E
-  def parse(col):
-    if isinstance(col,str): return col.split(':')[0], '{{{}}}'.format(col).format
-    cn,cd = col; assert isinstance(cn,str) and callable(cd); return col
-  colnames,coldefns = zip(*map(parse,columns))
-  t = type(name,(list,),{})
-  fmts = len(columns)*((lambda s: s),)
-  def html(x): return x if isinstance(x,_Element) else E.SPAN(str(x))
-  t._repr_html_ = lambda self: tostring(html_table(enumerate((html(col(x)) for col in coldefns) for x in self),fmts,hdrs=colnames),encoding='unicode')
-  t.__getitem__ = lambda self,s,t=t: t(super(t,self).__getitem__(s)) if isinstance(s,slice) else super(t,self).__getitem__(s)
-  return t
+  from functools import lru_cache
+  from pandas import read_sql_query
+  from sqlalchemy import select, MetaData, create_engine
+  from sqlalchemy.engine import Engine
+  from ipywidgets import Select, IntSlider, VBox, HBox, HTML
+  from IPython.display import display, clear_output
+  @lru_cache()
+  def somecol(table):
+    return sorted(tables[table].columns,key=(lambda c: c.primary_key),reverse=True)[0].name
+  def sample(table,offset,nsample):
+    sql = select(tables[table].columns,limit=nsample,offset=offset,order_by=somecol(table))
+    r = read_sql_query(sql,engine)
+    r.index = list(range(offset,offset+min(nsample,len(r))))
+    return r.T
+  def setvalue(D):
+    nonlocal active
+    active = False
+    for w,v in D.items(): w.value = v
+    active = True
+  if isinstance(spec,str): meta = MetaData(bind=create_engine(spec))
+  elif isinstance(spec,Engine): meta = MetaData(bind=spec)
+  elif isinstance(spec,MetaData):
+    meta = spec
+    if meta.bind is None: raise ValueError('Argument of type {} must be bound to an existing engine'.format(MetaData))
+  else: raise TypeError('Expected {}|{}|{}; Found {}'.format(str,Engine,MetaData,type(spec)))
+  meta.reflect()
+  tables = meta.tables
+  engine = meta.bind
+  wtitle = HTML('<div style="background-color:gray;color:white;font-weight:bold;padding:.2cm">{}</div>'.format(engine))
+  wtable = Select(options=sorted(tables))
+  woffset = IntSlider(description='offset',value=0,min=0,max=1000,step=1)
+  wnsample = IntSlider(description='nsample',value=5,min=1,max=5,step=1)
+  def wtable_c(c): nonlocal table; table = wtable.value; setvalue({woffset:0,wnsample:5}); refresh()
+  wtable.observe(wtable_c,'value')
+  def woffset_c(c): nonlocal offset; offset = woffset.value; refresh()
+  woffset.observe(woffset_c,'value')
+  def wnsample_c(c): nonlocal nsample; nsample = wnsample.value; refresh()
+  wnsample.observe(wnsample_c,'value')
+  active,table,offset,nsample = True,wtable.value,woffset.value,wnsample.value
+  def refresh():
+    if active: clear_output(wait=True); display(sample(table,offset,nsample))
+  refresh()
+  return VBox(children=(wtitle,wtable,HBox(children=(woffset,wnsample,))))
 
 #==================================================================================================
 def html_incontext(x,refstyle='color: blue; background-color: #e0e0e0;'):

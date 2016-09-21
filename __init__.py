@@ -207,7 +207,7 @@ Instantiates the arguments by parsing *args*.
 
   def reset(self,**ka):
     r"""
-Resets any argument instantiations and reinitialise the argument values.
+Reinitialises the argument values.
     """
     for k in ka:
       if k not in self.initial: raise KeyError(k)

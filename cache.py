@@ -216,7 +216,7 @@ Instances of this class implements blocks of cells sharing the same functor.
 
 A block object is callable, and calls take a single argument. Method :meth:`__call__` implements the cacheing mechanism.
 
-* Duplicate detection of arguments and computation of the value attached to an argument is delegated to a dedicated functor object which must implement the following api (e.g. implemented by class :class:`Functor`):
+* The computation of the cache key and cached value attached to an argument is delegated to a dedicated functor object which must implement the following api (e.g. implemented by class :class:`Functor`):
 
   - method :meth:`getkey` takes as input an argument and must return a byte string which represents it uniquely.
   - method :meth:`getval` takes as input an argument and must return its associated value (to be cached).

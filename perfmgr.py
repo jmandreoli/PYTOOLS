@@ -142,7 +142,7 @@ Displays the results of selected experiments in this context. The selection test
 
   def as_html(self,incontext):
     H = ('created','host','name','args','exc','smax','nperf')
-    return html_table(((exp.oid,[getattr(exp,h) for h in H]) for exp in self.experiments),hdrs=H,fmts=[str for h in H],title='{0.oid}: {0.title} {{{0.tests}}} {0.version}'.format(self))
+    return html_table(((exp.oid,[getattr(exp,h) for h in H]) for exp in self.experiments),hdrs=H,fmts=[str for h in H],opening='{0.oid}: {0.title} {{{0.tests}}} {0.version}'.format(self))
 
 #==================================================================================================
 class Experiment (Base):

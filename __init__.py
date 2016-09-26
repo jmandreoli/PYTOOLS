@@ -382,6 +382,7 @@ class HtmlPlugin:
 Instances of this class have an ipython HTML representation based on :func:`html_incontext`.
   """
 #==================================================================================================
+  _html_limit = 50
   def _repr_html_(self):
     from lxml.etree import tostring
     return tostring(html_incontext(self),encoding='unicode')
@@ -684,24 +685,26 @@ Returns an HTML safe representation of *x*.
   return x._repr_html_() if hasattr(x,'_repr_html_') else str(x).replace('<','&lt;').replace('>','&gt;')
 
 #==================================================================================================
-def html_table(irows,fmts,hdrs=None,title=None):
+def html_table(irows,fmts,hdrs=None,opening=None,closing=None):
   r"""
 :param irows: a generator of pairs of an object (key) and a tuple of objects (value)
 :param fmts: a tuple of format functions matching the length of the value tuples
 :param hdrs: a tuple of strings matching the length of the value tuples
-:param title: a string
+:param opening,closing: strings at head and foot of table
 
 Returns an HTML table object with one row for each pair generated from *irow*. The key of each pair is in a column of its own with no header, and the value must be a tuple whose length matches the number of columns. The format functions in *fmts*, one for each column, are expected to return HTML objects (as understood by :mod:`lxml`). *hdrs* may specify headers as a tuple of strings, one for each column.
   """
 #==================================================================================================
   from lxml.builder import E
   def thead():
-    if title is not None: yield E.TR(E.TD(title,colspan=str(1+len(fmts))),style='background-color: gray; color: white')
+    if opening is not None: yield E.TR(E.TD(opening,colspan=str(1+len(fmts))),style='background-color: gray; color: white')
     if hdrs is not None: yield E.TR(E.TD(),*(E.TH(hdr) for hdr in hdrs))
   def tbody():
     for ind,row in irows:
       yield E.TR(E.TH(str(ind)),*(E.TD(fmt(v)) for fmt,v in zip(fmts,row)))
-  return E.TABLE(E.THEAD(*thead()),E.TBODY(*tbody()))
+  def tfoot():
+    if closing is not None: yield E.TR(E.TD(),E.TD(closing,colspan=str(len(fmts))),style='background-color: #f0f0f0; color: navy')
+  return E.TABLE(E.THEAD(*thead()),E.TBODY(*tbody()),E.TFOOT(*tfoot()))
 
 #==================================================================================================
 def html_stack(*a,**ka):

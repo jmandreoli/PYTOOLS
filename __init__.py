@@ -512,7 +512,13 @@ Set *f* as the config function of this instance. Raises an error if the instance
     self.config = [func,a,dict(ka)]
   def __hash__(self): return hash(self.freeze())
   def __eq__(self,other): return isinstance(other,Expr) and self.config == other.config
-  def __repr__(self): return repr(self.value) if self.incarnated else super().__repr__()
+  def __repr__(self):
+    if self.incarnated: return repr(self.value)
+    func,a,ka = self.config
+    sep = ',' if (a or ka) else ''
+    a = ','.join(repr(v) for v in a)
+    ka = ','.join('{}={}'.format(k,repr(v)) for k,v in sorted(ka.items()))
+    return '{}({}{}{})'.format(func,a,sep,ka)
 
 class MapExpr (Expr,collections.abc.Mapping):
   r"""

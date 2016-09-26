@@ -370,11 +370,8 @@ If the result was an exception, it is raised, otherwise it is returned. In all c
 
   def as_html(self,incontext,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz)),time_fmt_=(lambda t: '' if t is None else time_fmt(t))):
     n = len(self)-self._html_limit
-    L = self.items()
-    closing = None
-    if n>0:
-      L = islice(L,self._html_limit)
-      closing = '{} more'.format(n)
+    L = self.items(); closing = None
+    if n>0: L = islice(L,self._html_limit); closing = '{} more'.format(n)
     return html_table(sorted(L),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,(lambda ckey,h=self.functor.html: h(ckey,incontext)),size_fmt_,time_fmt_,time_fmt_),opening='{}: {}'.format(self.block,self.functor),closing=closing)
   def __repr__(self): return 'Cache<{}:{}>'.format(self.db.path,self.functor)
 

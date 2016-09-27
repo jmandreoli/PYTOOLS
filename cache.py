@@ -335,7 +335,7 @@ If the result was an exception, it is raised, otherwise it is returned. In all c
 
   def __getitem__(self,cell):
     with self.db.connect() as conn:
-      r = conn.execute('SELECT hitdate, ckey, size, tprc, ttot FROM Cell WHERE oid=?',(cell,)).fetchone()
+      r = conn.execute('SELECT ckey, hitdate, size, tprc, ttot FROM Cell WHERE oid=?',(cell,)).fetchone()
     if r is None: raise KeyError(cell)
     return r
 
@@ -357,7 +357,7 @@ If the result was an exception, it is raised, otherwise it is returned. In all c
 
   def items(self):
     with self.db.connect() as conn:
-      for row in conn.execute('SELECT oid, hitdate, ckey, size, tprc, ttot FROM Cell WHERE block=?',(self.block,)):
+      for row in conn.execute('SELECT oid, ckey, hitdate, size, tprc, ttot FROM Cell WHERE block=?',(self.block,)):
         yield row[0],row[1:]
 
   def clear(self):
@@ -372,7 +372,7 @@ If the result was an exception, it is raised, otherwise it is returned. In all c
     n = len(self)-self._html_limit
     L = self.items(); closing = None
     if n>0: L = islice(L,self._html_limit); closing = '{} more'.format(n)
-    return html_table(sorted(L),hdrs=('hitdate','ckey','size','tprc','ttot'),fmts=(str,(lambda ckey,h=self.functor.html: h(ckey,incontext)),size_fmt_,time_fmt_,time_fmt_),opening='{}: {}'.format(self.block,self.functor),closing=closing)
+    return html_table(sorted(L),hdrs=('ckey','hitdate','size','tprc','ttot'),fmts=((lambda ckey,h=self.functor.html: h(ckey,incontext)),str,size_fmt_,time_fmt_,time_fmt_),opening='{}: {}'.format(self.block,self.functor),closing=closing)
   def __repr__(self): return 'Cache<{}:{}>'.format(self.db.path,self.functor)
 
 #==================================================================================================

@@ -1,5 +1,4 @@
-import collections
-import logging
+import os, collections, logging
 logger = logging.getLogger(__name__)
 
 #==================================================================================================
@@ -136,7 +135,6 @@ def config_env(name,deflt=None,asfile=False):
 Returns the string value of an environment variable (or the content of the file pointed by it if *asfile* is set) or *deflt* if the environment variable is not assigned.
   """
 #==================================================================================================
-  import os
   x = os.environ.get(name)
   if x is None: return deflt
   if asfile:
@@ -762,39 +760,44 @@ Makes sure the file at *path* is a SQlite3 database with schema exactly equal to
       for sql in schema: conn.execute(sql)
 
 #==================================================================================================
-def gitcheck(pkgname):
+def gitcheck(path):
+  r"""
+:param path: a path to a git repository
+:type path: :class:`str`
+
+Assumes that *path* denotes a git repository (target) which is a passive copy of another repository (source) on the same file system. If that is not the case, returns :const:`None`. Checks that the target repository is up-to-date, and updates it if needed using the git pull operation. Use the ``GIT_PYTHON_GIT_EXECUTABLE`` environment variable to set the Git executable if it is not the default ``/usr/bin/git``.
+  """
+#==================================================================================================
+  from git import Repo
+  trg = Repo(path)
+  try: r = trg.remote()
+  except ValueError: return # no remote
+  if not os.path.isdir(r.url): return # remote not on file system
+  src = Repo(r.url)
+  if src.is_dirty(): raise GitException('source-dirty',trg,src)
+  if trg.is_dirty(): raise GitException('target-dirty',trg,src)
+  if not all((f.flags & f.HEAD_UPTODATE) for f in r.pull()):
+    logger.info('Synched (git pull) %s',trg)
+    if src.commit()!=trg.commit(): raise GitException('synch-failed',trg,src)
+    return True
+class GitException (Exception): pass
+
+#==================================================================================================
+def gitcheck_package(pkgname):
   r"""
 :param pkgname: full name of a package
 :type pkgname: :class:`str`
 
-Assumes that *pkgname* is the name of a python package contained in a git repository which is a passive copy of another repository on the same file system. Checks that the package is up-to-date, and updates it if needed using the git pull operation. Call before loading the package... Use the ``GIT_PYTHON_GIT_EXECUTABLE`` environment variable to set the Git executable if it is not the default ``/usr/bin/git``.
+Assumes that *pkgname* is the name of a python regular (non namespace) package and invokes :meth:`gitcheck` on its path. Reloads the package if git update was performed.
   """
 #==================================================================================================
-  from git import Repo
-  from importlib.machinery import PathFinder
+  from importlib.util import find_spec
   from importlib import reload
   from sys import modules
-  for path in PathFinder.find_spec(pkgname).submodule_search_locations:
-    try: r = Repo(path)
-    except OSError: continue
-    break
-  else:
-    raise GitException('target-not-found')
-  try: url = r.remote().url
-  except ValueError: return # no remote
-  if ':' in url: return # remote not on file system
-  rsrc = Repo(url)
-  if rsrc.is_dirty(): raise GitException('source-dirty',r,rsrc)
-  if r.is_dirty(): raise GitException('target-dirty',r,rsrc)
-  if r.commit() != rsrc.commit():
-    logger.info('Synching (git pull) %s ...',r)
-    r.remote().pull()
-    if r.commit() != rsrc.commit(): raise GitException('synch-failed',r,rsrc)
+  if gitcheck(find_spec(pkgname).submodule_search_locations[0]):
     m = modules.get(pkgname)
-    if m is not None:
-      logger.warn('Reloading %s ...',pkgname)
-      reload(m)
-class GitException (Exception): pass
+    if m is not None: logger.warning('Reloading %s ...',pkgname); reload(m)
+    return True
 
 #==================================================================================================
 def SQLinit(engine,meta):

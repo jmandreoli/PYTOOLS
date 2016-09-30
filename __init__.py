@@ -794,7 +794,8 @@ Assumes that *pkgname* is the name of a python regular (non namespace) package a
   from importlib.util import find_spec
   from importlib import reload
   from sys import modules
-  path, = find_spec(pkgname).submodule_search_locations
+  try: path, = find_spec(pkgname).submodule_search_locations
+  except: raise ValueError('Not a regular package',pkgname)
   if gitcheck(path):
     m = modules.get(pkgname)
     if m is not None: logger.warning('Reloading %s ...',pkgname); reload(m)

@@ -154,12 +154,19 @@ Note that this constructor is locally cached on the resolved path *spec*.
       else:
         return row[0]
 
-  def clear_obsolete(self,sel=(lambda x: True),*,strict=True):
-    if sel is None: sel = (lambda x: 'yes'.startswith(input('DEL {}? '.format(x)).strip().lower()))
-    for k,c in list(self.items()):
-      o = c.functor.obsolete()
-      if not strict: o = o is not None
-      if o and sel(c.functor): del self[k]
+  def clear_obsolete(self,strict,dry_run=False):
+    r"""
+Clears all the blocks which are obsolete.
+    """
+    assert isinstance(strict,bool)
+    strictf = bool if strict else (lambda o: o is not None)
+    with self.connect() as conn:
+      conn.create_function('obsolete',1,lambda p: strictf(pickle.loads(p).obsolete()))
+      if dry_run: return [block for block, in conn.execute('SELECT oid FROM Block WHERE obsolete(functor)')]
+      conn.execute('DELETE FROM Block WHERE obsolete(functor)')
+      deleted = conn.total_changes
+    if deleted>0: logger.info('%s DELETED(%s)',self,deleted)
+    return deleted
 
 #--------------------------------------------------------------------------------------------------
 # CacheDB as Mapping
@@ -248,19 +255,24 @@ Methods:
   def __hash__(self): return hash((self.db,self.block))
   def __eq__(self,other): return isinstance(other,CacheBlock) and self.db is other.db and self.block == other.block
 
-  def clear_error(self):
+  def clear_error(self,dry_run=False):
     r"""
 Clears all the cells from this block which cache an exception.
     """
     with self.db.connect() as conn:
+      if dry_run: return [cell for cell, in conn.execute('SELECT oid FROM Cell WHERE block=? AND size<0',(self.block,))]
       conn.execute('DELETE FROM Cell WHERE block=? AND size<0',(self.block,))
       deleted = conn.total_changes
     if deleted>0: logger.info('%s DELETED(%s)',self,deleted)
     return deleted
 
-  def clear_overflow(self,n):
+  def clear_overflow(self,n,dry_run=False):
+    r"""
+Clears all the cells from this block except the *n* most recent.
+    """
     assert isinstance(n,int) and n>=1
     with self.db.connect() as conn:
+      if dry_run: return [cell for cell, in conn.execute('SELECT oid FROM Cell WHERE block=? AND size>0 ORDER BY hitdate DESC, oid DESC LIMIT -1 OFFSET ?',(self.block,n))]
       conn.execute('DELETE FROM Cell WHERE oid IN (SELECT oid FROM Cell WHERE block=? AND size>0 ORDER BY hitdate DESC, oid DESC LIMIT -1 OFFSET ?)',(self.block,n))
       deleted = conn.total_changes
     if deleted>0: logger.info('%s DELETED(%s)',self,deleted)

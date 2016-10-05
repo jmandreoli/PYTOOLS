@@ -537,7 +537,14 @@ Removes the content file path and as well as the synch lock.
     except: pass
 
   def getpath(self,cell):
-    return self.path/'V{:06d}.pck'.format(cell)
+    def dec(x):
+      while x: yield '0123456789ABCDEFGHIJKLMNOPQRSTUV'[x&31]; x >>= 5
+    n = ''.join(dec(cell)).ljust(5,'0')
+    p = self.path/('X'+n[:1:-1])
+    if not p.exists():
+      p.mkdir(exist_ok=True)
+      p.chmod(self.path.stat().st_mode)
+    return (p/n[1::-1]).with_suffix('.pck')
 
 #--------------------------------------------------------------------------------------------------
 # Synchronisation mechanism based on sqlite (for portability: could be simplified)

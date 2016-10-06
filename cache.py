@@ -125,7 +125,7 @@ Note that this constructor is locally cached on the resolved path *spec*.
         if path.is_dir(): storage = DefaultStorage(path)
         elif path.is_file():
           with path.open('rb') as u: storage = pickle.loads(u)
-        else: raise Exception('Cache repository specification path must be directory or file')
+        else: raise ValueError('Cache repository specification path must be directory or file')
         dbpath = str(storage.dbpath)
         SQliteNew(dbpath,SCHEMA)
         self = super().__new__(cls)
@@ -160,10 +160,12 @@ Clears all the blocks which are obsolete.
     """
     assert isinstance(strict,bool)
     strictf = bool if strict else (lambda o: o is not None)
+    L = [k for k,c in list(self.items()) if strictf(c.functor.obsolete())]
+    # this may load modules which add new (non obsolete) entries, hence out of transaction
+    if dry_run: return L
     with self.connect() as conn:
-      conn.create_function('obsolete',1,lambda p: strictf(pickle.loads(p).obsolete()))
-      if dry_run: return [block for block, in conn.execute('SELECT oid FROM Block WHERE obsolete(functor)')]
-      conn.execute('DELETE FROM Block WHERE obsolete(functor)')
+      conn.create_function('obsolete',1,(lambda cell: cell in L))
+      conn.execute('DELETE FROM Block WHERE obsolete(oid)')
       deleted = conn.total_changes
     if deleted>0: logger.info('%s DELETED(%s)',self,deleted)
     return deleted
@@ -278,15 +280,16 @@ Clears all the cells from this block except the *n* most recent.
     if deleted>0: logger.info('%s DELETED(%s)',self,deleted)
     return deleted
 
-  def info(self,typ=namedtuple('BlockInfo',('functor','hits','misses','size'))):
+  def info(self,typ=namedtuple('BlockInfo',('functor','hits','misses','ncell','ncell_error','ncell_pending'))):
     r"""
 Returns information about this block. Available attributes:
 :attr:`functor`, :attr:`hits`, :attr:`misses`, :attr:`size`
     """
     with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
-      sz = conn.execute('SELECT count(*) FROM Cell WHERE block=?',(self.block,)).fetchone()[0]
+      counts = dict(conn.execute('SELECT CASE WHEN size ISNULL THEN \'pending\' WHEN size<0 THEN \'error\' ELSE \'\' END AS status, count(*) FROM Cell WHERE block=? GROUP BY status',(self.block,)))
       row = conn.execute('SELECT functor, hits, misses FROM Block WHERE oid=?',(self.block,)).fetchone()
-    return typ(row[0].info(),*row[1:],size=sz)
+    counts.update(total=sum(counts.values()))
+    return typ(row[0].info(),*row[1:],*(counts.get(k,0) for k in ('total','error','pending')))
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self,arg):
@@ -486,11 +489,7 @@ Methods:
 
   def __init__(self,path):
     self.path = path
-    self.umask = ~path.stat().st_mode|0o111
-
-  def __enter__(self): self.umask = os.umask(self.umask)
-  def __exit__(self,*a): self.umask = os.umask(self.umask)
-  # not thread safe (should at least have a lock)
+    self.mode = path.stat().st_mode
 
 #--------------------------------------------------------------------------------------------------
   def insert(self,cell):
@@ -506,9 +505,11 @@ Opens the content file path in write mode, acquires the synch lock, then returns
       synch_close()
       return s
     vpath = self.getpath(cell)
-    with self:
-      vfile = vpath.open('wb')
-      synch_close = self.insert_synch(vpath)
+    vfile = vpath.open('wb')
+    vpath.chmod(self.mode&0o666)
+    synch_close = self.insert_synch(vpath)
+    try: os.sync()
+    except: pass
     return setval
 
 #--------------------------------------------------------------------------------------------------
@@ -536,14 +537,16 @@ Removes the content file path and as well as the synch lock.
     try: vpath.unlink(); self.remove_synch(vpath)
     except: pass
 
+#--------------------------------------------------------------------------------------------------
   def getpath(self,cell):
+#--------------------------------------------------------------------------------------------------
     def dec(x):
       while x: yield '0123456789ABCDEFGHIJKLMNOPQRSTUV'[x&31]; x >>= 5
     n = ''.join(dec(cell)).ljust(5,'0')
     p = self.path/('X'+n[:1:-1])
     if not p.exists():
       p.mkdir(exist_ok=True)
-      p.chmod(self.path.stat().st_mode)
+      p.chmod(self.mode)
     return (p/n[1::-1]).with_suffix('.pck')
 
 #--------------------------------------------------------------------------------------------------
@@ -553,7 +556,8 @@ Removes the content file path and as well as the synch lock.
   @staticmethod
   def insert_synch(vpath):
     tpath = vpath.with_suffix('.tmp')
-    tpath.open('w').close()
+    tpath.touch()
+    tpath.chmod(vpath.stat().st_mode)
     synch = sqlite3.connect(str(tpath))
     synch.execute('BEGIN EXCLUSIVE TRANSACTION')
     return synch.close
@@ -595,7 +599,8 @@ Attributes:
     self.dbpath = path/'index.db'
     if not self.dbpath.is_file():
       if any(path.iterdir()): raise Exception('Cannot create new index in non empty directory')
-      with self: self.dbpath.open('wb').close()
+      self.dbpath.touch(exist_ok=True)
+      self.dbpath.chmod(self.mode&0o666)
 
 #==================================================================================================
 # Utilities

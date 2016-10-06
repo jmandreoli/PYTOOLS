@@ -35,15 +35,15 @@ V = getpid()
 def vfunc(x): return x+V
 
 @persistent_cache(db=DIR)
-def stepA(**ini): return ini
+def stepA(d,**ini): return dict((k,v+d) for k,v in ini.items())
 
 @persistent_cache(db=DIR)
 def stepB(E,fr=None,to=None,r=0):
   p,q = fr
   return ChainMap({to:E[p]+E[q]+r},E)
 
-def proc(rab=1,rbc=2,rabc=3):
-  P_ini = MapExpr(stepA,a=1,b=2,c=3)
+def proc(rab=1,rbc=2,rabc=3,d=7):
+  P_ini = MapExpr(stepA,d,a=1,b=2,c=3)
   P_ab = MapExpr(stepB,P_ini,fr=('a','b'),to='ab',r=rab)
   P_bc = MapExpr(stepB,P_ini,fr=('b','c'),to='bc',r=rbc)
   P_abc = MapExpr(stepB,MapExpr(ChainMap,P_ab,P_bc),fr=('ab','bc'),to='abc',r=rabc)

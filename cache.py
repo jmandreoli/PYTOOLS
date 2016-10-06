@@ -283,13 +283,13 @@ Clears all the cells from this block except the *n* most recent.
   def info(self,typ=namedtuple('BlockInfo',('functor','hits','misses','ncell','ncell_error','ncell_pending'))):
     r"""
 Returns information about this block. Available attributes:
-:attr:`functor`, :attr:`hits`, :attr:`misses`, :attr:`size`
+:attr:`functor`, :attr:`hits`, :attr:`misses`, :attr:`ncell`, :attr:`ncell_error`, :attr:`ncell_pending`
     """
     with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
-      counts = dict(conn.execute('SELECT CASE WHEN size ISNULL THEN \'pending\' WHEN size<0 THEN \'error\' ELSE \'\' END AS status, count(*) FROM Cell WHERE block=? GROUP BY status',(self.block,)))
+      ncell = dict(conn.execute('SELECT CASE WHEN size ISNULL THEN \'pending\' WHEN size<0 THEN \'error\' ELSE \'\' END AS status, count(*) FROM Cell WHERE block=? GROUP BY status',(self.block,)))
       row = conn.execute('SELECT functor, hits, misses FROM Block WHERE oid=?',(self.block,)).fetchone()
-    counts.update(total=sum(counts.values()))
-    return typ(row[0].info(),*row[1:],*(counts.get(k,0) for k in ('total','error','pending')))
+    ncell.update(total=sum(ncell.values()))
+    return typ(row[0].info(),*row[1:],*(ncell.get(k,0) for k in ('total','error','pending')))
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self,arg):
@@ -298,10 +298,9 @@ Returns information about this block. Available attributes:
 
 Implements cacheing as follows:
 
-- method :meth:`getkey` of the functor is invoked with argument *arg* to obtain a ``ckey``.
-- Then a transaction is begun on the index database.
-- If there already exists a cell with the same ``ckey``, the transaction is immediately terminated and its value is extracted, using method :meth:`lookup` of the storage, and returned.
-- If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is immediately created, then the transaction is terminated. Then method :meth:`getval` of the functor is invoked with argument *arg*. The result is stored, even if it is an exception, using method :meth:`insert` of the storage, and completion is recorded in the database.
+- method :meth:`getkey` of the functor is invoked with argument *arg* to obtain a ``ckey``, then a transaction is begun on the index database.
+- If there already exists a cell with the same ``ckey``, method :meth:`lookup` of the storage is invoked to obtain a getter, then the transaction is terminated and the result is extracted, using the obtained getter.
+- If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is created, and method :meth:`insert` of the storage is invoked to obtain a setter, then the transaction is terminated. Then method :meth:`getval` of the functor is invoked with argument *arg*. The result is stored, even if it is an exception, using the obtained setter.
 
 If the result was an exception, it is raised, otherwise it is returned. In all cases, hit status is updated in the database.
     """

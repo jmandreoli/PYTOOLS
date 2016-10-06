@@ -448,7 +448,7 @@ Instances of this class implement closed symbolic expressions.
 :param a: list of positional arguments of the symbolic expression
 :param ka: dictionary of keyword arguments of the symbolic expression
 
-The triple *func*, *a*, *ka* forms the configuration of the :class:`Expr` instance. Its value is defined as the result of calling function *func* with positional and keyword arguments *a* and *ka*. The value is actually computed only once (and cached), and only when method :meth:`incarnate` is invoked. Subclasses should define automatic triggers of incarnation (see e.g. class :class:`MapExpr`). The incarnation cache can be reset by invoking method :meth:`reset`.
+The triple *func*, *a*, *ka* forms the configuration of the :class:`Expr` instance. Its value is defined as the result of calling function *func* with positional and keyword arguments *a* and *ka*. The value is actually computed only once (and cached), and only when method :meth:`incarnate` is invoked. Subclasses should define automatic triggers of incarnation (see e.g. classes :class:`MapExpr` and :class:`CallExpr`). The incarnation cache can be reset by invoking method :meth:`reset`.
 
 Initially, a :class:`Expr` instance is mutable, and its configuration can be changed. It becomes immutable (frozen) after any of the following operations: incarnation (even after it is reset), hashing, and pickling. Incarnation is not saved on pickling, hence lost on unpickling, but can of course be restored using method :meth:`incarnate`. Thus, when receiving a foreign :class:`Expr` instance, a process can decide whether it wants to access its value or only inspect its configuration. If recomputing the value is costly, use a persistent cache for *func*.
 
@@ -554,9 +554,9 @@ A simple utility to browse sliceable objects page per page in IPython.
 def exploredb(spec):
   r"""
 :param spec: an sqlalchemy url or engine or metadata structure, defining the database to explore
-:type engine: :class:`sqlalchemy.engine.Engine`\|\ :class:`str`\|\ :class:`sqlalchemy.MetaData`
+:type spec: :class:`sqlalchemy.engine.Engine`\|\ :class:`str`\|\ :class:`sqlalchemy.MetaData`
 
-Display a GUI for basic database exploration. If a metadata structure is specified, it must be bound to an existing engine, and it will be reflected.
+Display an IPython widget for basic database exploration. If a metadata structure is specified, it must be bound to an existing engine, and it will be reflected.
   """
 #==================================================================================================
   from functools import lru_cache
@@ -608,36 +608,36 @@ def html_incontext(x,refstyle='color: blue; background-color: #e0e0e0;'):
   r"""
 :param x: an arbitrary python object
 
-Returns an HTML object (as understood by :mod:`lxml`) representing object *x*. The representation is by default simply the string representation of *x* (enclosed in a SPAN element), but can be customised if *x* supports method :meth:`as_html`. In that case, the result is that of invoking that method.
+Returns an HTML object (etree as understood by package :mod:`lxml`) representing object *x*. The representation is by default simply the string representation of *x* (enclosed in a SPAN element), but can be customised if *x* supports method :meth:`as_html`. In that case, the result is that of invoking that method.
 
-Method :meth:`as_html` should only be defined for hashable objects. When invoked on an object, it may recursively compute the HTML representations of its components. To avoid duplication and infinite recursion, the HTML representation of a component should be obtained by passing it to the (sole) argument of method :meth:`as_html`, which is a function which returns the normal HTML representation of its argument on the first call, but returns, on subsequent calls, a "pointer" to that representation in the form of a string `?`\ *n* (within a SPAN element) where *n* is a unique reference number. The scope of such pointers is one global call of function :func:`html_incontext` (which should never be invoked recursively).
+Method :meth:`as_html` should only be defined for hashable objects. When invoked on an compound object, it may want to recursively compute the HTML representations of its components. To avoid duplication and infinite recursion, the HTML representation of a component should be obtained by passing it to the (sole) argument of method :meth:`as_html`, which returns a "pointer" in the form of a string `?`\ *n* (within a SPAN element) where *n* is a unique reference number and is associated to the normal HTML representation of the component. The scope of such pointers is the toplevel call of function :func:`html_incontext`, which should therefore never be invoked recursively.
 
-When pointers are created, the result of calling function :func:`html_incontext` on a object *x* is the normal HTML representation of *x* including its pointers, followed by a TABLE mapping each pointer reference *n* to its own HTML representation. Example::
+When pointers are created, the result of calling function :func:`html_incontext` on a object *x* is the normal HTML representation of *x* including its pointers, followed by a TABLE mapping each pointer reference *n* to its own HTML representation (possibly with pointers). In the following example, the normal HTML representation of a node in a graph is given by the sequence of HTML representations (converted to pointers) of its successor nodes::
 
-   class T:
-     def __init__(self,*children): self.children = children
+   class N: # class of nodes in a (possibly cyclic) directed graph
+     def __init__(self,tag,*succ): self.tag,self.succ = tag,succ
      def as_html(self,incontext):
        from lxml.builder import E
-       return E.DIV(*(y for x in self.children for y in (incontext(x),'|')))
+       return E.DIV(E.B(self.tag),'[',*(y for x in self.succ for y in ('|',incontext(x))),'|]')
    # Let's build a trellis DAG
-   x = T('')
-   xa,xb,xc = T('a',x),T('b',x),T('c',x)
-   xab,xbc,xac = T('ab',xa,xb),T('bc',xb,xc),T('ac',xa,xc)
-   xabc = T('abc',xab,xbc,xac)
-   html_incontext(xabc)
+   n = N('')
+   na,nb,nc = N('a',n),N('b',n),N('c',n)
+   nab,nbc,nac = N('ab',na,nb),N('bc',nb,nc),N('ac',na,nc)
+   nabc = N('abc',nab,nbc,nac)
+   html_incontext(nabc)
 
 produces (up to some attributes)::
 
    <TABLE>
-     <THEAD><TR><TD colspan="2"> <DIV><SPAN>abc</>|<SPAN>?1</>|<SPAN>?5</>|<SPAN>?7</>|</DIV> </TD></TR></THEAD>
+     <THEAD><TR><TD colspan="2"> <DIV><B>abc</>[|<SPAN>?1</>|<SPAN>?5</>|<SPAN>?7</></DIV> </TD></TR></THEAD>
      <TBODY>
-       <TR> <TH>?1</TH> <TD> <DIV><SPAN>ab</>|<SPAN>?2</>|<SPAN>?4</>|</DIV> </TD> </TR>
-       <TR> <TH>?2</TH> <TD> <DIV><SPAN>a</>|<SPAN>?3</>|</DIV> </TD> </TR>
-       <TR> <TH>?3</TH> <TD> <DIV><SPAN></>|</DIV> </TD> </TR>
-       <TR> <TH>?4</TH> <TD> <DIV><SPAN>b</>|<SPAN>?3</>|</DIV> </TD> </TR>
-       <TR> <TH>?5</TH> <TD> <DIV><SPAN>bc</>|<SPAN>?4</>|<SPAN>?6</>|</DIV> </TD> </TR>
-       <TR> <TH>?6</TH> <TD> <DIV><SPAN>c</>|<SPAN>?3</>|</DIV> </TD> </TR>
-       <TR> <TH>?7</TH> <TD> <DIV><SPAN>ac</>|<SPAN>?2</>|<SPAN>?6</>|</DIV> </TD> </TR>
+       <TR> <TH>?1</TH> <TD> <DIV><B>ab</>[|<SPAN>?2</>|<SPAN>?4</>|]</DIV> </TD> </TR>
+       <TR> <TH>?2</TH> <TD> <DIV><B>a</>[|<SPAN>?3</>|]</DIV> </TD> </TR>
+       <TR> <TH>?3</TH> <TD> <DIV><B></>[|]</DIV> </TD> </TR>
+       <TR> <TH>?4</TH> <TD> <DIV><B>b</>[|<SPAN>?3</>|]</DIV> </TD> </TR>
+       <TR> <TH>?5</TH> <TD> <DIV><B>bc</>[|<SPAN>?4</>|<SPAN>?6</>|]</DIV> </TD> </TR>
+       <TR> <TH>?6</TH> <TD> <DIV><B>c</>[|<SPAN>?3</>|]</DIV> </TD> </TR>
+       <TR> <TH>?7</TH> <TD> <DIV><B>ac</>[|<SPAN>?2</>|<SPAN>?6</>|]</DIV> </TD> </TR>
      </TBODY>
    </TABLE>
   """
@@ -679,14 +679,6 @@ def html_parlist(La,Lka,incontext,deco=('','',''),padding='5px'):
     for k,v in Lka: yield E.SPAN(E.B(k),'=',incontext(v),style=stl); yield sep
     yield cls
   return E.DIV(*h(),style='padding:0')
-
-#==================================================================================================
-def html_safe(x):
-  r"""
-Returns an HTML safe representation of *x*.
-  """
-#==================================================================================================
-  return x._repr_html_() if hasattr(x,'_repr_html_') else str(x).replace('<','&lt;').replace('>','&gt;')
 
 #==================================================================================================
 def html_table(irows,fmts,hdrs=None,opening=None,closing=None):

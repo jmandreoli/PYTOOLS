@@ -163,6 +163,7 @@ Clears all the blocks which are obsolete.
     L = [k for k,c in list(self.items()) if strictf(c.functor.obsolete())]
     # this may load modules which add new (non obsolete) entries, hence out of transaction
     if dry_run: return L
+    if not L: return 0
     with self.connect() as conn:
       conn.create_function('obsolete',1,(lambda cell: cell in L))
       conn.execute('DELETE FROM Block WHERE obsolete(oid)')
@@ -232,7 +233,7 @@ A block object is callable, and calls take a single argument. Method :meth:`__ca
   - method :meth:`getval` takes as input an argument and must return its associated value (to be cached).
   - method :meth:`html` takes as input a byte string as returned by invocation of method :meth:`getkey` and must return an HTML formatted representation of the argument of that invocation.
 
-* The actual storage of values is delegated to a dedicated storage object which must implement the following api (e.g. implemented by class :class:`FileStorage`):
+* The actual storage of values is delegated to a dedicated storage object, defined in the parent :class:`CacheDB` object, which must implement the following api (e.g. implemented by class :class:`FileStorage`):
 
   - method :meth:`insert` is called inside the transaction which inserts a new cell into the index, hence exactly once overall for a given cell. It takes as input the cell id and must return the function to call to set its value. The returned function is called exactly once, but outside the transaction. It is passed the computed value and must return the size in bytes of its storage. The cell may have disappeared from the cache when called, or may disappear while executing, so the assignment may have to later be rolled back.
   - method :meth:`lookup` is called inside the transaction which looks up a cell from the index. There may be multiple such transactions in possibly concurrent threads/processes for a given cell. It takes as input the cell id and a boolean flag indicating whether the cell value is currently being computed by a concurrent thread/process, and must return the function to call to get its value. The returned function is called exactly once, but outside the transaction.
@@ -299,10 +300,10 @@ Returns information about this block. Available attributes:
 Implements cacheing as follows:
 
 - method :meth:`getkey` of the functor is invoked with argument *arg* to obtain a ``ckey``, then a transaction is begun on the index database.
-- If there already exists a cell with the same ``ckey``, method :meth:`lookup` of the storage is invoked to obtain a getter, then the transaction is terminated and the result is extracted, using the obtained getter.
-- If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is created, and method :meth:`insert` of the storage is invoked to obtain a setter, then the transaction is terminated. Then method :meth:`getval` of the functor is invoked with argument *arg*. The result is stored, even if it is an exception, using the obtained setter.
+- If there already exists a cell with the same ``ckey``, method :meth:`lookup` of the storage is invoked to obtain a getter for that cell, then the transaction is terminated and the result is extracted, using the obtained getter.
+- If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is created, and method :meth:`insert` of the storage is invoked to obtain a setter for that cell, then the transaction is terminated. Then, method :meth:`getval` of the functor is invoked with argument *arg* and its result is stored, even if it is an exception, using the obtained setter.
 
-If the result was an exception, it is raised, otherwise it is returned. In all cases, hit status is updated in the database.
+If the result is an exception, it is raised, otherwise it is returned. In all cases, the hit status of the cache block is updated in the database.
     """
 #--------------------------------------------------------------------------------------------------
     ckey = self.functor.getkey(arg)
@@ -469,12 +470,12 @@ def sig_load(x): return inspect.Signature(inspect.Parameter(name,kind,default=de
 #==================================================================================================
 class FileStorage:
   r"""
-Instances of this class manage the persistent storage of cache values using a filesystem directory.
+Instances of this class manage the persistent storage of cached values using a filesystem directory.
 
 :param path: the directory to store cached values
 :type path: :class:`pathlib.Path`
 
-The storage for a cell consists of a content file which contains the value of the cell in pickled format and a cross process mechanism to synchronise access to the content file between writer and possibly multiple readers. The names of the content file as well as the file underlying the synch lock are built from the cell id, so as to be unique to that cell. They inherit the access rights of the *path* directory.
+The storage for a cell consists of a content file which contains the value of the cell in pickled format and a cross process mechanism to synchronise access to the content file between writer and possibly multiple readers. The path of the content file as well as that of the file underlying the synch lock are built from the cell id, so as to be unique to that cell. They inherit the access rights of the :attr:`path` directory.
 
 Attributes:
 
@@ -493,7 +494,7 @@ Methods:
 #--------------------------------------------------------------------------------------------------
   def insert(self,cell):
     r"""
-Opens the content file path in write mode, acquires the synch lock, then returns a :func:`setval` function which pickle-dumps its argument into the content file, closes it and releases the synch lock.
+Opens the content file path for *cell* in write mode, acquires the corresponding synch lock, then returns a setter function which pickle-dumps its argument into the content file, closes it and releases the synch lock.
     """
 #--------------------------------------------------------------------------------------------------
     def setval(val):
@@ -514,7 +515,7 @@ Opens the content file path in write mode, acquires the synch lock, then returns
 #--------------------------------------------------------------------------------------------------
   def lookup(self,cell,wait):
     r"""
-Opens the content file path in read mode and returns a :func:`getval` function which waits for the synch lock to be released (if *wait* is True), then pickle-loads the content file and returns the obtained value.
+Opens the content file path for *cell* in read mode, then returns a getter function which waits for the corresponding synch lock to be released (if *wait* is True), then pickle-loads the content file and returns the obtained value.
     """
 #--------------------------------------------------------------------------------------------------
     def getval():
@@ -529,7 +530,7 @@ Opens the content file path in read mode and returns a :func:`getval` function w
 #--------------------------------------------------------------------------------------------------
   def remove(self,cell,size):
     r"""
-Removes the content file path and as well as the synch lock.
+Removes the content file path for *cell* as well as the corresponding synch lock.
     """
 #--------------------------------------------------------------------------------------------------
     vpath = self.getpath(cell)
@@ -538,6 +539,9 @@ Removes the content file path and as well as the synch lock.
 
 #--------------------------------------------------------------------------------------------------
   def getpath(self,cell):
+    r"""
+Returns the content file path (as a :class:`pathlib.Path` instance) associated to *cell* (of type :class:`int`). It is composed of two parts (a directory name and a file name), joined to the main :attr:`path` attribute. The directory is created if it does not already exist. The concatenation of the directory name (without its prefix ``X``) and the file name (without its suffix ``.pck``) is the representation of *cell* in base 32 (digits are 0-9A-V). This mapping of cells to paths ensures that no sub-directory holds more than 1024 cells. It assumes that cells are created sequentially (which is what AUTOINCREMENT in sqlite3 does), so the number of sub-directories grows slowly.
+    """
 #--------------------------------------------------------------------------------------------------
     def dec(x):
       while x: yield '0123456789ABCDEFGHIJKLMNOPQRSTUV'[x&31]; x >>= 5
@@ -549,7 +553,7 @@ Removes the content file path and as well as the synch lock.
     return (p/n[1::-1]).with_suffix('.pck')
 
 #--------------------------------------------------------------------------------------------------
-# Synchronisation mechanism based on sqlite (for portability: could be simplified)
+# Synchronisation mechanism based on sqlite (for portability: could probably be simplified)
 #--------------------------------------------------------------------------------------------------
 
   @staticmethod
@@ -641,6 +645,9 @@ Instances of this class are defined from versioned functions (ie. functions defi
     module,name,version = self.config
     return '{}.{}{}'.format(module,name,('' if version is None else '{{{}}}'.format(version)))
   def obsolete(self):
+    r"""
+Returns :const:`None` if this instance is up-to-date. It may be obsolete for two reasons: the function it refers to (by module name, function name and version) cannot be imported or is not a versioned function (in which case the empty tuple is returned) or it has a different version (in which case the pair of the current version of the imported function and the version of this instance is returned). Note that this method may import modules which in turn may create cache entries (for new versions of functions). It should therefore not be called in a cache transaction.
+    """
     from importlib import import_module
     module,name,version = self.config
     try:

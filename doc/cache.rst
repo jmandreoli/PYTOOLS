@@ -41,19 +41,29 @@ Typical output:
 
 Discussion
 ----------
-When a cache cell is created by an invocation, any versioned function which appears in any of its arguments at any level is memorised together with its version, so the cache cell is later invalidated (but not removed) if the version of any of these functions is updated. For example, in the last demo, the result of :func:`proc` is a symbolic invocation of :func:`stepB` whose first argument embeds two other symbolic invocations of :func:`stepB` and one of :func:`stepA`. If :func:`stepA` were versioned, and its version had changed between two incarnations of the result of :func:`proc` in distinct processes, the top cell for the first incarnation (attached to :func:`stepB`) would not be hit by the second incarnation, even though the version of :func:`stepB` has not changed.
 
-Note that function :func:`stepB` has the structure of a generic task executor::
+Persistent cacheing and versioned functions
+...........................................
+When a cache cell is created by an invocation, any versioned function which appears in any of its arguments at any level is memorised together with its version, so the cache cell is later missed (but not removed) if the version of any of these functions has changed. For example, suppose a function ``f`` is persistently cached and has a cell obtained by an invocation ``f(3,g)`` where ``g`` is a versioned function. Another invocation of the same ``f(3,g)`` later in another process may miss the cell for any of the following reasons:
+
+* the calling function ``f`` has a new version (recall that persistently cached functions are always versioned);
+* the argument function ``g`` has a new version.
+
+In the example above, the first argument of the persistently cached function :func:`stepB` is typically a symbolic expression (instance of class :class:`Expr`) which contains references at different depths to other functions, in particular :func:`stepA`. So if the latter were versioned and its version changed, the corresponding cache cells for function :func:`stepB` would be missed, even if the version of :func:`stepB` were not changed.
+
+Persistent cacheing with symbolic expressions for workflow task execution
+.........................................................................
+A typical workflow task executor (see e.g. function :func:`stepB` in the example above) looks like this::
 
    def task_exec(E,...):
      ...
      return ChainMap({...},E)
 
-Keeping in mind that *E*, which captures all the previous tasks, is typically an instance of :class:`MapExpr`, hence immutable, it is not possible to directly update *E*, but an alternative to the last line could still be::
+Typically *E* is an instance of :class:`MapExpr` whose configuration describes all the previous tasks in the workflow. Its incarnation is the set of key-value pairs computed by the previous tasks. The new task enriches this set of key-value pairs with some new items. Since *E* is immutable, it is not possible to directly update it, but a functionally equivalent alternative to the last line could still be::
 
    E = dict(E); E.update({...}); return E
 
-The cached value would then be a regular dict containing all the keys already present in *E*, typically assigned by previous tasks, plus those computed by that task. The advantage would be that a single cache lookup gives access to the computed results of all the tasks. On the other hand, the drawback is that the cached value might be large, and mostly redundant with the cached values of the previous tasks. With the :func:`ChainMap` solution, the cached value contains *E* directly, the storage of which only involves its configuration, which is typically of negligible size compared to its value. The price to pay is that access to the results of previous tasks requires re-accessing the cache, but that overhead is often small and worth the economy in total cache size.
+In both cases, the same key-value pairs are returned. There is an important difference though. The cached value in the alternative is a regular dict containing all the keys already present in *E* (recursively incarnated by its conversion to a dict), typically assigned by the previous tasks, plus those computed by the new task. The advantage of that solution is that a single cache lookup gives access to the computed results of all the tasks up to the current one. On the other hand, the drawback is that this cached value might be large, and mostly redundant with the cached values of the previous tasks. With the :func:`ChainMap` solution, only the configuration of *E*, not its incarnation, is stored, and it is usually of negligible size compared to its incarnation. The price to pay is that access to the results of previous tasks now requires re-incarnating *E* hence re-accessing the cache, but that overhead is often small and worth the economy in overall cache redundancy.
 
 Available types and functions
 -----------------------------
@@ -62,4 +72,3 @@ Available types and functions
    :members:
    :member-order: bysource
    :show-inheritance:
-

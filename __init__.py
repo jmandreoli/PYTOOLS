@@ -27,7 +27,8 @@ Use as a decorator to declare, in a class, a computable attribute which is compu
 
   def __init__(self,get):
     from inspect import signature
-    if any(p for p in signature(get).parameters.values() if p.kind!=p.POSITIONAL_OR_KEYWORD):
+    L = list(signature(get).parameters.values())
+    if any(p.kind!=p.POSITIONAL_OR_KEYWORD for p in L) or any(p.default==p.empty for p in L[1:]):
       raise Exception('ondemand attribute definition must be a function with a single argument')
     self.get = get
 
@@ -145,7 +146,7 @@ Returns the string value of an environment variable (or the content of the file 
 def autoconfig(module,name,dflt=None,asfile=False):
   r"""
 :param module: the name of a module
-:param name: the name of a configuration parameter
+:param name: the name of a configuration parameter for that module
 :param dflt: a default value for the configuration parameter
 :param asfile: whether to treat the value of the environment variable as a path to a file
 
@@ -279,7 +280,9 @@ If *cparse* is :const:`None`, the argument is ignored by the command line parser
       L = type2widget.get(typ)
       if L is None: raise ConfigException('Inconsistent cat for value type',name)
       set_widget_type(*L)
-      if cparse is not None: cparse.update(type=typ)
+      if cparse is not None:
+        if typ is bool: cparse.update(action=('store_false' if value else 'store_true'))
+        else: cparse.update(type=(lambda x: eval(x,{})))
     elif isinstance(cat,slice):
       start,stop,step = (cat.start or 0),cat.stop,cat.step
       if isinstance(stop,int):
@@ -513,7 +516,7 @@ Set *f* as the config function of this instance. Raises an error if the instance
   def __repr__(self):
     if self.incarnated: return repr(self.value)
     func,a,ka = self.config
-    sep = ',' if (a or ka) else ''
+    sep = ',' if (a and ka) else ''
     a = ','.join(repr(v) for v in a)
     ka = ','.join('{}={}'.format(k,repr(v)) for k,v in sorted(ka.items()))
     return '{}({}{}{})'.format(func,a,sep,ka)

@@ -611,17 +611,17 @@ def html_incontext(x,refstyle='color: blue; background-color: #e0e0e0;'):
   r"""
 :param x: an arbitrary python object
 
-Returns an HTML object (etree as understood by package :mod:`lxml`) representing object *x*. The representation is by default simply the string representation of *x* (enclosed in a SPAN element), but can be customised if *x* supports method :meth:`as_html`. In that case, the result is that of invoking that method.
+Returns an HTML object (etree as understood by package :mod:`lxml`) representing object *x*. The representation is by default simply the string representation of *x* (enclosed in a SPAN element), but can be customised if *x* supports method :meth:`as_html`.
 
-Method :meth:`as_html` should only be defined for hashable objects. When invoked on an compound object, it may want to recursively compute the HTML representations of its components. To avoid duplication and infinite recursion, the HTML representation of a component should be obtained by passing it to the (sole) argument of method :meth:`as_html`, which returns a "pointer" in the form of a string `?`\ *n* (within a SPAN element) where *n* is a unique reference number and is associated to the normal HTML representation of the component. The scope of such pointers is the toplevel call of function :func:`html_incontext`, which should therefore never be invoked recursively.
+Method :meth:`as_html` should only be defined for hashable objects. It takes as input a function *incontext* and returns the base HTML representation of the object. If invoked on a compound object, it should not recursively invoke method :meth:`html_incontext` nor :meth:`as_html` on its components to obtain their HTML representations, because that would produce representations of unmanageable size in case of recursions or repetitions (if two components share a common sub-component). Instead, the representation of a component object should be a "pointer" in the form of a string `?`\ *n* (within a SPAN element) where *n* is a unique reference number. The pointer for a component can be obtained by calling the argument function *incontext* with that object as argument. The scope of such pointers is the toplevel call of function :func:`html_incontext`, and two occurrences of equal objects will have the same pointer.
 
-When pointers are created, the result of calling function :func:`html_incontext` on a object *x* is the normal HTML representation of *x* including its pointers, followed by a TABLE mapping each pointer reference *n* to its own HTML representation (possibly with pointers). In the following example, the normal HTML representation of a node in a graph is given by the sequence of HTML representations (converted to pointers) of its successor nodes::
+When pointers are created, the result of calling function :func:`html_incontext` on a object *x* is the base HTML representation of *x* including its pointers, followed by a TABLE mapping each pointer reference *n* to the base HTML representation of the reference object (possibly containing pointers itself, recursively). In the following example, the base HTML representation of a node in a graph is given by its label followed by the sequence of pointers to its successor nodes::
 
    class N: # class of nodes in a (possibly cyclic) directed graph
      def __init__(self,tag,*succ): self.tag,self.succ = tag,succ
      def as_html(self,incontext):
        from lxml.builder import E
-       return E.DIV(E.B(self.tag),'[',*(y for x in self.succ for y in ('|',incontext(x))),'|]')
+       return E.DIV(E.B(self.tag),'[|',*(y for x in self.succ for y in (incontext(x),'|')),']')
    # Let's build a trellis DAG
    n = N('')
    na,nb,nc = N('a',n),N('b',n),N('c',n)
@@ -632,7 +632,9 @@ When pointers are created, the result of calling function :func:`html_incontext`
 produces (up to some attributes)::
 
    <TABLE>
+     <!-- THEAD: base HTML representation (with pointers) of the initial object -->
      <THEAD><TR><TD colspan="2"> <DIV><B>abc</>[|<SPAN>?1</>|<SPAN>?5</>|<SPAN>?7</></DIV> </TD></TR></THEAD>
+     <!-- TBODY: mapping each pointer to the base HTML representation of its reference -->
      <TBODY>
        <TR> <TH>?1</TH> <TD> <DIV><B>ab</>[|<SPAN>?2</>|<SPAN>?4</>|]</DIV> </TD> </TR>
        <TR> <TH>?2</TH> <TD> <DIV><B>a</>[|<SPAN>?3</>|]</DIV> </TD> </TR>

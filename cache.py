@@ -23,24 +23,25 @@ from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlis
 SCHEMA = '''
 CREATE TABLE Block (
   oid INTEGER PRIMARY KEY AUTOINCREMENT,
-  functor PICKLE UNIQUE NOT NULL,
-  hits INTEGER DEFAULT 0,
-  misses INTEGER DEFAULT 0
+  functor PICKLE NOT NULL
   )
 
 CREATE TABLE Cell (
   oid INTEGER PRIMARY KEY AUTOINCREMENT,
-  hitdate TIMESTAMP DEFAULT ( datetime('now') ),
   block REFERENCES Block(oid) NOT NULL,
   ckey BLOB NOT NULL,
+  tstamp TIMESTAMP DEFAULT ( datetime('now') ),
+  hits INTEGER DEFAULT 0,
   size INTEGER DEFAULT 0,
   tprc REAL,
   ttot REAL
   )
 
+CREATE UNIQUE INDEX BlockIndex ON Block (functor)
+
 CREATE UNIQUE INDEX CellIndex ON Cell (block, ckey)
 
-CREATE INDEX CellIndex2 ON Cell (hitdate)
+CREATE INDEX CellIndex2 ON Cell (tstamp)
 
 CREATE TRIGGER BlockDeleteTrigger
   AFTER DELETE ON Block
@@ -61,21 +62,24 @@ sqlite3.enable_callback_tracebacks(True)
 #==================================================================================================
 class CacheDB (MutableMapping,HtmlPlugin):
   r"""
-Instances of this class manage cache repositories. There is at most one instance of this class in a process for each normalised repository specification path. A cache repository contains a set of values stored in some form. Each value has meta information stored in an index stored as a sqlite database. The index entry attached to a value is called a cell and describes the call event which obtained it. A ``Cell`` entry has the following fields:
+Instances of this class manage cache repositories. There is at most one instance of this class in a process for each normalised repository specification path. A cache repository contains blocks of cells, each cell corresponding to one cached value produced by a unique call, and possibly reused by later calls. Meta-information about blocks and cells are stored in an index in a sqlite3 database. The values themselves are persistently stored by a dedicated storage object.
 
-- ``oid``: a unique identifier of the cell, which also allows retrieval of the attached value;
-- ``block``: reference to another entry in the database (table ``Block``) describing the functor of the call event which produced the value;
+The index entry attached to a block describes the common functor of all the call events which produced its values. A ``Block`` entry has the following field:
+
+- ``oid``: a unique identifier of the block, of type :class:`int`;
+- ``functor``: the functor producing all the cells in the block; each functor is assumed to have a deterministic pickle byte-string which uniquely identifies it.
+
+The index entry attached to a cell describes the call event which produced it. A ``Cell`` entry has the following fields:
+
+- ``oid``: a unique identifier of the cell, of type :class:`int`, which also allows retrieval of the attached value;
+- ``block``: reference to the ``Block`` entry holding the functor of the call event which produced the value;
 - ``ckey``: the key of the call event which produced the value;
-- ``hitdate``: date of creation, or last reuse, of the cell;
-- ``size``, ``tprc``, ``ttot``: size (in bytes) of the value and process and total time (in sec) of its computation.
+- ``tstamp``: date of creation, last update or last reuse, of the cell;
+- ``hits``: number of hits (reuse) since creation;
+- ``size``: either 0 if the value is still being computed, or the size in bytes of the computed value, with a negative sign if that value is an exception;
+- ``tprc``, ``ttot``: process and total time (in sec) of its computation.
 
-``Block`` entries correspond to clusters of ``Cell`` entries (call events) sharing the same functor. They have the following fields
-
-- ``functor``: the persistent functor producing all the cells in the block; different blocks always have functors with different pickle byte-strings;
-- ``misses``: number of call events with that functor where the argument had not been seen before;
-- ``hits``: number of call events with that functor where the argument had previously been seen; such a call does not generate a new ``Cell``, but reuses the existing one;
-
-Furthermore, a :class:`CacheDB` instance acts as a mapping object, where the keys are block identifiers (:class:`int`) and values are :class:`CacheBlock` objects for the corresponding blocks.
+A :class:`CacheDB` instance acts as a mapping object, where the keys are block identifiers (:class:`int`) and values are :class:`CacheBlock` objects for the corresponding blocks.
 
 Finally, :class:`CacheDB` instances have an HTML ipython display.
 
@@ -225,21 +229,21 @@ Instances of this class implements blocks of cells sharing the same functor.
 :param cacheonly: if :const:`True`, cell creation is disallowed
 :type cacheonly: :class:`bool`
 
-A block object is callable, and calls take a single argument. Method :meth:`__call__` implements the cacheing mechanism.
+A block object is callable, and calls take a single argument. Method :meth:`__call__` implements the cacheing mechanism which produces and reuses cache cells.
 
-* The computation of the cache key and cached value attached to an argument is delegated to a dedicated functor object which must implement the following api (e.g. implemented by class :class:`Functor`):
+* The computation of the cache key and cached value attached to an argument is delegated to *functor* which must implement the following api (e.g. implemented by class :class:`Functor`):
 
   - method :meth:`getkey` takes as input an argument and must return a byte string which represents it uniquely.
   - method :meth:`getval` takes as input an argument and must return its associated value (to be cached).
   - method :meth:`html` takes as input a byte string as returned by invocation of method :meth:`getkey` and must return an HTML formatted representation of the argument of that invocation.
 
-* The actual storage of values is delegated to a dedicated storage object, defined in the parent :class:`CacheDB` object, which must implement the following api (e.g. implemented by class :class:`FileStorage`):
+* The actual storage of values is delegated to the dedicated storage object of *db*, which must implement the following api (e.g. implemented by class :class:`FileStorage`):
 
   - method :meth:`insert` is called inside the transaction which inserts a new cell into the index, hence exactly once overall for a given cell. It takes as input the cell id and must return the function to call to set its value. The returned function is called exactly once, but outside the transaction. It is passed the computed value and must return the size in bytes of its storage. The cell may have disappeared from the cache when called, or may disappear while executing, so the assignment may have to later be rolled back.
   - method :meth:`lookup` is called inside the transaction which looks up a cell from the index. There may be multiple such transactions in possibly concurrent threads/processes for a given cell. It takes as input the cell id and a boolean flag indicating whether the cell value is currently being computed by a concurrent thread/process, and must return the function to call to get its value. The returned function is called exactly once, but outside the transaction.
   - method :meth:`remove` is called inside the transaction which deletes a cell from the index. It takes as arguments the cell id and the size of its value as memorised in the index.
 
-Furthermore, a :class:`CacheBlock` object acts as a mapping where the keys are cell identifiers (:class:`int`) and values are triples ``hitdate``, ``ckey``, ``size``. When ``size`` is null, the value of the cell is still being computed, otherwise it represents its size in bytes, possibly with a negative sign if the stored value is an exception.
+Furthermore, a :class:`CacheBlock` object acts as a mapping where the keys are cell identifiers (:class:`int`) and values are tuples of meta-information about the cells (i.e. not the values of the cells).
 
 Finally, :class:`CacheBlock` instances have an HTML ipython display.
 
@@ -271,26 +275,25 @@ Clears all the cells from this block which cache an exception.
 
   def clear_overflow(self,n,dry_run=False):
     r"""
-Clears all the cells from this block except the *n* most recent.
+Clears all the cells from this block except the *n* most recent (lru policy).
     """
     assert isinstance(n,int) and n>=1
     with self.db.connect() as conn:
-      if dry_run: return [cell for cell, in conn.execute('SELECT oid FROM Cell WHERE block=? AND size>0 ORDER BY hitdate DESC, oid DESC LIMIT -1 OFFSET ?',(self.block,n))]
-      conn.execute('DELETE FROM Cell WHERE oid IN (SELECT oid FROM Cell WHERE block=? AND size>0 ORDER BY hitdate DESC, oid DESC LIMIT -1 OFFSET ?)',(self.block,n))
+      if dry_run: return [cell for cell, in conn.execute('SELECT oid FROM Cell WHERE block=? AND size>0 ORDER BY tstamp DESC, oid DESC LIMIT -1 OFFSET ?',(self.block,n))]
+      conn.execute('DELETE FROM Cell WHERE oid IN (SELECT oid FROM Cell WHERE block=? AND size>0 ORDER BY tstamp DESC, oid DESC LIMIT -1 OFFSET ?)',(self.block,n))
       deleted = conn.total_changes
     if deleted>0: logger.info('%s DELETED(%s)',self,deleted)
     return deleted
 
-  def info(self,typ=namedtuple('BlockInfo',('functor','hits','misses','ncell','ncell_error','ncell_pending'))):
+  def info(self,typ=namedtuple('BlockInfo',('hits','ncell','ncell_error','ncell_pending'))):
     r"""
 Returns information about this block. Available attributes:
-:attr:`functor`, :attr:`hits`, :attr:`misses`, :attr:`ncell`, :attr:`ncell_error`, :attr:`ncell_pending`
+:attr:`functor`, :attr:`hits`, :attr:`ncell`, :attr:`ncell_error`, :attr:`ncell_pending`
     """
     with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
       ncell = dict(conn.execute('SELECT CASE WHEN size ISNULL THEN \'pending\' WHEN size<0 THEN \'error\' ELSE \'\' END AS status, count(*) FROM Cell WHERE block=? GROUP BY status',(self.block,)))
-      row = conn.execute('SELECT functor, hits, misses FROM Block WHERE oid=?',(self.block,)).fetchone()
-    ncell.update(total=sum(ncell.values()))
-    return typ(row[0].info(),*row[1:],*(ncell.get(k,0) for k in ('total','error','pending')))
+      hits, = conn.execute('SELECT sum(hits) FROM Cell WHERE block=?',(self.block,)).fetchone()
+    return typ(hits,sum(ncell.values()),*(ncell.get(k,0) for k in ('error','pending')))
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self,arg):
@@ -313,11 +316,9 @@ If the result is an exception, it is raised, otherwise it is returned. In all ca
       if row is None:
         if self.cacheonly: raise Exception('Cache cell creation disallowed')
         cell = conn.execute('INSERT INTO Cell (block,ckey) VALUES (?,?)',(self.block,ckey)).lastrowid
-        conn.execute('UPDATE Block SET misses=misses+1 WHERE oid=?',(self.block,))
         setval = self.db.storage.insert(cell)
       else:
         cell,size = row
-        conn.execute('UPDATE Block SET hits=hits+1 WHERE oid=?',(self.block,))
         getval = self.db.storage.lookup(cell,size==0)
     if row is None:
       logger.info('%s MISS(%s)',self,cell)
@@ -332,7 +333,7 @@ If the result is an exception, it is raised, otherwise it is returned. In all ca
           conn.execute('DELETE FROM Cell WHERE oid=?',(cell,))
         raise
       with self.db.connect() as conn:
-        conn.execute('UPDATE Cell SET size=?, tprc=?, ttot=?, hitdate=datetime(\'now\') WHERE oid=?',(size,tm[0],tm[1],cell))
+        conn.execute('UPDATE Cell SET size=?, tprc=?, ttot=?, tstamp=datetime(\'now\') WHERE oid=?',(size,tm[0],tm[1],cell))
         if not conn.total_changes: logger.info('%s LOST(%s)',self,cell)
       if size<0: raise cval
     else:
@@ -340,7 +341,7 @@ If the result is an exception, it is raised, otherwise it is returned. In all ca
       cval = getval()
       logger.info('%s HIT(%s)',self,cell)
       with self.db.connect() as conn:
-        conn.execute('UPDATE Cell SET hitdate=datetime(\'now\') WHERE oid=?',(cell,))
+        conn.execute('UPDATE Cell SET hits=hits+1, tstamp=datetime(\'now\') WHERE oid=?',(cell,))
       if isinstance(cval,BaseException): raise cval
     return cval
 
@@ -350,7 +351,7 @@ If the result is an exception, it is raised, otherwise it is returned. In all ca
 
   def __getitem__(self,cell):
     with self.db.connect() as conn:
-      r = conn.execute('SELECT ckey, hitdate, size, tprc, ttot FROM Cell WHERE oid=?',(cell,)).fetchone()
+      r = conn.execute('SELECT ckey, tstamp, hits, size, tprc, ttot FROM Cell WHERE oid=?',(cell,)).fetchone()
     if r is None: raise KeyError(cell)
     return r
 
@@ -372,7 +373,7 @@ If the result is an exception, it is raised, otherwise it is returned. In all ca
 
   def items(self):
     with self.db.connect() as conn:
-      for row in conn.execute('SELECT oid, ckey, hitdate, size, tprc, ttot FROM Cell WHERE block=?',(self.block,)):
+      for row in conn.execute('SELECT oid, ckey, tstamp, hits, size, tprc, ttot FROM Cell WHERE block=?',(self.block,)):
         yield row[0],row[1:]
 
   def clear(self):
@@ -387,7 +388,7 @@ If the result is an exception, it is raised, otherwise it is returned. In all ca
     n = len(self)-self._html_limit
     L = self.items(); closing = None
     if n>0: L = islice(L,self._html_limit); closing = '{} more'.format(n)
-    return html_table(sorted(L),hdrs=('ckey','hitdate','size','tprc','ttot'),fmts=((lambda ckey,h=self.functor.html: h(ckey,incontext)),str,size_fmt_,time_fmt_,time_fmt_),opening='{}: {}'.format(self.block,self.functor),closing=closing)
+    return html_table(sorted(L),hdrs=('ckey','tstamp','hits','size','tprc','ttot'),fmts=((lambda ckey,h=self.functor.html: h(ckey,incontext)),str,str,size_fmt_,time_fmt_,time_fmt_),opening='{}: {}'.format(self.block,self.functor),closing=closing)
   def __repr__(self): return 'Cache<{}:{}>'.format(self.db.path,self.functor)
 
 #==================================================================================================
@@ -452,10 +453,6 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
 #--------------------------------------------------------------------------------------------------
     a,ka = self.fpickle.loads(ckey)
     return html_parlist(a,ka,incontext)
-
-#--------------------------------------------------------------------------------------------------
-  def info(self): return self.config[0],self.sig
-#--------------------------------------------------------------------------------------------------
 
   def norm(self,arg):
     a,ka = arg

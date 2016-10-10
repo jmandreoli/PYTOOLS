@@ -33,7 +33,11 @@ To illustrate the cross-process capability of the cache, the code at the bottom 
   * `P_bc`: calls :func:`stepB` which chains to the result of the first task (`P_ini`) a dictionary with key `'bc'` assigned the sum of values of keys `'b'` and `'c'` plus some constant `rbc`
   * `P_abc`: calls :func:`stepB` which chains to the chained results of the last two tasks (`P_ab,P_bc`) a dictionary with key `'abc'` assigned the sum of values of keys `'ab'` and `'bc'` plus some constant `rabc`
 
-  Of course, cacheing such simple operations is not very interesting, but the purpose of the example is to illustrate dependencies between arbitrary tasks which could be much more complex (and computationaly heavy). The logged trace of the computation illustrates both the evaluation mechanism of symbolic expressions (called incarnation, see :class:`Expr`) and its subtle interaction with cacheing.
+  Of course, cacheing such simple operations is not very interesting, but the purpose of the example is to illustrate dependencies between arbitrary tasks which could be much more complex (and computationaly heavy). The logged trace of the computation illustrated below shows how the evaluation mechanism of symbolic expressions (called incarnation) in class :class:`MapExpr` and that of map chaining in class :class:`collections.ChainMap` interact with persistent cacheing.
+
+  .. figure:: cache-diag.png
+     :scale: 65%
+     
 
 Typical output:
 

@@ -17,6 +17,7 @@ from functools import partial, update_wrapper
 from itertools import islice
 from collections import namedtuple
 from collections.abc import MutableMapping
+from weakref import WeakValueDictionary
 from time import process_time, perf_counter
 from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlist, HtmlPlugin, pickleclass, configurable_decorator
 
@@ -258,6 +259,7 @@ Methods:
     self.functor = functor
     self.block = db.getblock(functor) if block is None else block
     self.cacheonly = cacheonly
+    self.memory = WeakValueDictionary()
 
   def __hash__(self): return hash((self.db,self.block))
   def __eq__(self,other): return isinstance(other,CacheBlock) and self.db is other.db and self.block == other.block
@@ -310,6 +312,8 @@ If the result is an exception, it is raised, otherwise it is returned. In all ca
     """
 #--------------------------------------------------------------------------------------------------
     ckey = self.functor.getkey(arg)
+    cval = self.memory.get(ckey)
+    if cval is not None: return cval.proxy
     with self.db.connect() as conn:
       conn.execute('BEGIN IMMEDIATE TRANSACTION')
       row = conn.execute('SELECT oid,size FROM Cell WHERE block=? AND ckey=?',(self.block,ckey,)).fetchone()
@@ -343,6 +347,7 @@ If the result is an exception, it is raised, otherwise it is returned. In all ca
       with self.db.connect() as conn:
         conn.execute('UPDATE Cell SET hits=hits+1, tstamp=datetime(\'now\') WHERE oid=?',(cell,))
       if isinstance(cval,BaseException): raise cval
+    self.memory[ckey] = Dummy(cval)
     return cval
 
 #--------------------------------------------------------------------------------------------------
@@ -653,3 +658,7 @@ Returns :const:`None` if this instance is up-to-date. It may be obsolete for two
         return None if f.version==version else (f.version,version)
     except: pass
     return ()
+
+class Dummy:
+  __slot__ = ('proxy',)
+  def __init__(self,o): self.proxy = o

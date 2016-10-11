@@ -11,7 +11,7 @@
 import logging
 logger = logging.getLogger(__name__)
 
-import os, sqlite3, pickle, inspect, threading
+import os, sqlite3, pickle, inspect, threading, abc
 from pathlib import Path
 from functools import partial, update_wrapper
 from itertools import islice
@@ -63,18 +63,18 @@ sqlite3.enable_callback_tracebacks(True)
 #==================================================================================================
 class CacheDB (MutableMapping,HtmlPlugin):
   r"""
-Instances of this class manage cache repositories. There is at most one instance of this class in a process for each normalised repository specification path. A cache repository contains blocks of cells, each cell corresponding to one cached value produced by a unique call, and possibly reused by later calls. Meta-information about blocks and cells are stored in an index in a sqlite3 database. The values themselves are persistently stored by a dedicated storage object.
+Instances of this class manage cache repositories. There is at most one instance of this class in a process for each normalised repository specification path. A cache repository contains cells, each cell corresponding to one cached value produced by a unique call, and possibly reused by later calls. Cells are clustered into blocks, each block grouping cells produced by the same call type, called a functor (of class :class:`AbstractFunctor`). Meta-information about blocks and cells are stored in an index in a sqlite3 database. The values themselves are persistently stored by a dedicated storage object (of class :class:`AbstractStorage`).
 
-The index entry attached to a block describes the common functor of all the call events which produced its values. A ``Block`` entry has the following field:
+The index entry attached to a block describes the common functor of all the calls which produced its cells. A ``Block`` entry has the following field:
 
-- ``oid``: a unique identifier of the block, of type :class:`int`;
+- ``oid``: a unique integer identifier of the block;
 - ``functor``: the functor producing all the cells in the block; each functor is assumed to have a deterministic pickle byte-string which uniquely identifies it.
 
 The index entry attached to a cell describes the call event which produced it. A ``Cell`` entry has the following fields:
 
-- ``oid``: a unique identifier of the cell, of type :class:`int`, which also allows retrieval of the attached value;
-- ``block``: reference to the ``Block`` entry holding the functor of the call event which produced the value;
-- ``ckey``: the key of the call event which produced the value;
+- ``oid``: a unique integer identifier of the cell; also used to retrieve the value attached to the cell;
+- ``block``: reference to the ``Block`` entry holding the functor of the call event which produced the cell;
+- ``ckey``: the key of the call event which produced the cell;
 - ``tstamp``: date of creation, last update or last reuse, of the cell;
 - ``hits``: number of hits (reuse) since creation;
 - ``size``: either 0 if the value is still being computed, or the size in bytes of the computed value, with a negative sign if that value is an exception;
@@ -230,23 +230,33 @@ Instances of this class implements blocks of cells sharing the same functor.
 :param cacheonly: if :const:`True`, cell creation is disallowed
 :type cacheonly: :class:`bool`
 
-A block object is callable, and calls take a single argument. Method :meth:`__call__` implements the cacheing mechanism which produces and reuses cache cells.
-
-* The computation of the cache key and cached value attached to an argument is delegated to *functor* which must implement the following api (e.g. implemented by class :class:`Functor`):
-
-  - method :meth:`getkey` takes as input an argument and must return a byte string which represents it uniquely.
-  - method :meth:`getval` takes as input an argument and must return its associated value (to be cached).
-  - method :meth:`html` takes as input a byte string as returned by invocation of method :meth:`getkey` and must return an HTML formatted representation of the argument of that invocation.
-
-* The actual storage of values is delegated to the dedicated storage object of *db*, which must implement the following api (e.g. implemented by class :class:`FileStorage`):
-
-  - method :meth:`insert` is called inside the transaction which inserts a new cell into the index, hence exactly once overall for a given cell. It takes as input the cell id and must return the function to call to set its value. The returned function is called exactly once, but outside the transaction. It is passed the computed value and must return the size in bytes of its storage. The cell may have disappeared from the cache when called, or may disappear while executing, so the assignment may have to later be rolled back.
-  - method :meth:`lookup` is called inside the transaction which looks up a cell from the index. There may be multiple such transactions in possibly concurrent threads/processes for a given cell. It takes as input the cell id and a boolean flag indicating whether the cell value is currently being computed by a concurrent thread/process, and must return the function to call to get its value. The returned function is called exactly once, but outside the transaction.
-  - method :meth:`remove` is called inside the transaction which deletes a cell from the index. It takes as arguments the cell id and the size of its value as memorised in the index.
+A block object is callable, and calls take a single argument. Method :meth:`__call__` implements the cross-process cacheing mechanism which produces and reuses cache cells. A :class:`CacheBlock` object also acts as a local cache within its process. However, locally cached values are stored as weak references, hence removed from the local cache when their reference count becomes null.
 
 Furthermore, a :class:`CacheBlock` object acts as a mapping where the keys are cell identifiers (:class:`int`) and values are tuples of meta-information about the cells (i.e. not the values of the cells).
 
 Finally, :class:`CacheBlock` instances have an HTML ipython display.
+
+Attributes:
+
+.. attribute:: db
+
+   the :class:`CacheDB` instance this block belongs to
+
+.. attribute:: functor
+
+   the functor for this block (field ``functor`` in the ``Block`` table of the index is the functor's pickle)
+
+.. attribute:: block
+
+   the :class:`int` identifier of this block (field ``oid`` in the ``Block`` table of the index)
+
+.. attribute:: cacheonly
+
+   whether cell creation is disabled
+
+.. attribute:: memory
+
+   a :class:`weakref.WeakValueDictionary` implementing a local cache of calls within the current process
 
 Methods:
 
@@ -290,12 +300,12 @@ Clears all the cells from this block except the *n* most recent (lru policy).
   def info(self,typ=namedtuple('BlockInfo',('hits','ncell','ncell_error','ncell_pending'))):
     r"""
 Returns information about this block. Available attributes:
-:attr:`functor`, :attr:`hits`, :attr:`ncell`, :attr:`ncell_error`, :attr:`ncell_pending`
+:attr:`hits`, :attr:`ncell`, :attr:`ncell_error`, :attr:`ncell_pending`
     """
     with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
       ncell = dict(conn.execute('SELECT CASE WHEN size ISNULL THEN \'pending\' WHEN size<0 THEN \'error\' ELSE \'\' END AS status, count(*) FROM Cell WHERE block=? GROUP BY status',(self.block,)))
       hits, = conn.execute('SELECT sum(hits) FROM Cell WHERE block=?',(self.block,)).fetchone()
-    return typ(hits,sum(ncell.values()),*(ncell.get(k,0) for k in ('error','pending')))
+    return typ((hits or 0),sum(ncell.values()),*(ncell.get(k,0) for k in ('error','pending')))
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self,arg):
@@ -304,11 +314,15 @@ Returns information about this block. Available attributes:
 
 Implements cacheing as follows:
 
-- method :meth:`getkey` of the functor is invoked with argument *arg* to obtain a ``ckey``, then a transaction is begun on the index database.
-- If there already exists a cell with the same ``ckey``, method :meth:`lookup` of the storage is invoked to obtain a getter for that cell, then the transaction is terminated and the result is extracted, using the obtained getter.
-- If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is created, and method :meth:`insert` of the storage is invoked to obtain a setter for that cell, then the transaction is terminated. Then, method :meth:`getval` of the functor is invoked with argument *arg* and its result is stored, even if it is an exception, using the obtained setter.
+- Method :meth:`getkey` of the functor is invoked with argument *arg* to obtain a ``ckey``.
+- If that ``ckey`` is present in the memory mapping of this block, its associated value is returned.
+- Otherwise, a transaction is begun on the index database.
 
-If the result is an exception, it is raised, otherwise it is returned. In all cases, the hit status of the cache block is updated in the database.
+  - If there already exists a cell with the same ``ckey``, method :meth:`lookup` of the storage is invoked to obtain a getter for that cell, then the transaction is terminated and the result is extracted, using the obtained getter. The cell's hit count is incremented.
+  - If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is created, and method :meth:`insert` of the storage is invoked to obtain a setter for that cell, then the transaction is terminated. Then, method :meth:`getval` of the functor is invoked with argument *arg* and its result is stored, even if it is an exception, using the obtained setter.
+
+- If the result is an exception, it is raised.
+- Otherwise, the memory mapping of this block is updated at key ``ckey`` with the result, and the result is returned.
     """
 #--------------------------------------------------------------------------------------------------
     ckey = self.functor.getkey(arg)
@@ -398,21 +412,105 @@ If the result is an exception, it is raised, otherwise it is returned. In all ca
   def __repr__(self): return 'Cache<{}:{}>'.format(self.db.path,self.functor)
 
 #==================================================================================================
-class Functor:
+class AbstractFunctor (metaclass=abc.ABCMeta):
   r"""
-An instance of this class defines a functor attached to a python top-level function.
+An instance of this class defines a type of (single argument) call to be cached.
+  """
+#==================================================================================================
 
-:param func: a function, defined at the top-level of its module (hence pickable)
+  @abc.abstractmethod
+  def getkey(self,arg):
+    r"""
+:param arg: an arbitrary python object conforming to the type of call of this functor.
 
-A functor is entirely defined by the name of the function, that of its module, its version and its signature. Hence, two functions (possibly in different processes at different times) sharing these components produce the same functor.
+Returns a byte string which represents *arg* uniquely.
+    """
+    raise NotImplementedError()
+
+  @abc.abstractmethod
+  def getval(self,arg):
+    r"""
+:param arg: an arbitrary python object conforming to the type of call of this functor.
+
+Returns the result of calling this functor with argument *arg*.
+    """
+    raise NotImplementedError()
+
+  @abc.abstractmethod
+  def html(self,ckey,incontext):
+    r"""
+:param ckey: a byte string as returned by invocation of method :meth:`getkey`
+
+Returns an HTML formatted representation of the argument of that invocation.
+    """
+    raise NotImplementedError()
+
+#==================================================================================================
+class AbstractStorage (metaclass=abc.ABCMeta):
+  r"""
+An instance of this class stores cached values on a persistent support.
+  """
+#==================================================================================================
+
+  @abc.abstractmethod
+  def insert(self,cell):
+    r"""
+:param cell: the identifier of a cell
+:type cell: :class:`int`
+
+Returns the function to call to set a cell value. This method is called inside the transaction which inserts a new cell into a cache index, hence exactly once overall for a given cell. The returned function is then called exactly once, but outside the transaction. It is passed the computed value and must return the size in bytes of its storage. The cell may have disappeared from the cache when called, or may disappear while executing, so the assignment may have to later be rolled back.
+    """
+    raise NotImplementedError()
+
+  @abc.abstractmethod
+  def lookup(self,cell,wait):
+    r"""
+:param cell: the identifier of a cell
+:type cell: :class:`int`
+:param wait: whether the cell value is currently being computed by a concurrent thread/process
+:type wait: :class:`bool`
+
+Returns the function to call to get a cell value. This method is called inside the transaction which looks up a cell from a cache index. There may be multiple such transactions in possibly concurrent threads/processes for a given cell. The returned function is called exactly once (per transaction), but outside the transaction.
+    """
+    raise NotImplementedError()
+
+  @abc.abstractmethod
+  def remove(self,cell,size):
+    r"""
+:param cell: the identifier of a cell
+:type cell: :class:`int`
+:param size: size of the cell
+:type size: :class:`int`
+
+Frees the storage resources associated with a cell. Called inside the transaction which deletes a cell from a cache index.
+    """
+    raise NotImplementedError()
+
+#==================================================================================================
+class Functor (AbstractFunctor):
+  r"""
+An instance of this class defines a functor attached to a python top-level versioned function. A functor is entirely defined by the name of the function, that of its module, its version and its signature. Hence, two functions (possibly in different processes at different times) sharing these components produce the same functor.
+
+Attributes:
+
+.. attribute:: func
+
+   the versioned function characterizing this functor
 
 Methods:
+
+.. automethod:: __new__
   """
 #===================================================================================================
 
   __slots__ = 'config', 'sig', 'func'
 
   def __new__(cls,spec,fromfunc=True):
+    r"""
+Generates a functor.
+
+:param spec: a versioned function, defined at the top-level of its module (hence pickable)
+    """
     self = super().__new__(cls)
     if fromfunc:
       self.func = spec
@@ -471,7 +569,7 @@ def sig_dump(sig): return tuple((p.name,p.kind,p.default) for p in sig.parameter
 def sig_load(x): return inspect.Signature(inspect.Parameter(name,kind,default=default) for name,kind,default in x)
 
 #==================================================================================================
-class FileStorage:
+class FileStorage (AbstractStorage):
   r"""
 Instances of this class manage the persistent storage of cached values using a filesystem directory.
 

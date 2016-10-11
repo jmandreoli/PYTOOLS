@@ -33,7 +33,7 @@ To illustrate the cross-process capability of the cache, the code at the bottom 
   * `P_bc`: calls :func:`stepB` which chains to the result of the first task (`P_ini`) a dictionary with key `'bc'` assigned the sum of values of keys `'b'` and `'c'` plus some constant `rbc`
   * `P_abc`: calls :func:`stepB` which chains to the chained results of the last two tasks (`P_ab,P_bc`) a dictionary with key `'abc'` assigned the sum of values of keys `'ab'` and `'bc'` plus some constant `rabc`
 
-  Of course, cacheing such simple operations is not very interesting, but the purpose of the example is to illustrate dependencies between arbitrary tasks which could be much more complex (and computationaly heavy). The logged trace of the computation illustrated below shows how the evaluation mechanism of symbolic expressions (called incarnation) in class :class:`MapExpr` and that of map chaining in class :class:`collections.ChainMap` interact with persistent cacheing.
+  Of course, cacheing such simple operations is not very interesting, but the purpose of the example is to illustrate cacheing in the presence of dependencies between arbitrary tasks which could be much more complex (and computationaly heavy). The logged trace of the computation illustrated in the diagram below shows how the evaluation mechanism of symbolic expressions (called incarnation) in class :class:`MapExpr` and that of map chaining in class :class:`collections.ChainMap` interact with persistent cacheing to provide a flexible workflow implementation.
 
   .. figure:: cache-diag.png
      :scale: 65%
@@ -51,7 +51,7 @@ Persistent cacheing and versioned functions
 ...........................................
 When a cache cell is created by an invocation, any versioned function which appears in any of its arguments at any level is memorised together with its version, so the cache cell is later missed (but not removed) if the version of any of these functions has changed. For example, suppose a function ``f`` is persistently cached and has a cell obtained by an invocation ``f(3,g)`` where ``g`` is a versioned function. Another invocation of the same ``f(3,g)`` later in another process may miss the cell for any of the following reasons:
 
-* the calling function ``f`` has a new version (recall that persistently cached functions are always versioned);
+* the calling function ``f`` has a new version;
 * the argument function ``g`` has a new version.
 
 In the example above, the first argument of the persistently cached function :func:`stepB` is typically a symbolic expression (instance of class :class:`Expr`) which contains references at different depths to other functions, in particular :func:`stepA`. So if the latter were versioned and its version changed, the corresponding cache cells for function :func:`stepB` would be missed, even if the version of :func:`stepB` were not changed.
@@ -64,7 +64,7 @@ A typical workflow task executor (see e.g. function :func:`stepB` in the example
      ...
      return ChainMap({...},E)
 
-Typically *E* is an instance of :class:`MapExpr` whose configuration describes all the previous tasks in the workflow. Its incarnation is the set of key-value pairs computed by the previous tasks. The new task enriches this set of key-value pairs with some new items. Since *E* is immutable, it is not possible to directly update it, but a functionally equivalent alternative to the last line could still be::
+Typically *E* is an instance of :class:`MapExpr` whose configuration describes all the previous tasks in the workflow. Its incarnation is the set of key-value pairs computed by the previous tasks. The new task enriches this set with some new key-value pairs. Since *E* is immutable, it is not possible to directly update it, but a functionally equivalent alternative to the last line could still be::
 
    E = dict(E); E.update({...}); return E
 

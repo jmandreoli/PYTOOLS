@@ -52,10 +52,11 @@ def proc(rab=1,rbc=2,rabc=3,d=7):
 #--------------------------------------------------------------------------------------------------
 
 def demo_(*L):
-  import logging
+  import logging, gc
   logging.basicConfig(level=logging.INFO,format='[proc %(process)d @ %(asctime)s] %(message)s',datefmt='%H:%M:%S')
   logger = logging.getLogger()
   for x in L:
+    gc.collect()
     logger.info('Computing: %s',x)
     try: v = eval(x)
     except Exception as e: v = 'raised[{}]'.format(e)

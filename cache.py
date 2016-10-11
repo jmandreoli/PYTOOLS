@@ -313,10 +313,10 @@ If the result is an exception, it is raised, otherwise it is returned. In all ca
 #--------------------------------------------------------------------------------------------------
     ckey = self.functor.getkey(arg)
     cval = self.memory.get(ckey)
-    if cval is not None: return cval.proxy
+    if cval is not None: return cval
     with self.db.connect() as conn:
       conn.execute('BEGIN IMMEDIATE TRANSACTION')
-      row = conn.execute('SELECT oid,size FROM Cell WHERE block=? AND ckey=?',(self.block,ckey,)).fetchone()
+      row = conn.execute('SELECT oid,size FROM Cell WHERE block=? AND ckey=?',(self.block,ckey)).fetchone()
       if row is None:
         if self.cacheonly: raise Exception('Cache cell creation disallowed')
         cell = conn.execute('INSERT INTO Cell (block,ckey) VALUES (?,?)',(self.block,ckey)).lastrowid
@@ -347,7 +347,8 @@ If the result is an exception, it is raised, otherwise it is returned. In all ca
       with self.db.connect() as conn:
         conn.execute('UPDATE Cell SET hits=hits+1, tstamp=datetime(\'now\') WHERE oid=?',(cell,))
       if isinstance(cval,BaseException): raise cval
-    self.memory[ckey] = Dummy(cval)
+    try: self.memory[ckey] = cval
+    except: pass
     return cval
 
 #--------------------------------------------------------------------------------------------------
@@ -658,7 +659,3 @@ Returns :const:`None` if this instance is up-to-date. It may be obsolete for two
         return None if f.version==version else (f.version,version)
     except: pass
     return ()
-
-class Dummy:
-  __slot__ = ('proxy',)
-  def __init__(self,o): self.proxy = o

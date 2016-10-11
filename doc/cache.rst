@@ -37,7 +37,8 @@ To illustrate the cross-process capability of the cache, the code at the bottom 
 
   .. figure:: cache-diag.png
      :scale: 65%
-     
+
+  Note that this diagram assumes a full garbage collection before each demo, otherwise, some cache accesses are skipped. Indeed, within a process, a persistent cache keeps weak references to all its past accesses (when their values are amenable to weak reference) and reuses them as long as they are not collected.
 
 Typical output:
 

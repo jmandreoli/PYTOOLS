@@ -1,7 +1,7 @@
-:mod:`quickui` --- Quick QT4 UI design
+:mod:`quickui` --- Quick QT5 UI design
 ======================================
 
-This module provides basic utilities to build simple interfaces with Qt4.
+This module provides basic utilities to build simple interfaces with Qt5.
 
 An example
 ----------

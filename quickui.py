@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 #--------------------------------------------------------------------------------------------------
 class BaseTabUI (object):
   r"""
-An instance of this class builds a Qt4 application with a single main window having a set of tabs.
+An instance of this class builds a Qt5 application with a single main window having a set of tabs.
 
 UI components are accessible through attributes:
 :attr:`main`, :attr:`centralwidget`, :attr:`tabw`,
@@ -50,16 +50,16 @@ Methods:
     self.main.addToolBar(QtCore.Qt.TopToolBarArea, self.toolbar)
     self.actionQuit = QtWidgets.QAction(self.main)
     self.actionQuit.setObjectName("actionQuit")
+    self.actionQuit.triggered.connect(QtWidgets.QApplication.quit)
     self.menuFile.addAction(self.actionQuit)
     self.menubar.addAction(self.menuFile.menuAction())
     self.toolbar.addAction(self.actionQuit)
-    QtCore.QObject.connect(self.actionQuit, QtCore.SIGNAL("triggered()"), self.main.close)
     QtCore.QMetaObject.connectSlotsByName(self.main)
 
-    self.main.setWindowTitle(QtWidgets.QApplication.translate("MainWindow", "MainWindow", None, QtWidgets.QApplication.UnicodeUTF8))
-    self.menuFile.setTitle(QtWidgets.QApplication.translate("MainWindow", "File", None, QtWidgets.QApplication.UnicodeUTF8))
-    self.toolbar.setWindowTitle(QtWidgets.QApplication.translate("MainWindow", "toolbar", None, QtWidgets.QApplication.UnicodeUTF8))
-    self.actionQuit.setText(QtWidgets.QApplication.translate("MainWindow", "Quit", None, QtWidgets.QApplication.UnicodeUTF8))
+    self.main.setWindowTitle(QtWidgets.QApplication.translate("MainWindow", "MainWindow"))
+    self.menuFile.setTitle(QtWidgets.QApplication.translate("MainWindow", "File"))
+    self.toolbar.setWindowTitle(QtWidgets.QApplication.translate("MainWindow", "toolbar"))
+    self.actionQuit.setText(QtWidgets.QApplication.translate("MainWindow", "Quit"))
 
     self.main.show()
 
@@ -68,7 +68,7 @@ Methods:
     w = QtWidgets.QWidget()
     w.setObjectName('tab_'+label)
     self.tabw.addTab(w,'')
-    self.tabw.setTabText(self.tabw.indexOf(w), QtWidgets.QApplication.translate("MainWindow", label, None, QtWidgets.QApplication.UnicodeUTF8))
+    self.tabw.setTabText(self.tabw.indexOf(w), QtWidgets.QApplication.translate("MainWindow", label))
     return w
 
 #--------------------------------------------------------------------------------------------------
@@ -184,7 +184,7 @@ Methods:
     label = label.capitalize()
     a = QtWidgets.QAction(self.main)
     a.setObjectName("action"+label)
-    a.setText(QtWidgets.QApplication.translate("MainWindow", label, None, QtWidgets.QApplication.UnicodeUTF8))
+    a.setText(QtWidgets.QApplication.translate("MainWindow", label))
     return a
 
   def setup(self,c0,exper):
@@ -245,7 +245,7 @@ Methods:
     r"""Loads parameter of *self* from a file."""
     import pickle
     ka.setdefault('filter','Quickui config (*.qcfg)')
-    filen = str(QtWidgets.QFileDialog.getOpenFileName(**ka))
+    filen = QtWidgets.QFileDialog.getOpenFileName(**ka)[0]
     if filen:
       with open(filen,'rb') as u: self.parset(pickle.load(u))
       return True
@@ -254,7 +254,7 @@ Methods:
     r"""Saves parameter of *self* into a file."""
     import pickle
     ka.setdefault('filter','Quickui config (*.qcfg)')
-    filen = str(QtWidgets.QFileDialog.getSaveFileName(**ka))
+    filen = QtWidgets.QFileDialog.getSaveFileName(**ka)[0]
     if filen:
       if not os.path.splitext(filen)[1]: filen += '.qcfg'
       with open(filen,'wb') as v: pickle.dump(self.parget(),v)
@@ -909,7 +909,7 @@ The widget consists of a viewer widget of class :class:`QtWidgets.QLabel`. This 
         self.valueChanged.emit(v)
     self.setValue = setval
     def edit():
-      v = str((QtWidgets.QFileDialog.getOpenFileName if op=='open' else QtWidgets.QFileDialog.getSaveFileName)(viewer,**ka))
+      v = str((QtWidgets.QFileDialog.getOpenFileName if op=='open' else QtWidgets.QFileDialog.getSaveFileName)(viewer,**ka)[0])
       if v: setval(v)
     editbutton.clicked.connect(edit)
 
@@ -1031,12 +1031,12 @@ The canvas widget of the created figure is added to *layout*, together with a ma
   if isinstance(x,QtWidgets.QWidget): layout = QtWidgets.QVBoxLayout(x)
   else: layout = x ; assert isinstance(x,QtWidgets.QLayout)
   from matplotlib.figure import Figure
-  from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg
+  from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
   fig = Figure(**ka)
   w = FigureCanvasQTAgg(fig)
   layout.addWidget(w)
   if withtoolbar:
-    from matplotlib.backends.backend_qt4 import NavigationToolbar2QT
+    from matplotlib.backends.backend_qt5 import NavigationToolbar2QT
     t = NavigationToolbar2QT(w,None)
     layout.addWidget(t)
   return fig

@@ -5,7 +5,6 @@
 
 if __name__=='__main__':
   import sys,os
-  os.environ['QT_API'] = 'pyqt'
   from myutil.demo.quickui import demo
   demo()
   sys.exit(0)
@@ -62,10 +61,10 @@ def demo():
 
 def autoplay(w):
   from threading import Timer; from itertools import count
-  def save(wid=w.main.winId(),DIR=Path(__file__).resolve().parent,cnt=count(1)):
-    QtGui.QPixmap.grabWindow(wid).save(str(DIR/'quickui{}.png'.format(next(cnt))))
+  def save(wid=w.main.winId(),W=w.main,DIR=Path(__file__).resolve().parent,cnt=count(1)):
+    QtGui.QGuiApplication.primaryScreen().grabWindow(wid,0,0,W.width(),W.height()).save(str(DIR/'quickui{}.png'.format(next(cnt))))
   actionSave = QtWidgets.QAction(w.main)
-  QtCore.QObject.connect(actionSave, QtCore.SIGNAL("triggered()"), save)
+  actionSave.triggered.connect(save)
   for t,a in (.5,actionSave),(1.,w.actionRelaunch),(1.5,actionSave),(2.,w.actionQuit):
     Timer(t,a.trigger).start()
 

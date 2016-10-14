@@ -81,7 +81,6 @@ def run():
 def runui():
 #--------------------------------------------------------------------------------------------------
     from animate import launchui
-    from myutil import set_qtbinding; set_qtbinding('pyqt4')  
     def config(*animate):
         from animate import cfg_anim
         from myutil import quickui

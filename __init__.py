@@ -83,35 +83,6 @@ Objects of this class present an attribute oriented interface to an underlying p
   def __repr__(self): return repr(self.__proxy__)
 
 #==================================================================================================
-def configurable_decorator(decorator):
-  r"""
-Turns *decorator* into a configurable decorator. Example::
-
-   @configurable_decorator
-   def trace(f,message='hello'):
-     @wraps(f)
-     def F(*a,**ka): print(message); return f(*a,**ka)
-     return F
-
-   @trace
-   def g(x): return x+1
-   g(3)
-   #>>> hello
-   #>>> 4
-
-   @trace(message='hello world')
-   def h(x): return x+1
-   h(4)
-   #>>> hello word
-   #>>> 5   
-  """
-#==================================================================================================
-  from functools import update_wrapper, partial
-  def D(*a,**ka):
-    return decorator(*a,**ka) if a else partial(D,**ka)
-  return update_wrapper(D,decorator)
-
-#==================================================================================================
 def config_xdg(rsc,deflt=None):
   r"""
 :param rsc: the name of an XDG resource
@@ -1079,7 +1050,7 @@ Returns the representation of *size* with IEC prefix. Each prefix is ``K`` times
   return fmt(size,'Y') # :-)
 
 #==================================================================================================
-def time_fmt(time,precision=3):
+def time_fmt(time,precision=2):
   r"""
 :param time: a number representing a time in seconds
 :type time: :class:`int`\|\ :class:`float`
@@ -1088,11 +1059,11 @@ def time_fmt(time,precision=3):
 
 Returns the representation of *time* in one of days,hours,minutes,seconds (depending on magnitude). Example::
 
-   print(time_fmt(100000,4),time_fmt(4238.45,2),time_fmt(5.35))
-   #>>> 1.157day 1.2hr 5sec
+   print(time_fmt(100000,4),time_fmt(4238.45),time_fmt(5.35,0))
+   #>>> 1.1574day 1.18hr 5sec
   """
 #==================================================================================================
-  fmt = '{{:.{}g}}'.format(precision).format
+  fmt = '{{:.{}f}}'.format(precision).format
   if time < 60.: return '{}sec'.format(fmt(time))
   time /= 60.
   if time < 60.: return '{}min'.format(fmt(time))

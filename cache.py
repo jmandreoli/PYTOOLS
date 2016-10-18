@@ -13,13 +13,13 @@ logger = logging.getLogger(__name__)
 
 import os, sqlite3, pickle, inspect, threading, abc
 from pathlib import Path
-from functools import partial, update_wrapper
+from functools import update_wrapper
 from itertools import islice
 from collections import namedtuple
 from collections.abc import MutableMapping
 from weakref import WeakValueDictionary
 from time import process_time, perf_counter
-from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlist, HtmlPlugin, pickleclass, configurable_decorator
+from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlist, HtmlPlugin, pickleclass
 
 SCHEMA = '''
 CREATE TABLE Block (
@@ -143,6 +143,7 @@ Note that this constructor is locally cached on the resolved path *spec*.
   def __getnewargs__(self): return self.path,
   def __getstate__(self): return
   def __hash__(self): return hash(self.path)
+  # no need to define '__eq__': default 'is' behaviour works due to '__new__' constructor
 
   def connect(self,**ka):
     conn = sqlite3.connect(self.dbpath,timeout=self.timeout,**ka)
@@ -230,9 +231,9 @@ Instances of this class implements blocks of cells sharing the same functor.
 :param cacheonly: if :const:`True`, cell creation is disallowed
 :type cacheonly: :class:`bool`
 
-A block object is callable, and calls take a single argument. Method :meth:`__call__` implements the cross-process cacheing mechanism which produces and reuses cache cells. A :class:`CacheBlock` object also acts as a local cache within its process. However, locally cached values are stored as weak references, hence removed from the local cache when their reference count becomes null.
+A :class:`CacheBlock` instance is callable, and calls take a single argument. Method :meth:`__call__` implements the cross-process cacheing mechanism which produces and reuses cache cells. It also implements a weak cache for local calls (within its process).
 
-Furthermore, a :class:`CacheBlock` object acts as a mapping where the keys are cell identifiers (:class:`int`) and values are tuples of meta-information about the cells (i.e. not the values of the cells).
+Furthermore, a :class:`CacheBlock` instance acts as a mapping where the keys are cell identifiers (:class:`int`) and values are tuples of meta-information about the cells (i.e. not the values of the cells: these are only accessible through calling).
 
 Finally, :class:`CacheBlock` instances have an HTML ipython display.
 
@@ -315,14 +316,14 @@ Returns information about this block. Available attributes:
 Implements cacheing as follows:
 
 - Method :meth:`getkey` of the functor is invoked with argument *arg* to obtain a ``ckey``.
-- If that ``ckey`` is present in the memory mapping of this block, its associated value is returned.
+- If that ``ckey`` is present in the (local) memory mapping of this block, its associated value is returned.
 - Otherwise, a transaction is begun on the index database.
 
   - If there already exists a cell with the same ``ckey``, method :meth:`lookup` of the storage is invoked to obtain a getter for that cell, then the transaction is terminated and the result is extracted, using the obtained getter. The cell's hit count is incremented.
   - If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is created, and method :meth:`insert` of the storage is invoked to obtain a setter for that cell, then the transaction is terminated. Then, method :meth:`getval` of the functor is invoked with argument *arg* and its result is stored, even if it is an exception, using the obtained setter.
 
 - If the result is an exception, it is raised.
-- Otherwise, the memory mapping of this block is updated at key ``ckey`` with the result, and the result is returned.
+- Otherwise, the memory mapping of this block is updated at key ``ckey`` with the result (if possible), and the result is returned.
     """
 #--------------------------------------------------------------------------------------------------
     ckey = self.functor.getkey(arg)
@@ -421,7 +422,7 @@ An instance of this class defines a type of (single argument) call to be cached.
   @abc.abstractmethod
   def getkey(self,arg):
     r"""
-:param arg: an arbitrary python object conforming to the type of call of this functor.
+:param arg: an arbitrary python object.
 
 Returns a byte string which represents *arg* uniquely.
     """
@@ -430,7 +431,7 @@ Returns a byte string which represents *arg* uniquely.
   @abc.abstractmethod
   def getval(self,arg):
     r"""
-:param arg: an arbitrary python object conforming to the type of call of this functor.
+:param arg: an arbitrary python object.
 
 Returns the result of calling this functor with argument *arg*.
     """
@@ -458,7 +459,7 @@ An instance of this class stores cached values on a persistent support.
 :param cell: the identifier of a cell
 :type cell: :class:`int`
 
-Returns the function to call to set a cell value. This method is called inside the transaction which inserts a new cell into a cache index, hence exactly once overall for a given cell. The returned function is then called exactly once, but outside the transaction. It is passed the computed value and must return the size in bytes of its storage. The cell may have disappeared from the cache when called, or may disappear while executing, so the assignment may have to later be rolled back.
+Returns the function to call to set a cell value. This method is called inside the transaction which inserts a new cell into a cache index, hence exactly once overall for a given cell. The returned function is then called, but outside the transaction. It is passed the computed value and must return the size in bytes of its storage. The cell may have disappeared from the cache when called, or may disappear while executing, so the assignment may have to later be rolled back.
     """
     raise NotImplementedError()
 
@@ -470,7 +471,7 @@ Returns the function to call to set a cell value. This method is called inside t
 :param wait: whether the cell value is currently being computed by a concurrent thread/process
 :type wait: :class:`bool`
 
-Returns the function to call to get a cell value. This method is called inside the transaction which looks up a cell from a cache index. There may be multiple such transactions in possibly concurrent threads/processes for a given cell. The returned function is called exactly once (per transaction), but outside the transaction.
+Returns the function to call to get a cell value. This method is called inside the transaction which looks up a cell from a cache index, which may happens multiple times in possibly concurrent threads/processes for a given cell. The returned function is then called, but outside the transaction.
     """
     raise NotImplementedError()
 
@@ -482,14 +483,14 @@ Returns the function to call to get a cell value. This method is called inside t
 :param size: size of the cell
 :type size: :class:`int`
 
-Frees the storage resources associated with a cell. Called inside the transaction which deletes a cell from a cache index.
+Frees the storage resources associated with a cell. This method is called inside the transaction which deletes a cell from a cache index.
     """
     raise NotImplementedError()
 
 #==================================================================================================
 class Functor (AbstractFunctor):
   r"""
-An instance of this class defines a functor attached to a python top-level versioned function. A functor is entirely defined by the name of the function, that of its module, its version and its signature. Hence, two functions (possibly in different processes at different times) sharing these components produce the same functor.
+An instance of this class defines a functor attached to a python top-level versioned function. The functor is entirely defined by the name of the function, that of its module, its version and its signature. These components are saved on pickling and restored on unpickling, even if the function has disappeared or changed. This is not checked on unpickling, and method :meth:`getval` is disabled.
 
 Attributes:
 
@@ -648,9 +649,7 @@ Returns the content file path (as a :class:`pathlib.Path` instance) associated t
       while x: yield '0123456789ABCDEFGHIJKLMNOPQRSTUV'[x&31]; x >>= 5
     n = ''.join(dec(cell)).ljust(5,'0')
     p = self.path/('X'+n[:1:-1])
-    if not p.exists():
-      p.mkdir(exist_ok=True)
-      p.chmod(self.mode)
+    if not p.exists(): p.mkdir(exist_ok=True); p.chmod(self.mode)
     return (p/n[1::-1]).with_suffix('.pck')
 
 #--------------------------------------------------------------------------------------------------
@@ -701,7 +700,7 @@ Attributes:
   def __init__(self,path):
     super().__init__(path)
     self.dbpath = path/'index.db'
-    if not self.dbpath.is_file():
+    if not self.dbpath.exists():
       if any(path.iterdir()): raise Exception('Cannot create new index in non empty directory')
       self.dbpath.touch(exist_ok=True)
       self.dbpath.chmod(self.mode&0o666)
@@ -711,7 +710,6 @@ Attributes:
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-@configurable_decorator
 def persistent_cache(f,factory=CacheBlock,**ka):
   r"""
 A decorator which makes a function persistently cached. The cached function behaves as the original function except that its invocations are cached and reused when possible. The original function must be defined at the top-level of its module, to be compatible with :class:`Functor`. If it does not have a version already, it is assigned version :const:`None`.
@@ -747,7 +745,12 @@ Instances of this class are defined from versioned functions (ie. functions defi
     return '{}.{}{}'.format(module,name,('' if version is None else '{{{}}}'.format(version)))
   def obsolete(self):
     r"""
-Returns :const:`None` if this instance is up-to-date. It may be obsolete for two reasons: the function it refers to (by module name, function name and version) cannot be imported or is not a versioned function (in which case the empty tuple is returned) or it has a different version (in which case the pair of the current version of the imported function and the version of this instance is returned). Note that this method may import modules which in turn may create cache entries (for new versions of functions). It should therefore not be called in a cache transaction.
+Returns :const:`None` if this instance is up-to-date. It may be obsolete for two reasons:
+
+* the function it refers to (by module name and function name) cannot be imported or is not a versioned function: in that case the empty tuple is returned;
+* it can be imported as a versioned function, but has a different version from that of this instance: in that case, the pair of the current version of the imported function and the version of this instance is returned.
+
+Note that this method may import modules which in turn may create cache entries (for new versions of functions). It should therefore not be called in a cache transaction.
     """
     from importlib import import_module
     module,name,version = self.config

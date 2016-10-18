@@ -12,32 +12,31 @@ if __name__=='__main__':
 
 #--------------------------------------------------------------------------------------------------
 
+import os,time,functools
 from pathlib import Path; DIR = Path(__file__).resolve().parent/'cache.dir'
 from collections import ChainMap
-from time import sleep
-from os import getpid
 from .. import MapExpr, versioned
-from ..cache import persistent_cache
+from ..cache import persistent_cache; persistent_cache = functools.partial(persistent_cache,db=DIR)
 automatic = False
 
-@persistent_cache(db=DIR)
+@persistent_cache
 def simplefunc(x,y=3): return x,y
 
-@persistent_cache(db=DIR)
+@persistent_cache
 def longfunc(x,delay=10):
-  sleep(delay)
+  time.sleep(delay)
   if x is None: raise Exception('longfunc error')
   return x
 
-V = getpid()
-@persistent_cache(db=DIR)
+V = os.getpid()
+@persistent_cache
 @versioned(V)
 def vfunc(x): return x+V
 
-@persistent_cache(db=DIR)
+@persistent_cache
 def stepA(d,**ini): return dict((k,v+d) for k,v in ini.items())
 
-@persistent_cache(db=DIR)
+@persistent_cache
 def stepB(E,fr=None,to=None,r=0):
   p,q = fr
   return ChainMap({to:E[p]+E[q]+r},E)

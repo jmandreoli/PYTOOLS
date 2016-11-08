@@ -311,7 +311,7 @@ Returns information about this block. Available attributes:
 #--------------------------------------------------------------------------------------------------
   def __call__(self,arg):
     """
-:param arg: arument of the call
+:param arg: argument of the call
 
 Implements cacheing as follows:
 

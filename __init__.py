@@ -4,7 +4,7 @@ logger = logging.getLogger(__name__)
 #==================================================================================================
 class ondemand:
   r"""
-Use as a decorator to declare, in a class, a computable attribute which is computed only once (its value is then cached). Example::
+A decorator to declare, in a class, a computable attribute which is computed only once (its value is then cached). Example::
 
    class c:
      def __init__(self,u): self.u = u
@@ -209,7 +209,7 @@ Reinitialises the argument values.
 
 If *widget* is :const:`None`, it is replaced by an empty dict, and if it is a string, it is replaced with a dict with a single key ``type`` assigned that string. The ``type`` key, if present, must be the name of a widget constructor in module :mod:`ipywidgets` and must be compatible with *cat* and *value*. If not present, a default value is guessed from *cat* and *value*. The ``layout`` key, if present, must be a dict passed to :class:`ipywidgets.Layout`, itself passed to the widget constructor. The other key-value pairs of *widget* are passed to the widget constructor as keyword arguments.
 
-If *cparse* is :const:`None`, the argument is ignored by the command line parser. If it is a string, it is replaced by a dict with a single key ``spec`` assigned that string. The ``spec`` key holds the name of the argument as it appears in the command line. The other key-value pairs of *cparse* are passed to the :meth:`add_argument` method of the constructed parser.
+If *cparse* is :const:`None`, the argument is ignored by the command line parser. If it is a string, it is replaced by a dict with a single key ``spec`` assigned that string. The ``spec`` key holds the name of the argument as it appears in the command line. The other key-value pairs of *cparse* are passed to the :meth:`ArgumentParser.add_argument` method of the constructed parser.
     """
     from collections import OrderedDict
     from functools import partial
@@ -604,7 +604,7 @@ produces (up to some attributes)::
 
    <TABLE>
      <!-- THEAD: base HTML representation (with pointers) of the initial object -->
-     <THEAD><TR><TD colspan="2"> <DIV><B>abc</>[|<SPAN>?1</>|<SPAN>?5</>|<SPAN>?7</></DIV> </TD></TR></THEAD>
+     <THEAD><TR><TD colspan="2"> <DIV><B>abc</>[|<SPAN>?1</>|<SPAN>?5</>|<SPAN>?7</>|]</DIV> </TD></TR></THEAD>
      <!-- TBODY: mapping each pointer to the base HTML representation of its reference -->
      <TBODY>
        <TR> <TH>?1</TH> <TD> <DIV><B>ab</>[|<SPAN>?2</>|<SPAN>?4</>|]</DIV> </TD> </TR>
@@ -1034,7 +1034,7 @@ def size_fmt(size,binary=True,precision=4,suffix='B'):
 :param precision: number of digits displayed (at least 4)
 :type precision: :class:`int`
 
-Returns the representation of *size* with IEC prefix. Each prefix is ``K`` times the previous one for some constant ``K`` which depends on the convention: ``K``\ =1024 with the binary convention (marked with an ``i`` before the prefix); ``K``\ =1000 with the decimal convention. Example::
+Returns the representation of *size* with IEC prefix. Each prefix is *K* times the previous one for some constant *K* which depends on the convention: *K*\ =1024 with the binary convention (marked with an ``i`` after the prefix); *K*\ =1000 with the decimal convention. Example::
 
    print(size_fmt(2**30), size_fmt(5300), size_fmt(5300,binary=False), size_fmt(42897.3,binary=False,suffix='m')
    #>>> 1GiB 5.176KiB 5.3KB 42.9Km
@@ -1075,7 +1075,7 @@ Returns the representation of *time* in one of days,hours,minutes,seconds (depen
 #==================================================================================================
 def versioned(v):
   r"""
-A decorator which assigns a version attribute to a function. The function must be defined at the toplevel of its module. The version must be a simple value.
+A decorator which assigns attribute ``version`` of the target function to *v*. The function must be defined at the toplevel of its module. The version must be a simple value.
   """
 #==================================================================================================
   def transf(f):

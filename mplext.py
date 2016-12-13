@@ -313,7 +313,7 @@ Objects of this class control a menu added to a figure. The menu is located on t
 #==================================================================================================
 
 #------------------------------------------------------------------------------
-def pager(L,shape,vmake,vpaint,offset=0,save=None,savedefaults=dict(dirname='pager-sav',format='svg'),bstyle={},**_ka):
+def pager(L,shape,vmake,vpaint,offset=0,save=None,savedefaults=dict(dest='pager-sav',format='svg'),bstyle={},**_ka):
   r"""
 :param L: a list of arbitrary objects other than :const:`None`
 :param shape: a pair (number of rows, number of columns) or a single number if they are equat
@@ -377,7 +377,7 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
   else:
     s = savedefaults.copy()
     s.update(save)
-    pth = Path(s.pop('dirname'))
+    pth = Path(s.pop('dest'))
     try:
       assert pth.is_dir()
       for f in list(pth.iterdir()): rmtree(str(f))

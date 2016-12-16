@@ -167,8 +167,6 @@ If *fig* is :const:`None`, a matplotlib figure in a new window is created, using
     from matplotlib.gridspec import GridSpec
     return Cell(fig,GridSpec(1,1,**sps)[0,0])
 
-  new = create # legacy
-
 #==============================================================================
 class Timer (object):
   r"""
@@ -260,20 +258,20 @@ Invoked when the pause status of the timer changes (or it ends). This implementa
     pass
 
 #==============================================================================
-class Menu:
+class Toolbar:
   r"""
 :param fig: a matplotlib figure
-:param size: the size of the menu in figure coordinates (hence between 0. and 1.)
+:param size: the size of the toolbar in figure coordinates (hence between 0. and 1.)
 :type size: :class:`float`
 :param ka: passed to the button factory :class:`matplotlib.text.Text`
 
-Objects of this class control a menu added to a figure. The menu is located on the top of the figure, initially invisible. Two buttons at the top corners remain always visible and allow toggling the visibility of the menu. Simulates a very restricted subset of the API of the QT toolbar (which should be preferred when the backend is QT).
+Objects of this class control a toolbar added to a figure. The toolbar is located on the top of the figure, initially invisible. Two buttons at the top corners remain always visible and allow toggling the visibility of the toolbar. Simulates a very restricted subset of the API of the QT toolbar (which should be preferred when the backend is QT).
   """
 #==============================================================================
 
   bstyle = dict(backgroundcolor='k',color='w',fontsize='small')
 
-  def __init__(self,fig,size=.02,nullcallback=lambda:None,**ka):
+  def __init__(self,fig,size=.02,**ka):
     from matplotlib.patches import Rectangle
     from collections import OrderedDict
     toggles = [Rectangle((x,1.),size*e,-size,transform=fig.transFigure,picker=True,figure=fig,zorder=2,fc='gray') for x,e in ((0.,1.),(1.,-1.))]
@@ -284,7 +282,8 @@ Objects of this class control a menu added to a figure. The menu is located on t
         ax.set_visible(not ax.get_visible())
         ax.figure.canvas.draw()
         return
-      self.actions.get(ev.artist,nullcallback)()
+      a = self.actions.get(ev.artist)
+      if a is not None: a()
     fig.canvas.mpl_connect('pick_event',onpick)
     self.actions = OrderedDict()
     for k,v in self.bstyle.items(): ka.setdefault(k,v)
@@ -313,7 +312,7 @@ Objects of this class control a menu added to a figure. The menu is located on t
 #==================================================================================================
 
 #------------------------------------------------------------------------------
-def pager(L,shape,vmake,vpaint,offset=0,save=None,savedefaults=dict(dest='pager-sav',format='svg'),bstyle={},**_ka):
+def pager(L,shape,vmake,vpaint,offset=0,toolbar=None,save=None,savedefaults=dict(dest='pager-sav',format='svg'),bstyle={},**_ka):
   r"""
 :param L: a list of arbitrary objects other than :const:`None`
 :param shape: a pair (number of rows, number of columns) or a single number if they are equat
@@ -368,9 +367,10 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
       ('toggle-ctrl',toggle_ctrl),
       ('save-all',save_all),
       ]
-    try: menu = cell.figure.canvas.toolbar; menu.addAction
-    except: menu = Menu(cell.figure,**bstyle)
-    for a,f in actions: menu.addAction(a,f)
+    if toolbar is None:
+      try: toolbar = cell.figure.canvas.toolbar; toolbar.addAction
+      except: toolbar = Toolbar(cell.figure,**bstyle)
+    for a,f in actions: toolbar.addAction(a,f)
     ctrl = Slider(cell.figure.add_axes((0.1,0.,.8,.03),visible=False,zorder=1),'page',.5,npage+.5,valinit=0,valfmt='%.0f/{}'.format(npage),closedmin=False,closedmax=False)
     ctrl.on_changed(lambda p:paintp(cell,int(rint(p))-1))
     ctrl.set_val(1+offset/cellpp)

@@ -1,3 +1,13 @@
+# File:                 __init__.py
+# Creation date:        2014-03-16
+# Contributors:         Jean-Marc Andreoli
+# Language:             python
+# Purpose:              Some utilities in Python
+#
+# *** Copyright (c) 2014 Xerox Corporation  ***
+# *** Xerox Research Centre Europe - Grenoble ***
+#
+
 import os, collections, logging
 logger = logging.getLogger(__name__)
 
@@ -153,8 +163,7 @@ Instances of this class represent configurations which can be consistently setup
     self.pconf = OrderedDict()
     self.initial = {}
     self.widget_style = ChainMap({},dict(width='15cm'))
-    self.helper_style = ChainMap({},dict(width='.5cm',padding='0cm'))
-    self.label_style = ChainMap({},dict(width='2cm',padding='0cm'))
+    self.label_style = ChainMap({},dict(width='2cm',padding='0cm',align_self='center'))
     for a,ka in conf: self.add_argument(*a,**ka)
     self.reset(**initv)
 
@@ -310,13 +319,12 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
       w = getattr(ipywidgets,ka.pop('type'))
       style = ka.pop('layout',None)
       w = w(value=e.value,layout=(widget_layout if style is None else ipywidgets.Layout(**ChainMap(style,self.widget_style))),**ka)
-      hb = ipywidgets.Button(icon='fa-undo',tooltip=e.helper[0],layout=helper_layout)
+      hb = ipywidgets.Button(icon='fa-undo',tooltip='Reset to default',width='0.5cm',padding='0cm')
       hb.on_click(lambda but,w=w,x=e.value: updw(w,x))
-      lb = ipywidgets.Label(value=e.name,layout=label_layout)
+      lb = ipywidgets.HTML('<span tooltip="{}">{}</span>'.format(e.helper,e.name),layout=label_layout)
       w.observe((lambda evt,e=e,w=w: upde(e,w)),'value')
       return (e.name,w),ipywidgets.HBox(children=(hb,lb,w))
     widget_layout = ipywidgets.Layout(**self.widget_style)
-    helper_layout = ipywidgets.Layout(**self.helper_style)
     label_layout = ipywidgets.Layout(**self.label_style)
     W,L = zip(*(row(e) for e in self.pconf.values()))
     header,buttons,footer = self.widget_context()

@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 import os, sqlite3, pickle, inspect, threading, abc
 from pathlib import Path
 from functools import update_wrapper
-from itertools import islice
-from collections import namedtuple
+from itertools import islice, chain
+from collections import namedtuple, OrderedDict
 from collections.abc import MutableMapping
 from weakref import WeakValueDictionary
 from time import process_time, perf_counter
@@ -760,3 +760,46 @@ Note that this method may import modules which in turn may create cache entries 
         return None if f.version==version else (f.version,version)
     except: pass
     return ()
+
+#--------------------------------------------------------------------------------------------------
+class dbmanage:
+  r"""
+A simple utility to manage a cache repository.
+  """
+#--------------------------------------------------------------------------------------------------
+  def __init__(self,*paths):
+    import ipywidgets
+    from IPython.display import clear_output, display
+    from traceback import format_exc
+    def showdb(): clear_output(); display(self.db)
+    def setdb(c): self.db = c.new; wconsole.visible = False; wdryrun.value = True; showdb()
+    def toconsole(do):
+      def cdo():
+        try: norefresh,x = do()
+        except: norefresh = False; wconsole.value = format_exc(); wconsole.visible = True
+        else: wconsole.value = str(x); wconsole.visible = x is not None
+        return norefresh
+      return cdo
+    def mkbutton(**ka):
+      b = ipywidgets.Button(**ka); Lbuttons.append(b)
+      return lambda f: b.on_click(lambda b: (None if self.db is None or f() else showdb()))
+    def nochange(x): return wdryrun.value or not x, x
+    self.db = None
+    wdb = ipywidgets.Dropdown(description='path',options=OrderedDict(chain((('!',None),),((p,CacheDB(p)) for p in paths))))
+    wconsole = ipywidgets.Textarea(width='20cm',value='console',disabled=True)
+    wdryrun = ipywidgets.Checkbox(description='dry-run')
+    wdb.observe(setdb,'value')
+    Lbuttons = []
+    @mkbutton(description='Refresh',width='1.4cm',padding='0cm')
+    @toconsole
+    def do(): return False, None
+    @mkbutton(description='ClearError',width='1.8cm',padding='0cm')
+    @toconsole
+    def do(): return nochange([(c.block,L) for c in list(self.db.values()) for L in (c.clear_error(dry_run=wdryrun.value),) if L])
+    @mkbutton(description='ClearObsolete',width='2.4cm',padding='0cm')
+    @toconsole
+    def do(): return nochange(self.db.clear_obsolete(False,dry_run=wdryrun.value))
+    @mkbutton(description='ClearObsoleteStrict',width='3.2cm',padding='0cm')
+    @toconsole
+    def do(): return nochange(self.db.clear_obsolete(True,dry_run=wdryrun.value))
+    self.widget = ipywidgets.VBox(children=(ipywidgets.HBox(children=(wdb,)+tuple(Lbuttons)+(wdryrun,)),wconsole))

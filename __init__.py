@@ -550,6 +550,62 @@ A simple utility to browse sliceable objects page per page in IPython.
   else: interact((lambda page=start:display(D[(page-1)*pgsize:page*pgsize])),page=(1,P))
 
 #==================================================================================================
+def ipyfilebrowse(file,start=None,step=50,period=1.,context=(10,5),**ka):
+  """
+:param file: a python file object in 'rb' mode
+:param start: index of start pointed
+:param step: step size in bytes
+:param period: period in sec between refreshing attempts
+:param context: pair of number of lines before and after to display around current position
+
+A simple utility to browse a byte file object, possibly while it expands. If *period* is :const:`None`, no change tracking is performed. If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
+  """
+#==================================================================================================
+  import ipywidgets
+  from pathlib import Path
+  from threading import Thread
+  from time import sleep
+  def track():
+    nonlocal fsize
+    c = fsize
+    while period:
+      fsize = path.stat().st_size
+      if fsize != c:
+        n = wctrl.value
+        wctrl.max = fsize
+        if n==c: wctrl.value = fsize
+        else: setpos(n)
+        c = fsize
+      sleep(period)
+  def setpos(n,d=200*context[0]):
+    m = n-d
+    if m<0: m,d = 0,n
+    file.seek(m)
+    x = file.read(d)
+    y = x.rsplit(b'\n',context[0])
+    if len(y)>context[0]: x = b'\n'.join(y[1:])
+    file.seek(n)
+    x += b''.join(file.readline() for i in range(context[1]))
+    wwin.value = x.decode()
+  def change(evt): setpos(evt.new)
+  path = Path(file.name)
+  fsize = path.stat().st_size or 1
+  if start is None: start = fsize
+  elif isinstance(start,float):
+    assert 0<=start and start<=1
+    start = int(start*fsize)
+  else:
+    assert isinstance(start,int)
+    if start<0: start += fsize
+    if start<0: start = 0
+  wwin = ipywidgets.Textarea(**ka)
+  wctrl = ipywidgets.IntSlider(min=0,max=fsize,step=step,value=start,width=wwin.width)
+  wctrl.observe(change,'value')
+  setpos(start)
+  if period: Thread(target=track,daemon=True).start()
+  return ipywidgets.VBox(children=(wctrl,wwin))
+
+#==================================================================================================
 class ipytoolbar:
   r"""
 A simple utility to build a toolbar of buttons in IPython.

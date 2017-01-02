@@ -550,13 +550,18 @@ A simple utility to browse sliceable objects page per page in IPython.
   else: interact((lambda page=start:display(D[(page-1)*pgsize:page*pgsize])),page=(1,P))
 
 #==================================================================================================
-def ipyfilebrowse(file,start=None,step=50,period=1.,context=(10,5),**ka):
-  """
-:param file: a python file object in 'rb' mode
+def ipyfilebrowse(path,start=None,step=50,period=1.,context=(10,5),**ka):
+  r"""
+:param path: a path to an existing file
+:type path: :class:`str`\|\ :class:`pathlib.Path`
 :param start: index of start pointed
+:type start: :class:`NoneType`\|\ :class:`int`\|\ :class:`float`
 :param step: step size in bytes
+:type step: :class:`int`
 :param period: period in sec between refreshing attempts
+:type period: :class:`float`
 :param context: pair of number of lines before and after to display around current position
+:type context: (\ :class:`int`,:class:`int`)
 
 A simple utility to browse a byte file object, possibly while it expands. If *period* is :const:`None`, no change tracking is performed. If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
   """
@@ -577,18 +582,20 @@ A simple utility to browse a byte file object, possibly while it expands. If *pe
         else: setpos(n)
         c = fsize
       sleep(period)
-  def setpos(n,d=200*context[0]):
+  def setpos(n,nbefore=context[0],d=200*context[0],nafter=context[1]):
     m = n-d
     if m<0: m,d = 0,n
     file.seek(m)
     x = file.read(d)
-    y = x.rsplit(b'\n',context[0])
-    if len(y)>context[0]: x = b'\n'.join(y[1:])
+    y = x.rsplit(b'\n',nbefore)
+    if len(y)>nbefore: x = b'\n'.join(y[1:])
     file.seek(n)
-    x += b''.join(file.readline() for i in range(context[1]))
+    x += b''.join(file.readline() for i in range(nafter))
     wwin.value = x.decode()
   def change(evt): setpos(evt.new)
-  path = Path(file.name)
+  if isinstance(path,str): path = Path(path)
+  else: assert isinstance(path,Path)
+  file = path.open('rb')
   fsize = path.stat().st_size or 1
   if start is None: start = fsize
   elif isinstance(start,float):
@@ -603,7 +610,14 @@ A simple utility to browse a byte file object, possibly while it expands. If *pe
   wctrl.observe(change,'value')
   setpos(start)
   if period: Thread(target=track,daemon=True).start()
-  return ipywidgets.VBox(children=(wctrl,wwin))
+  w = ipywidgets.VBox(children=(wctrl,wwin))
+  def close(wclose=w.close):
+    nonlocal period
+    period = 0.
+    file.close()
+    wclose()
+  w.close = close
+  return w
 
 #==================================================================================================
 class ipytoolbar:

@@ -131,7 +131,7 @@ def autoconfig(module,name,dflt=None,asfile=False):
 :param dflt: a default value for the configuration parameter
 :param asfile: whether to treat the value of the environment variable as a path to a file
 
-Returns an object obtained from an environment variable with a name derived from *module* and *name*. For example, if *module* is ``mypackage.mymodule`` and *name* is ``myparam`` then the environment variable is ``MYPACKAGE_MYMODULE_MYPARAM``. The value of that variable (or the content of the file pointed by it if *asfile* is set) is executed in an empty dictionary and the value attached to key *name* is returned. If the variable is not assigned, *dflt* is returned.
+Returns an object obtained from an environment variable whose name is derived from *module* and *name*. For example, if *module* is ``mypackage.mymodule`` and *name* is ``myparam`` then the environment variable is ``MYPACKAGE_MYMODULE_MYPARAM``. The value of that variable (or the content of the file pointed by it if *asfile* is set) is executed in an empty dictionary and the value attached to key *name* is returned. If the variable is not assigned, *dflt* is returned.
   """
 #==================================================================================================
   x = config_env('{}_{}'.format(module.replace('.','_'),name).upper(),asfile=asfile)
@@ -561,7 +561,7 @@ def ipyfilebrowse(path,start=None,step=50,period=1.,context=(10,5),**ka):
 :param period: period in sec between refreshing attempts
 :type period: :class:`float`
 :param context: pair of number of lines before and after to display around current position
-:type context: (\ :class:`int`,:class:`int`)
+:type context: (\ :class:`int`,\ :class:`int`)
 
 A simple utility to browse a byte file object, possibly while it expands. If *period* is :const:`None`, no change tracking is performed. If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
   """
@@ -622,7 +622,7 @@ A simple utility to browse a byte file object, possibly while it expands. If *pe
 #==================================================================================================
 class ipytoolbar:
   r"""
-A simple utility to build a toolbar of buttons in IPython.
+A simple utility to build a toolbar of buttons in IPython. Keyword arguments in the toolbar constructor are used as default values for all the buttons created. To create a new button, use method :meth:`addAction` with two positional arguments: *label* (the label of the button) and *callback* (a callable with no argument to invoke when the button is clicked). If keyword arguments are present, they are passed to the button constructor. The button widget is returned. Method :meth:`display` displays the toolbar. The toolbar widget is available as attribute :attr:`widget`.
   """
 #==================================================================================================
   bstyle=dict(padding='0cm')

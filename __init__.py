@@ -652,13 +652,23 @@ Display an IPython widget for basic database exploration. If a metadata structur
 #==================================================================================================
   from functools import lru_cache
   from pandas import read_sql_query
-  from sqlalchemy import select, MetaData, create_engine
+  from sqlalchemy import select, func, MetaData, create_engine
   from sqlalchemy.engine import Engine
-  from ipywidgets import Select, IntSlider, VBox, HBox, HTML
+  from ipywidgets import Select, IntSlider, IntText, Button, Layout, VBox, HBox, HTML
   from IPython.display import display, clear_output
   @lru_cache()
   def somecol(table):
     return sorted(tables[table].columns,key=(lambda c: c.primary_key),reverse=True)[0].name
+  @lru_cache()
+  def detail(table):
+    def fmt(c):
+      try: ctype = str(c.type)
+      except: ctype = ''
+      return c.name,ctype,('x' if c.primary_key else ''),('x' if c.nullable else '')
+    content = ''.join('<tr>{}</tr>'.format(''.join('<td style="padding: 1mm; border: thin solid blue">{}</td>'.format(x) for x in fmt(c))) for c in tables[table].columns)
+    return '<table style="padding: 1mm"><thead style="border: thin solid black"><tr><th>name</th><th>type</th><th title="primary key">P</th><th title="nullable">N</th></tr></thead><tbody>{}</tbody></table>'.format(content)
+  def size(table):
+    return engine.execute(select([func.count(meta.tables[table])])).fetchone()[0]
   def sample(table,offset,nsample):
     sql = select(tables[table].columns,limit=nsample,offset=offset,order_by=somecol(table))
     r = read_sql_query(sql,engine)
@@ -679,10 +689,17 @@ Display an IPython widget for basic database exploration. If a metadata structur
   tables = meta.tables
   engine = meta.bind
   wtitle = HTML('<div style="background-color:gray;color:white;font-weight:bold;padding:.2cm">{}</div>'.format(engine))
-  wtable = Select(options=sorted(tables))
-  woffset = IntSlider(description='offset',value=0,min=0,max=1000,step=1)
-  wnsample = IntSlider(description='nsample',value=5,min=1,max=5,step=1)
-  def wtable_c(c): nonlocal table; table = wtable.value; setvalue({woffset:0,wnsample:5}); refresh()
+  wtable = Select(options=sorted(tables),layout=Layout(width='10cm'))
+  sz = size(wtable.value)
+  wsize = IntText(value=sz,tooltip='Number of rows',disabled=True,layout=Layout(width='1.5cm'))
+  wdetail = HTML(detail(wtable.value))
+  wdetaill = Layout(display='none')
+  wdetailb = Button(description='detail',tooltip='toggle detail display',layout=Layout(width='1cm'))
+  def wdetail_c(b,inv={'inline':'none','none':'inline'}): wdetaill.display = inv[wdetaill.display]
+  wdetailb.on_click(wdetail_c)
+  woffset = IntSlider(description='offset',value=0,min=0,max=sz,step=1,layout=Layout(width='10cm'))
+  wnsample = IntSlider(description='nsample',value=5,min=1,max=10,step=1,layout=Layout(width='8cm'))
+  def wtable_c(c): nonlocal table; table = wtable.value; woffset.max = wsize.value = size(table); wdetail.value = detail(table); setvalue({woffset:0,wnsample:5}); refresh()
   wtable.observe(wtable_c,'value')
   def woffset_c(c): nonlocal offset; offset = woffset.value; refresh()
   woffset.observe(woffset_c,'value')
@@ -692,7 +709,7 @@ Display an IPython widget for basic database exploration. If a metadata structur
   def refresh():
     if active: clear_output(wait=True); display(sample(table,offset,nsample))
   refresh()
-  return VBox(children=(wtitle,wtable,HBox(children=(woffset,wnsample,))))
+  return VBox(children=(wtitle,HBox(children=(wtable,wsize,wdetailb)),HBox(children=(wdetail,),layout=wdetaill),HBox(children=(woffset,wnsample,))))
 
 #==================================================================================================
 def html_incontext(x,refstyle='color: blue; background-color: #e0e0e0;'):

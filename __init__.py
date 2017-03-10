@@ -657,28 +657,32 @@ Display an IPython widget for basic database exploration. If a metadata structur
   from ipywidgets import Select, IntSlider, IntText, Button, Layout, VBox, HBox, HTML
   from IPython.display import display, clear_output
   @lru_cache()
-  def somecol(table):
-    return sorted(tables[table].columns,key=(lambda c: c.primary_key),reverse=True)[0].name
+  def somecols(table):
+    return list(tables[table].primary_key) or list(tables[table].columns)[:1]
+  hstyle='padding: 1mm; align: center; border:thin solid black;'
+  cstyle='padding: 1mm; overflow:hidden; border: thin solid blue'
+  vstyle='white-space: nowrap; position: relative; background-color: white; color: black; z-index:0'
+  jsrestyle="this.parentNode.style.overflow='{}'; this.style.color='{}'; this.style.zIndex={}"
+  jsrestyle='onmouseover="{}" onmouseout="{}"'.format(jsrestyle.format('visible','purple',1),jsrestyle.format('hidden','black',0))
   @lru_cache()
   def detail(table):
-    def fmt(c):
-      try: ctype = str(c.type)
-      except: ctype = ''
-      return c.name,ctype,('x' if c.primary_key else ''),('x' if c.nullable else '')
-    content = ''.join('<tr>{}</tr>'.format(''.join('<td style="padding: 1mm; border: thin solid blue">{}</td>'.format(x) for x in fmt(c))) for c in tables[table].columns)
-    return '<table style="padding: 1mm"><thead style="border: thin solid black"><tr><th>name</th><th>type</th><th title="primary key">P</th><th title="nullable">N</th></tr></thead><tbody>{}</tbody></table>'.format(content)
+    def fstr(x): return x
+    def fbool(x): return 'x' if x else ''
+    def fany(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
+    def get(c,x):
+      try: return x[1](getattr(c,x[0]))
+      except: return '*'
+    schema = ('name',fstr,'name',4),('type',fany,'type',4),('primary_key',fbool,'P',.5),('nullable',fbool,'N',.5),('unique',fbool,'U',.5),('default',fany,'default',4),('constraints',fany,'constraints',4),('foreign_keys',fany,'foreign',4)
+    thead = '<tr>{}<td style="min-width:5mm"/></tr>'.format(''.join('<th style="max-width: {}cm; {}" title="{}">{}</th>'.format(x[3],hstyle,x[0],x[2]) for x in schema))
+    tbody = ''.join('<tr>{}</tr>'.format(''.join('<td style="max-width: {}cm; {}"><span style="{}" {}>{}</span></td>'.format(x[3],cstyle,vstyle,jsrestyle,get(c,x)) for x in schema)) for c in tables[table].columns)
+    return '<div style="max-height:10cm; overflow-y:auto; overflow-x:hidden"><table><thead>{}</thead><tbody>{}</tbody></table></div>'.format(thead,tbody)
   def size(table):
-    return engine.execute(select([func.count(meta.tables[table])])).fetchone()[0]
+    return engine.execute(select([func.count(somecols(table)[0])])).fetchone()[0]
   def sample(table,offset,nsample):
-    sql = select(tables[table].columns,limit=nsample,offset=offset,order_by=somecol(table))
+    sql = select(tables[table].columns,limit=nsample,offset=offset,order_by=somecols(table))
     r = read_sql_query(sql,engine)
     r.index = list(range(offset,offset+min(nsample,len(r))))
     return r.T
-  def setvalue(D):
-    nonlocal active
-    active = False
-    for w,v in D.items(): w.value = v
-    active = True
   if isinstance(spec,str): meta = MetaData(bind=create_engine(spec))
   elif isinstance(spec,Engine): meta = MetaData(bind=spec)
   elif isinstance(spec,MetaData):
@@ -688,28 +692,42 @@ Display an IPython widget for basic database exploration. If a metadata structur
   meta.reflect()
   tables = meta.tables
   engine = meta.bind
+  active = True
+  # widget creation
   wtitle = HTML('<div style="background-color:gray;color:white;font-weight:bold;padding:.2cm">{}</div>'.format(engine))
   wtable = Select(options=sorted(tables),layout=Layout(width='10cm'))
-  sz = size(wtable.value)
-  wsize = IntText(value=sz,tooltip='Number of rows',disabled=True,layout=Layout(width='1.5cm'))
-  wdetail = HTML(detail(wtable.value))
+  wsize = IntText(value=0,tooltip='Number of rows',disabled=True,layout=Layout(width='2cm'))
+  wdetail = HTML('')
   wdetaill = Layout(display='none')
-  wdetailb = Button(description='detail',tooltip='toggle detail display',layout=Layout(width='1cm'))
-  def wdetail_c(b,inv={'inline':'none','none':'inline'}): wdetaill.display = inv[wdetaill.display]
-  wdetailb.on_click(wdetail_c)
-  woffset = IntSlider(description='offset',value=0,min=0,max=sz,step=1,layout=Layout(width='10cm'))
-  wnsample = IntSlider(description='nsample',value=5,min=1,max=10,step=1,layout=Layout(width='8cm'))
-  def wtable_c(c): nonlocal table; table = wtable.value; woffset.max = wsize.value = size(table); wdetail.value = detail(table); setvalue({woffset:0,wnsample:5}); refresh()
-  wtable.observe(wtable_c,'value')
-  def woffset_c(c): nonlocal offset; offset = woffset.value; refresh()
-  woffset.observe(woffset_c,'value')
-  def wnsample_c(c): nonlocal nsample; nsample = wnsample.value; refresh()
-  wnsample.observe(wnsample_c,'value')
-  active,table,offset,nsample = True,wtable.value,woffset.value,wnsample.value
+  wdetailb = Button(tooltip='toggle detail display',icon='fa-info-circle',layout=Layout(width='.4cm'))
+  wreloadb = Button(tooltip='reload table',icon='fa-refresh',layout=Layout(width='.4cm'))
+  woffset = IntSlider(description='offset',value=0,min=0,max=0,step=1,layout=Layout(width='10cm'))
+  wnsample = IntSlider(description='nsample',value=1,min=1,max=10,step=1,layout=Layout(width='8cm'))
+  # widget updaters
+  def start():
+    nonlocal active
+    active = False
+    woffset.value = 0
+    wnsample.value = 5
+    active = True
+    wsize.value = size(wtable.value)
+    wdetail.value = detail(wtable.value)
+    refresh()
   def refresh():
-    if active: clear_output(wait=True); display(sample(table,offset,nsample))
-  refresh()
-  return VBox(children=(wtitle,HBox(children=(wtable,wsize,wdetailb)),HBox(children=(wdetail,),layout=wdetaill),HBox(children=(woffset,wnsample,))))
+    if active:
+      clear_output(wait=True); display(sample(wtable.value,woffset.value,wnsample.value))
+  def setoffsetmax(): woffset.max = max(wsize.value-1,0)
+  def toggledetail(inv={'inline':'none','none':'inline'}): wdetaill.display = inv[wdetaill.display]
+  # callback attachments
+  wsize.observe((lambda c: setoffsetmax()),'value')
+  wdetailb.on_click((lambda b: toggledetail()))
+  wtable.observe((lambda c: start()),'value')
+  wreloadb.on_click((lambda b: start()))
+  woffset.observe((lambda c: refresh()),'value')
+  wnsample.observe((lambda c: refresh()),'value')
+  # initialisation
+  start()
+  return VBox(children=(wtitle,HBox(children=(wtable,wsize,wdetailb,wreloadb)),HBox(children=(wdetail,),layout=wdetaill),HBox(children=(woffset,wnsample,))))
 
 #==================================================================================================
 def html_incontext(x,refstyle='color: blue; background-color: #e0e0e0;'):

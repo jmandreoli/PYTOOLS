@@ -656,15 +656,16 @@ Display an IPython widget for basic database exploration. If a metadata structur
   from sqlalchemy.engine import Engine
   from ipywidgets import Select, IntSlider, IntText, Button, Layout, VBox, HBox, HTML
   from IPython.display import display, clear_output
-  @lru_cache()
+  # Content retrieval
+  @lru_cache(None)
   def somecols(table):
     return list(tables[table].primary_key) or list(tables[table].columns)[:1]
   hstyle='padding: 1mm; align: center; border:thin solid black;'
   cstyle='padding: 1mm; overflow:hidden; border: thin solid blue'
   vstyle='white-space: nowrap; position: relative; background-color: white; color: black; z-index:0'
-  jsrestyle="this.parentNode.style.overflow='{}'; this.style.color='{}'; this.style.zIndex={}"
+  jsrestyle='this.parentNode.style.overflow=\'{}\'; this.style.color=\'{}\'; this.style.zIndex={}'
   jsrestyle='onmouseover="{}" onmouseout="{}"'.format(jsrestyle.format('visible','purple',1),jsrestyle.format('hidden','black',0))
-  @lru_cache()
+  @lru_cache(None)
   def detail(table):
     def fstr(x): return x
     def fbool(x): return 'x' if x else ''
@@ -696,15 +697,15 @@ Display an IPython widget for basic database exploration. If a metadata structur
   # widget creation
   wtitle = HTML('<div style="background-color:gray;color:white;font-weight:bold;padding:.2cm">{}</div>'.format(engine))
   wtable = Select(options=sorted(tables),layout=Layout(width='10cm'))
-  wsize = IntText(value=0,tooltip='Number of rows',disabled=True,layout=Layout(width='2cm'))
-  wdetail = HTML('')
+  wsize = IntText(tooltip='Number of rows',disabled=True,layout=Layout(width='2cm'))
+  wdetail = HTML()
   wdetaill = Layout(display='none')
   wdetailb = Button(tooltip='toggle detail display',icon='fa-info-circle',layout=Layout(width='.4cm'))
   wreloadb = Button(tooltip='reload table',icon='fa-refresh',layout=Layout(width='.4cm'))
-  woffset = IntSlider(description='offset',value=0,min=0,max=0,step=1,layout=Layout(width='10cm'))
-  wnsample = IntSlider(description='nsample',value=1,min=1,max=10,step=1,layout=Layout(width='8cm'))
+  woffset = IntSlider(description='offset',min=0,step=1,layout=Layout(width='12cm'))
+  wnsample = IntSlider(description='nsample',min=1,max=50,step=1,layout=Layout(width='10cm'))
   # widget updaters
-  def start():
+  def show():
     nonlocal active
     active = False
     woffset.value = 0
@@ -712,21 +713,20 @@ Display an IPython widget for basic database exploration. If a metadata structur
     active = True
     wsize.value = size(wtable.value)
     wdetail.value = detail(wtable.value)
-    refresh()
-  def refresh():
-    if active:
-      clear_output(wait=True); display(sample(wtable.value,woffset.value,wnsample.value))
+    showc()
+  def showc():
+    if active: clear_output(wait=True); display(sample(wtable.value,woffset.value,wnsample.value))
   def setoffsetmax(): woffset.max = max(wsize.value-1,0)
   def toggledetail(inv={'inline':'none','none':'inline'}): wdetaill.display = inv[wdetaill.display]
   # callback attachments
   wsize.observe((lambda c: setoffsetmax()),'value')
   wdetailb.on_click((lambda b: toggledetail()))
-  wtable.observe((lambda c: start()),'value')
-  wreloadb.on_click((lambda b: start()))
-  woffset.observe((lambda c: refresh()),'value')
-  wnsample.observe((lambda c: refresh()),'value')
+  wtable.observe((lambda c: show()),'value')
+  wreloadb.on_click((lambda b: show()))
+  woffset.observe((lambda c: showc()),'value')
+  wnsample.observe((lambda c: showc()),'value')
   # initialisation
-  start()
+  show()
   return VBox(children=(wtitle,HBox(children=(wtable,wsize,wdetailb,wreloadb)),HBox(children=(wdetail,),layout=wdetaill),HBox(children=(woffset,wnsample,))))
 
 #==================================================================================================

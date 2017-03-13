@@ -657,9 +657,6 @@ Display an IPython widget for basic database exploration. If a metadata structur
   from ipywidgets import Select, IntSlider, IntText, Button, Layout, VBox, HBox, HTML
   from IPython.display import display, clear_output
   # Content retrieval
-  @lru_cache(None)
-  def somecols(table):
-    return list(tables[table].primary_key) or list(tables[table].columns)[:1]
   hstyle='padding: 1mm; align: center; border:thin solid black;'
   cstyle='padding: 1mm; overflow:hidden; border: thin solid blue'
   vstyle='white-space: nowrap; position: relative; background-color: white; color: black; z-index:0'
@@ -678,9 +675,9 @@ Display an IPython widget for basic database exploration. If a metadata structur
     tbody = ''.join('<tr>{}</tr>'.format(''.join('<td style="max-width: {}cm; {}"><span style="{}" {}>{}</span></td>'.format(x[3],cstyle,vstyle,jsrestyle,get(c,x)) for x in schema)) for c in tables[table].columns)
     return '<div style="max-height:10cm; overflow-y:auto; overflow-x:hidden"><table><thead>{}</thead><tbody>{}</tbody></table></div>'.format(thead,tbody)
   def size(table):
-    return engine.execute(select([func.count(somecols(table)[0])])).fetchone()[0]
+    return engine.execute(select([func.count()]).select_from(tables[table])).fetchone()[0]
   def sample(table,offset,nsample):
-    sql = select(tables[table].columns,limit=nsample,offset=offset,order_by=somecols(table))
+    sql = select(tables[table].columns,limit=nsample,offset=offset,order_by=list(tables[table].primary_key))
     r = read_sql_query(sql,engine)
     r.index = list(range(offset,offset+min(nsample,len(r))))
     return r.T
@@ -697,7 +694,7 @@ Display an IPython widget for basic database exploration. If a metadata structur
   # widget creation
   wtitle = HTML('<div style="background-color:gray;color:white;font-weight:bold;padding:.2cm">{}</div>'.format(engine))
   wtable = Select(options=sorted(tables),layout=Layout(width='10cm'))
-  wsize = IntText(tooltip='Number of rows',disabled=True,layout=Layout(width='2cm'))
+  wsize = IntText(value=-1,tooltip='Number of rows',disabled=True,layout=Layout(width='2cm'))
   wdetail = HTML()
   wdetaill = Layout(display='none')
   wdetailb = Button(tooltip='toggle detail display',icon='fa-info-circle',layout=Layout(width='.4cm'))

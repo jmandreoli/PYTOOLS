@@ -342,11 +342,11 @@ Returns a triple of a list of prolog widgets, a list of buttons and a list of ep
 #--------------------------------------------------------------------------------------------------
   def make_widget_reset_button(self,data,**ka):
 #--------------------------------------------------------------------------------------------------
-    from ipywidgets import Button
+    import ipywidgets
     def click(b):
       for k,w in self.widget.pconf.items():
         if k in data: w.value = data[k]
-    b = Button(**ka)
+    b = ipywidgets.Button(**ka)
     b.on_click(click)
     return b
 
@@ -541,13 +541,16 @@ def ipybrowse(D,start=1,pgsize=10):
 A simple utility to browse sliceable objects page per page in IPython.
   """
 #==================================================================================================
-  from IPython.display import display
-  from ipywidgets.widgets.interaction import interact
+  import ipywidgets
+  from IPython.display import display, clear_output
   P = (len(D)-1)//pgsize + 1
-  if start<1: start = 1
-  if start>P: start = P
   if P==1: display(D)
-  else: interact((lambda page=start:display(D[(page-1)*pgsize:page*pgsize])),page=(1,P))
+  else:
+    def show(): clear_output(wait=True); display(D[(w.value-1)*pgsize:w.value*pgsize])
+    w = ipywidgets.IntSlider(description='page',value=(1 if start<1 else P if start>P else start),min=1,max=P)
+    w.observe((lambda c: show()),'value')
+    show()
+    return w
 
 #==================================================================================================
 def ipyfilebrowse(path,start=None,step=50,period=1.,context=(10,5),**ka):
@@ -592,7 +595,6 @@ A simple utility to browse a byte file object, possibly while it expands. If *pe
     file.seek(n)
     x += b''.join(file.readline() for i in range(nafter))
     wwin.value = x.decode()
-  def change(evt): setpos(evt.new)
   if isinstance(path,str): path = Path(path)
   else: assert isinstance(path,Path)
   file = path.open('rb')
@@ -603,11 +605,12 @@ A simple utility to browse a byte file object, possibly while it expands. If *pe
     start = int(start*fsize)
   else:
     assert isinstance(start,int)
-    if start<0: start += fsize
-    if start<0: start = 0
-  wwin = ipywidgets.Textarea(**ka)
-  wctrl = ipywidgets.IntSlider(min=0,max=fsize,step=step,value=start,width=wwin.width)
-  wctrl.observe(change,'value')
+    if start<0:
+      start += fsize
+      if start<0: start = 0
+  wwin = ipywidgets.Textarea(rows=context[0]+context[1],layout=ipywidgets.Layout(**ka))
+  wctrl = ipywidgets.IntSlider(min=0,max=fsize,step=step,value=start,layout=ipywidgets.Layout(width=wwin.layout.width))
+  wctrl.observe((lambda c: setpos(c.new)),'value')
   setpos(start)
   if period: Thread(target=track,daemon=True).start()
   w = ipywidgets.VBox(children=(wctrl,wwin))
@@ -650,11 +653,11 @@ def exploredb(spec):
 Display an IPython widget for basic database exploration. If a metadata structure is specified, it must be bound to an existing engine, and it will be reflected.
   """
 #==================================================================================================
+  import ipywidgets
   from functools import lru_cache
   from pandas import read_sql_query
   from sqlalchemy import select, func, MetaData, create_engine
   from sqlalchemy.engine import Engine
-  from ipywidgets import Select, IntSlider, IntText, Button, Layout, VBox, HBox, HTML
   from IPython.display import display, clear_output
   # Content retrieval
   hstyle='padding: 1mm; align: center; border:thin solid black;'
@@ -692,15 +695,15 @@ Display an IPython widget for basic database exploration. If a metadata structur
   engine = meta.bind
   active = True
   # widget creation
-  wtitle = HTML('<div style="background-color:gray;color:white;font-weight:bold;padding:.2cm">{}</div>'.format(engine))
-  wtable = Select(options=sorted(tables),layout=Layout(width='10cm'))
-  wsize = IntText(value=-1,tooltip='Number of rows',disabled=True,layout=Layout(width='2cm'))
-  wdetail = HTML()
-  wdetaill = Layout(display='none')
-  wdetailb = Button(tooltip='toggle detail display',icon='fa-info-circle',layout=Layout(width='.4cm'))
-  wreloadb = Button(tooltip='reload table',icon='fa-refresh',layout=Layout(width='.4cm'))
-  woffset = IntSlider(description='offset',min=0,step=1,layout=Layout(width='12cm'))
-  wnsample = IntSlider(description='nsample',min=1,max=50,step=1,layout=Layout(width='10cm'))
+  wtitle = ipywidgets.HTML('<div style="background-color:gray;color:white;font-weight:bold;padding:.2cm">{}</div>'.format(engine))
+  wtable = ipywidgets.Select(options=sorted(tables),layout=ipywidgets.Layout(width='10cm'))
+  wsize = ipywidgets.IntText(value=-1,tooltip='Number of rows',disabled=True,layout=ipywidgets.Layout(width='2cm'))
+  wdetail = ipywidgets.HTML()
+  wdetaill = ipywidgets.Layout(display='none')
+  wdetailb = ipywidgets.Button(tooltip='toggle detail display',icon='fa-info-circle',layout=ipywidgets.Layout(width='.4cm'))
+  wreloadb = ipywidgets.Button(tooltip='reload table',icon='fa-refresh',layout=ipywidgets.Layout(width='.4cm'))
+  woffset = ipywidgets.IntSlider(description='offset',min=0,step=1,layout=ipywidgets.Layout(width='12cm'))
+  wnsample = ipywidgets.IntSlider(description='nsample',min=1,max=50,step=1,layout=ipywidgets.Layout(width='10cm'))
   # widget updaters
   def show():
     nonlocal active
@@ -724,7 +727,7 @@ Display an IPython widget for basic database exploration. If a metadata structur
   wnsample.observe((lambda c: showc()),'value')
   # initialisation
   show()
-  return VBox(children=(wtitle,HBox(children=(wtable,wsize,wdetailb,wreloadb)),HBox(children=(wdetail,),layout=wdetaill),HBox(children=(woffset,wnsample,))))
+  return ipywidgets.VBox(children=(wtitle,ipywidgets.HBox(children=(wtable,wsize,wdetailb,wreloadb)),ipywidgets.HBox(children=(wdetail,),layout=wdetaill),ipywidgets.HBox(children=(woffset,wnsample,))))
 
 #==================================================================================================
 def html_incontext(x,refstyle='color: blue; background-color: #e0e0e0;'):

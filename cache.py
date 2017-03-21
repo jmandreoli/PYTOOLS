@@ -773,33 +773,27 @@ A simple utility to manage a cache repository.
     from traceback import format_exc
     def showdb(): clear_output(); display(self.db)
     def setdb(c): self.db = c.new; wconsole.visible = False; wdryrun.value = True; showdb()
-    def toconsole(do):
-      def cdo():
-        try: norefresh,x = do()
-        except: norefresh = False; wconsole.value = format_exc(); wconsole.visible = True
-        else: wconsole.value = str(x); wconsole.visible = x is not None
-        return norefresh
-      return cdo
     def mkbutton(**ka):
+      def callback(f):
+        if self.db is None: return
+        try: x = f()
+        except: wconsole.value = format_exc(); wconsole.visible = True; return
+        else: wconsole.value = str(x); wconsole.visible = x is not None
+        if wdryrun.value or not x: showdb()
       b = ipywidgets.Button(**ka); Lbuttons.append(b)
-      return lambda f: b.on_click(lambda b: (None if self.db is None or f() else showdb()))
-    def nochange(x): return wdryrun.value or not x, x
+      return lambda f: b.on_click(lambda b: callback(f))
     self.db = None
     wdb = ipywidgets.Dropdown(description='path',options=OrderedDict(chain((('!',None),),((p,CacheDB(p)) for p in paths))))
     wconsole = ipywidgets.Textarea(width='20cm',value='console',disabled=True)
     wdryrun = ipywidgets.Checkbox(description='dry-run')
     wdb.observe(setdb,'value')
     Lbuttons = []
-    @mkbutton(description='Refresh',width='1.4cm',padding='0cm')
-    @toconsole
-    def do(): return False, None
-    @mkbutton(description='ClearError',width='1.8cm',padding='0cm')
-    @toconsole
-    def do(): return nochange([(c.block,L) for c in list(self.db.values()) for L in (c.clear_error(dry_run=wdryrun.value),) if L])
-    @mkbutton(description='ClearObsolete',width='2.4cm',padding='0cm')
-    @toconsole
-    def do(): return nochange(self.db.clear_obsolete(False,dry_run=wdryrun.value))
-    @mkbutton(description='ClearObsoleteStrict',width='3.2cm',padding='0cm')
-    @toconsole
-    def do(): return nochange(self.db.clear_obsolete(True,dry_run=wdryrun.value))
+    @mkbutton(description='Refresh',layout=ipywidgets.Layout(width='1.4cm',padding='0cm'))
+    def do(): return
+    @mkbutton(description='ClearError',layout=ipywidgets.Layout(width='1.8cm',padding='0cm'))
+    def do(): return [(c.block,L) for c in list(self.db.values()) for L in (c.clear_error(dry_run=wdryrun.value),) if L]
+    @mkbutton(description='ClearObsolete',layout=ipywidgets.Layout(width='2.4cm',padding='0cm'))
+    def do(): return self.db.clear_obsolete(False,dry_run=wdryrun.value)
+    @mkbutton(description='ClearObsoleteStrict',layout=ipywidgets.Layout(width='3.2cm',padding='0cm'))
+    def do(): return self.db.clear_obsolete(True,dry_run=wdryrun.value)
     self.widget = ipywidgets.VBox(children=(ipywidgets.HBox(children=(wdb,)+tuple(Lbuttons)+(wdryrun,)),wconsole))

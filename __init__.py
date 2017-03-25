@@ -1160,6 +1160,30 @@ Creates a :class:`pyspark.context.SparkContext` instance with keyword arguments 
     del D
 
 #==================================================================================================
+class basic_stats:
+  r"""
+Instances of this class maintain basic statistics about a group of values.
+
+:param weight: total weight of the group
+:param avg: weighted average of the group
+:param var: weighted variance of the group
+  """
+#==================================================================================================
+  def __init__(self,weight=0.,avg=0.,var=0.): self.weight = weight; self.avg = avg; self.var = var
+  def __add__(self,other):
+    if isinstance(other,basic_stats): w,a,v = other.weight,other.avg,other.var
+    else: w,a,v = 1.,other,0.
+    W = self.weight+w; r_self = self.weight/W; r_other = w/W; d = a-self.avg
+    return basic_stat(weight=W,avg=r_self*self.avg+r_other*a,var=r_self*self.var+r_other*v+(r_self*d)*(r_other*d))
+  def __iadd__(self,other):
+    if isinstance(other,basic_stats): w,a,v = other.weight,other.avg,other.var
+    else: w,a,v = 1.,other,0.
+    self.weight += w; r = w/self.weight; d = a-self.avg
+    self.avg += r*d; self.var += r*(v-self.var+(1-r)*d*d)
+    return self
+  def __repr__(self): return 'basic_stats<weight:{},avg:{},var:{}>'.format(repr(self.weight),repr(self.avg),repr(self.var))
+
+#==================================================================================================
 def iso2date(iso):
   r"""
 :param iso: triple as returned by :meth:`datetime.date.isocalendar`

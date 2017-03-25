@@ -45,12 +45,18 @@ Instances of this class are persistent and represent a collection of host machin
     if isinstance(hosts,str):
       pat = re.compile(hosts)
       hosts = (h for h in knownhosts() if pat.fullmatch(h) is not None)
+    else:
+      hosts = list(hosts)
+      assert all(isinstance(hostname,str) for hostname in hosts)
     context = Context(tstamp=datetime.now())
     for hostname in hosts:
       logger.info('Examining host: %s',hostname)
-      cmd = [] if hostname is None else ['ssh','-q','-n','-x','-T',hostname]
+      cmd = [] if hostname=='' else ['ssh','-q','-n','-x','-T','-o','BatchMode=yes',hostname]
       cmd += 'cat','/proc/cpuinfo'
       p = subprocess.run(cmd,stdout=subprocess.PIPE,universal_newlines=True)
+      if p.returncode:
+        logger.warn('Unable to reach host: %s',hostname)
+        continue
       procn = None
       L = []
       n = 0
@@ -60,7 +66,7 @@ Instances of this class are persistent and represent a collection of host machin
         key,val = map(str.strip,y.split(':',1))
         if key == 'processor': n+=1; procn = int(val); continue
         L.append(Procinfo(procn=procn,key=key,val=val))
-      context.hosts.append(Host(name=(getfqdn() if hostname is None else getfqdn(hostname)),nproc=n,procinfos=L))
+      context.hosts.append(Host(name=getfqdn(hostname)),nproc=n,procinfos=L)
     return context
 
 #--------------------------------------------------------------------------------------------------
@@ -87,8 +93,8 @@ class Host(Base):
 
   def getkey(self,key,procn=None):
     if procn is None: filtr = lambda n: True
-    elif isinstance(procn,set): filtr = lambda n,s=procn: n in s
-    elif isinstance(n,int): lambda n,t=procn: n==t
+    elif isinstance(procn,set): filtr = lambda n,t=procn: n in t
+    elif isinstance(procn,int): lambda n,t=procn: n==t
     else: raise Exception('Invalid process number specification')
     for p in self.procinfos:
       if filtr(p.procn) and p.key==key: yield p.val

@@ -635,9 +635,11 @@ A simple utility to build a toolbar of buttons in IPython. Keyword arguments in 
     for k,v in self.bstyle.items(): ka.setdefault(k,v)
     bstyle = ka.items()
     self.widget = widget = ipywidgets.HBox(children=())
-    def addAction(label,callback,**ka):
-      for k,v in bstyle: ka.setdefault(k,v)
-      b = ipywidgets.Button(description=label,**ka)
+    def addAction(callback,**ka):
+      s = ka.pop('layout',None)
+      s = {} if s is None else s.copy()
+      for k,v in bstyle: s.setdefault(k,v)
+      b = ipywidgets.Button(layout=ipywidgets.Layout(**s),**ka)
       b.on_click(lambda b: callback())
       widget.children += (b,)
       return b
@@ -698,8 +700,7 @@ Display an IPython widget for basic database exploration. If a metadata structur
   wtitle = ipywidgets.HTML('<div style="background-color:gray;color:white;font-weight:bold;padding:.2cm">{}</div>'.format(engine))
   wtable = ipywidgets.Select(options=sorted(tables),layout=ipywidgets.Layout(width='10cm'))
   wsize = ipywidgets.IntText(value=-1,tooltip='Number of rows',disabled=True,layout=ipywidgets.Layout(width='2cm'))
-  wdetail = ipywidgets.HTML()
-  wdetaill = ipywidgets.Layout(display='none')
+  wdetail = ipywidgets.HTML(layout=ipywidgets.Layout(display='none'))
   wdetailb = ipywidgets.Button(tooltip='toggle detail display',icon='fa-info-circle',layout=ipywidgets.Layout(width='.4cm'))
   wreloadb = ipywidgets.Button(tooltip='reload table',icon='fa-refresh',layout=ipywidgets.Layout(width='.4cm'))
   woffset = ipywidgets.IntSlider(description='offset',min=0,step=1,layout=ipywidgets.Layout(width='12cm'))
@@ -717,7 +718,7 @@ Display an IPython widget for basic database exploration. If a metadata structur
   def showc():
     if active: clear_output(wait=True); display(sample(wtable.value,woffset.value,wnsample.value))
   def setoffsetmax(): woffset.max = max(wsize.value-1,0)
-  def toggledetail(inv={'inline':'none','none':'inline'}): wdetaill.display = inv[wdetaill.display]
+  def toggledetail(inv={'inline':'none','none':'inline'}): wdetail.layout.display = inv[wdetail.layout.display]
   # callback attachments
   wsize.observe((lambda c: setoffsetmax()),'value')
   wdetailb.on_click((lambda b: toggledetail()))
@@ -727,7 +728,7 @@ Display an IPython widget for basic database exploration. If a metadata structur
   wnsample.observe((lambda c: showc()),'value')
   # initialisation
   show()
-  return ipywidgets.VBox(children=(wtitle,ipywidgets.HBox(children=(wtable,wsize,wdetailb,wreloadb)),ipywidgets.HBox(children=(wdetail,),layout=wdetaill),ipywidgets.HBox(children=(woffset,wnsample,))))
+  return ipywidgets.VBox(children=(wtitle,ipywidgets.HBox(children=(wtable,wsize,wdetailb,wreloadb)),wdetail,ipywidgets.HBox(children=(woffset,wnsample,))))
 
 #==================================================================================================
 def html_incontext(x,refstyle='color: blue; background-color: #e0e0e0;'):

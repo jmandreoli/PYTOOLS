@@ -19,7 +19,7 @@ from collections import namedtuple, OrderedDict
 from collections.abc import MutableMapping
 from weakref import WeakValueDictionary
 from time import process_time, perf_counter
-from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlist, HtmlPlugin, pickleclass
+from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlist, HtmlPlugin, pickleclass, ipytoolbar
 
 SCHEMA = '''
 CREATE TABLE Block (
@@ -772,28 +772,28 @@ A simple utility to manage a cache repository.
     from IPython.display import clear_output, display
     from traceback import format_exc
     def showdb(): clear_output(); display(self.db)
-    def setdb(c): self.db = c.new; wconsole.visible = False; wdryrun.value = True; showdb()
+    def setdb(c): self.db = c.new; wconsole.layout.display='none'; wdryrun.value = c.new is not None; showdb()
+    def refresh(): wconsole.layout.display = 'none'; showdb()
     def mkbutton(**ka):
       def callback(f):
         if self.db is None: return
+        wconsole.layout.display = ''
         try: x = f()
-        except: wconsole.value = format_exc(); wconsole.visible = True; return
-        else: wconsole.value = str(x); wconsole.visible = x is not None
-        if wdryrun.value or not x: showdb()
-      b = ipywidgets.Button(**ka); Lbuttons.append(b)
-      return lambda f: b.on_click(lambda b: callback(f))
+        except: wconsole.value = format_exc(); return
+        else: wconsole.value = str(x)
+        if x and not wdryrun.value: showdb()
+      return lambda f: toolbar.addAction((lambda: callback(f)),**ka)
     self.db = None
-    wdb = ipywidgets.Dropdown(description='path',options=OrderedDict(chain((('!',None),),((p,CacheDB(p)) for p in paths))))
-    wconsole = ipywidgets.Textarea(width='20cm',value='console',disabled=True)
-    wdryrun = ipywidgets.Checkbox(description='dry-run')
+    wdb = ipywidgets.Dropdown(options=OrderedDict(chain((('!',None),),((p,CacheDB(p)) for p in paths))))
+    wconsole = ipywidgets.Textarea(rows=1,value='console',disabled=True,layout=ipywidgets.Layout(width='20cm',display='none'))
+    wdryrun = ipywidgets.Checkbox(layout=ipywidgets.Layout(width='.6cm'))
     wdb.observe(setdb,'value')
-    Lbuttons = []
-    @mkbutton(description='Refresh',layout=ipywidgets.Layout(width='1.4cm',padding='0cm'))
-    def do(): return
-    @mkbutton(description='ClearError',layout=ipywidgets.Layout(width='1.8cm',padding='0cm'))
+    toolbar = ipytoolbar()
+    toolbar.addAction(refresh,tooltip='refresh',icon='fa-refresh',layout=dict(width='.4cm'))
+    @mkbutton(description='ClearError',layout=dict(width='1.8cm'))
     def do(): return [(c.block,L) for c in list(self.db.values()) for L in (c.clear_error(dry_run=wdryrun.value),) if L]
-    @mkbutton(description='ClearObsolete',layout=ipywidgets.Layout(width='2.4cm',padding='0cm'))
+    @mkbutton(description='ClearObsolete',layout=dict(width='2.4cm'))
     def do(): return self.db.clear_obsolete(False,dry_run=wdryrun.value)
-    @mkbutton(description='ClearObsoleteStrict',layout=ipywidgets.Layout(width='3.2cm',padding='0cm'))
+    @mkbutton(description='ClearObsoleteStrict',layout=dict(width='3.2cm'))
     def do(): return self.db.clear_obsolete(True,dry_run=wdryrun.value)
-    self.widget = ipywidgets.VBox(children=(ipywidgets.HBox(children=(wdb,)+tuple(Lbuttons)+(wdryrun,)),wconsole))
+    self.widget = ipywidgets.VBox(children=(ipywidgets.HBox(children=(wdb,toolbar.widget,wdryrun,ipywidgets.Label('dry-run',layout=dict(width='1.2cm')))),wconsole))

@@ -625,17 +625,17 @@ A simple utility to browse a byte file object, possibly while it expands. If *pe
 #==================================================================================================
 class ipytoolbar:
   r"""
-A simple utility to build a toolbar of buttons in IPython. Keyword arguments in the toolbar constructor are used as default values for all the buttons created. To create a new button, use method :meth:`addAction` with two positional arguments: *label* (the label of the button) and *callback* (a callable with no argument to invoke when the button is clicked). If keyword arguments are present, they are passed to the button constructor. The button widget is returned. Method :meth:`display` displays the toolbar. The toolbar widget is available as attribute :attr:`widget`.
+A simple utility to build a toolbar of buttons in IPython. Keyword arguments in the toolbar constructor are used as default values for all the buttons created. To create a new button, use method :meth:`add` with one positional argument: *callback* (a callable with no argument to invoke when the action is activated). If keyword arguments are present, they are passed to the button constructor. The button widget is returned. Method :meth:`display` displays the toolbar. The toolbar widget is available as attribute :attr:`widget`.
   """
 #==================================================================================================
   bstyle=dict(padding='0cm')
   def __init__(self,**ka):
     import ipywidgets
-    from IPython.display import display as ipydisplay
+    from IPython.display import display
     for k,v in self.bstyle.items(): ka.setdefault(k,v)
     bstyle = ka.items()
     self.widget = widget = ipywidgets.HBox(children=())
-    def addAction(callback,**ka):
+    def add(callback,**ka):
       s = ka.pop('layout',None)
       s = {} if s is None else s.copy()
       for k,v in bstyle: s.setdefault(k,v)
@@ -643,8 +643,8 @@ A simple utility to build a toolbar of buttons in IPython. Keyword arguments in 
       b.on_click(lambda b: callback())
       widget.children += (b,)
       return b
-    self.addAction = addAction
-    self.display = lambda: ipydisplay(widget)
+    self.add = add
+    self.display = lambda: display(widget)
 
 #==================================================================================================
 def exploredb(spec):

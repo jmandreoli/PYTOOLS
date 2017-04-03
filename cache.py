@@ -782,14 +782,14 @@ A simple utility to manage a cache repository.
         except: wconsole.value = format_exc(); return
         else: wconsole.value = str(x)
         if x and not wdryrun.value: showdb()
-      return lambda f: toolbar.addAction((lambda: callback(f)),**ka)
+      return lambda f: toolbar.add((lambda: callback(f)),**ka)
     self.db = None
     wdb = ipywidgets.Dropdown(options=OrderedDict(chain((('!',None),),((p,CacheDB(p)) for p in paths))))
     wconsole = ipywidgets.Textarea(rows=1,value='console',disabled=True,layout=ipywidgets.Layout(width='20cm',display='none'))
     wdryrun = ipywidgets.Checkbox(layout=ipywidgets.Layout(width='.6cm'))
     wdb.observe(setdb,'value')
     toolbar = ipytoolbar()
-    toolbar.addAction(refresh,tooltip='refresh',icon='fa-refresh',layout=dict(width='.4cm'))
+    toolbar.add(refresh,tooltip='refresh',icon='fa-refresh',layout=dict(width='.4cm'))
     @mkbutton(description='ClearError',layout=dict(width='1.8cm'))
     def do(): return [(c.block,L) for c in list(self.db.values()) for L in (c.clear_error(dry_run=wdryrun.value),) if L]
     @mkbutton(description='ClearObsolete',layout=dict(width='2.4cm'))

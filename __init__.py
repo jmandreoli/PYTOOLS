@@ -159,11 +159,12 @@ Instances of this class represent configurations which can be consistently setup
 #--------------------------------------------------------------------------------------------------
   def __init__(self,*conf,**initv):
 #--------------------------------------------------------------------------------------------------
-    from collections import OrderedDict, ChainMap
+    from collections import OrderedDict
     self.pconf = OrderedDict()
     self.initial = {}
-    self.widget_style = ChainMap({},dict(width='15cm'))
-    self.label_style = ChainMap({},dict(width='2cm',padding='0cm',align_self='center'))
+    self.widget_style = dict(width='15cm')
+    self.label_style = dict(width='2cm',padding='0cm',align_self='flex-start')
+    self.button_style = dict()
     for a,ka in conf: self.add_argument(*a,**ka)
     self.reset(**initv)
 
@@ -319,13 +320,14 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
       w = getattr(ipywidgets,ka.pop('type'))
       style = ka.pop('layout',None)
       w = w(value=e.value,layout=(widget_layout if style is None else ipywidgets.Layout(**ChainMap(style,self.widget_style))),**ka)
-      hb = ipywidgets.Button(icon='fa-undo',tooltip='Reset to default',layout=ipywidgets.Layout(width='0.3cm',padding='0cm'))
+      hb = ipywidgets.Button(icon='fa-undo',tooltip='Reset to default',layout=rbutton_layout)
       hb.on_click(lambda but,w=w,x=e.value: updw(w,x))
       lb = ipywidgets.HTML('<span title="{}">{}</span>'.format(e.helper[0],e.name),layout=label_layout)
       w.observe((lambda evt,e=e,w=w: upde(e,w)),'value')
       return (e.name,w),ipywidgets.HBox(children=(hb,lb,w))
     widget_layout = ipywidgets.Layout(**self.widget_style)
     label_layout = ipywidgets.Layout(**self.label_style)
+    rbutton_layout = ipywidgets.Layout(width='0.5cm',padding='0cm')
     W,L = zip(*(row(e) for e in self.pconf.values()))
     header,buttons,footer = self.widget_context()
     if buttons: buttons = [ipywidgets.HBox(children=buttons)]
@@ -342,11 +344,13 @@ Returns a triple of a list of prolog widgets, a list of buttons and a list of ep
 #--------------------------------------------------------------------------------------------------
   def make_widget_reset_button(self,data,**ka):
 #--------------------------------------------------------------------------------------------------
+    from collections import ChainMap
     import ipywidgets
     def click(b):
       for k,w in self.widget.pconf.items():
         if k in data: w.value = data[k]
-    b = ipywidgets.Button(**ka)
+    style = ka.pop('layout',None)
+    b = ipywidgets.Button(layout=ipywidgets.Layout(**(self.button_style if style is None else ChainMap(style,self.button_style))),**ka)
     b.on_click(click)
     return b
 

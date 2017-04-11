@@ -4,9 +4,6 @@
 # Language:       python
 # Purpose:        Manages performance records
 #
-# *** Copyright (c) 2016 Xerox Corporation  ***
-# *** Xerox Research Centre Europe - Grenoble ***
-#
 
 import os, sys, subprocess, time, logging
 from datetime import datetime

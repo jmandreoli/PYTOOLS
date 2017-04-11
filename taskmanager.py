@@ -4,9 +4,6 @@
 # Language:             python
 # Purpose:              Simple task utilities
 #
-# *** Copyright (c) 2012 Xerox Corporation  ***
-# *** Xerox Research Centre Europe - Grenoble ***
-#
 
 import logging, os, re, icalendar, uuid, unicodedata, sys
 from datetime import datetime, timedelta

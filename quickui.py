@@ -4,9 +4,6 @@
 # Language:             python
 # Purpose:              Quick Qt5 UI design
 #
-# *** Copyright (c) 2012 Xerox Corporation  ***
-# *** Xerox Research Centre Europe - Grenoble ***
-#
 
 import os,sys,logging,traceback,functools,collections
 from contextlib import contextmanager

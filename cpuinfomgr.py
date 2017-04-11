@@ -4,9 +4,6 @@
 # Language:       python
 # Purpose:        Records cpu information from machines on the cloud
 #
-# *** Copyright (c) 2016 Xerox Corporation  ***
-# *** Xerox Research Centre Europe - Grenoble ***
-#
 
 import subprocess, re, logging
 from collections import defaultdict

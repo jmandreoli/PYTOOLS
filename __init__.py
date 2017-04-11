@@ -4,9 +4,6 @@
 # Language:             python
 # Purpose:              Some utilities in Python
 #
-# *** Copyright (c) 2014 Xerox Corporation  ***
-# *** Xerox Research Centre Europe - Grenoble ***
-#
 
 import os, collections, logging
 logger = logging.getLogger(__name__)
@@ -1150,6 +1147,7 @@ Creates a :class:`pyspark.context.SparkContext` instance with keyword arguments 
     """
     import atexit
     from pyspark import SparkContext, SparkConf
+    SparkContext._ensure_initialized()
     if cls.sc is not None: cls.sc.stop()
     conf = ka.get('conf')
     if conf is not None: ka['conf'] = oconf = SparkConf(); oconf.setAll(conf)

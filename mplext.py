@@ -4,9 +4,6 @@
 # Language:             python
 # Purpose:              A few matplotlib utilities
 #
-# *** Copyright (c) 2012 Xerox Corporation  ***
-# *** Xerox Research Centre Europe - Grenoble ***
-#
 
 import os,sys,logging
 from contextlib import contextmanager

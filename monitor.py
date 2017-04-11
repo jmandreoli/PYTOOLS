@@ -4,8 +4,6 @@
 # Language:		Python
 # Purpose:		Generic loop control
 #
-# *** Copyright (c) 2013 Xerox Corporation  ***
-# *** Xerox Research Centre Europe - Grenoble ***
 
 import logging
 from collections import namedtuple

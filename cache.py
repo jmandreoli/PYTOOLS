@@ -4,9 +4,6 @@
 # Language:             python
 # Purpose:              Persistent cache management
 #
-# *** Copyright (c) 2015 Xerox Corporation  ***
-# *** Xerox Research Centre Europe - Grenoble ***
-#
 
 import logging
 logger = logging.getLogger(__name__)

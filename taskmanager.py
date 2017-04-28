@@ -5,7 +5,7 @@
 # Purpose:              Simple task utilities
 #
 
-import logging, os, re, icalendar, uuid, unicodedata, sys
+import logging, os, re, icalendar, uuid, sys
 from datetime import datetime, timedelta
 from copy import deepcopy
 from pytz import timezone, utc
@@ -383,15 +383,6 @@ Replaces each node of the form <?parm xx?> in *doc* by *d* ['xx'], which must be
       x.tail = parm.tail
       parm.getparent().replace(parm,x)
   return doc
-
-def unicodetoascii(x,pat=re.compile(' WITH (?:ACUTE|GRAVE|CIRCUMFLEX|DIAERESIS|CEDILLA|TILDE|STROKE:)')):
-  r"""
-Returns an ascii version of string *x*.
-
-:param x: target string
-:type x: :const:`str`
-  """
-  return str(''.join(unicodedata.lookup(pat.sub('',unicodedata.name(c))) for c in x))
 
 def safedump(content,path,mode='w'):
   r"""

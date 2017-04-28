@@ -663,11 +663,15 @@ Display an IPython widget for basic database exploration. If a metadata structur
   from sqlalchemy.engine import Engine
   from IPython.display import display, clear_output
   # Content retrieval
-  hstyle='padding: 1mm; align: center; border:thin solid black;'
-  cstyle='padding: 1mm; overflow:hidden; border: thin solid blue'
-  vstyle='white-space: nowrap; position: relative; background-color: white; color: black; z-index:0'
-  jsrestyle='this.parentNode.style.overflow=\'{}\'; this.style.color=\'{}\'; this.style.zIndex={}'
-  jsrestyle='onmouseover="{}" onmouseout="{}"'.format(jsrestyle.format('visible','purple',1),jsrestyle.format('hidden','black',0))
+  style = '''
+table th {padding: 1mm; align: center; border:thin solid black;}
+table td {padding: 1mm; overflow:hidden; border: thin solid blue;}
+table td span {white-space: nowrap; position: relative; background-color: white;}
+table td.focus {overflow: visible;}
+table td.focus span {color:purple; z-index: 1;}
+table td.nofocus {overflow: hidden;}
+table td.nofocus span {color:black; z-index: 0;}
+  '''
   @lru_cache(None)
   def detail(table):
     def fstr(x): return x
@@ -677,9 +681,9 @@ Display an IPython widget for basic database exploration. If a metadata structur
       try: return x[1](getattr(c,x[0]))
       except: return '*'
     schema = ('name',fstr,'name',4),('type',fany,'type',4),('primary_key',fbool,'P',.5),('nullable',fbool,'N',.5),('unique',fbool,'U',.5),('default',fany,'default',4),('constraints',fany,'constraints',4),('foreign_keys',fany,'foreign',4)
-    thead = '<tr>{}<td style="min-width:5mm"/></tr>'.format(''.join('<th style="max-width: {}cm; {}" title="{}">{}</th>'.format(x[3],hstyle,x[0],x[2]) for x in schema))
-    tbody = ''.join('<tr>{}</tr>'.format(''.join('<td style="max-width: {}cm; {}"><span style="{}" {}>{}</span></td>'.format(x[3],cstyle,vstyle,jsrestyle,get(c,x)) for x in schema)) for c in tables[table].columns)
-    return '<div style="max-height:10cm; overflow-y:auto; overflow-x:hidden"><table><thead>{}</thead><tbody>{}</tbody></table></div>'.format(thead,tbody)
+    thead = '<tr>{}<td style="min-width:5mm"/></tr>'.format(''.join('<th style="max-width: {}cm" title="{}">{}</th>'.format(x[3],x[0],x[2]) for x in schema))
+    tbody = ''.join('<tr>{}</tr>'.format(''.join('<td style="max-width: {}cm" class="nofocus" onmouseover="this.className=\'focus\'" onmouseout="this.className=\'nofocus\'"><span>{}</span></td>'.format(x[3],get(c,x)) for x in schema)) for c in tables[table].columns)
+    return '<div style="max-height:10cm; overflow-y:auto; overflow-x:hidden"><style scoped="scoped">{}</style><table><thead>{}</thead><tbody>{}</tbody></table></div>'.format(style,thead,tbody)
   def size(table):
     return engine.execute(select([func.count()]).select_from(tables[table])).fetchone()[0]
   def sample(table,offset,nsample):
@@ -732,7 +736,7 @@ Display an IPython widget for basic database exploration. If a metadata structur
   return ipywidgets.VBox(children=(wtitle,ipywidgets.HBox(children=(wtable,wsize,wdetailb,wreloadb)),wdetail,ipywidgets.HBox(children=(woffset,wnsample,))))
 
 #==================================================================================================
-def html_incontext(x,refstyle='color: blue; background-color: #e0e0e0;'):
+def html_incontext(x,style='span.pointer {color: blue; background-color: #e0e0e0;}\ntable td,th {text-align:left; border: thin solid black;}'):
   r"""
 :param x: an arbitrary python object
 
@@ -775,7 +779,7 @@ produces (up to some attributes)::
   from lxml.builder import E
   from lxml.etree import ElementTextIterator
   def hformat(L):
-    return E.TABLE(E.THEAD(E.TR(E.TD(L[0][1],colspan="2",style='padding:0; border-bottom: thick solid black;'))),E.TBODY(*(E.TR(E.TH('?{}'.format(k),style=refstyle),E.TD(x)) for k,x in L[1:])))
+    return E.DIV(E.STYLE(style,scoped='scoped'),E.TABLE(E.THEAD(E.TR(E.TD(L[0][1],colspan="2",style='padding:0; border-bottom: thick solid black;'))),E.TBODY(*(E.TR(E.TH(E.SPAN('?{}'.format(k),**{'class':'pointer'})),E.TD(x)) for k,x in L[1:]))))
   def incontext(v):
     try: q = ctx.get(v)
     except: return E.SPAN(str(v)) # for unhashable objects
@@ -790,7 +794,7 @@ produces (up to some attributes)::
       else: return E.SPAN(str(v))
     else: k,ref,tit = q
     js = lambda x,ref=ref: 'document.getElementById(\'{}\').style.outline=\'{}\''.format(ref,('thick solid red' if x else 'inherit'))
-    return E.SPAN('?{}'.format(k),style=refstyle,title=tit,onmouseenter=js(True),onmouseleave=js(False))
+    return E.SPAN('?{}'.format(k),title=tit,onmouseenter=js(True),onmouseleave=js(False),**{'class':'pointer'})
   L = []
   ctx = {}
   e = incontext(x)
@@ -811,7 +815,7 @@ def html_parlist(La,Lka,incontext,deco=('','',''),padding='5px'):
   return E.DIV(*h(),style='padding:0')
 
 #==================================================================================================
-def html_table(irows,fmts,hdrs=None,opening=None,closing=None):
+def html_table(irows,fmts,hdrs=None,opening=None,closing=None,style='table th,td {text-align: left;}'):
   r"""
 :param irows: a generator of pairs of an object (key) and a tuple of objects (value)
 :param fmts: a tuple of format functions matching the length of the value tuples
@@ -830,7 +834,7 @@ Returns an HTML table object with one row for each pair generated from *irow*. T
       yield E.TR(E.TH(str(ind)),*(E.TD(fmt(v)) for fmt,v in zip(fmts,row)))
   def tfoot():
     if closing is not None: yield E.TR(E.TD(),E.TD(closing,colspan=str(len(fmts))),style='background-color: #f0f0f0; color: navy')
-  return E.TABLE(E.THEAD(*thead()),E.TBODY(*tbody()),E.TFOOT(*tfoot()))
+  return E.DIV(E.STYLE(style,scoped='scoped'),E.TABLE(E.THEAD(*thead()),E.TBODY(*tbody()),E.TFOOT(*tfoot())))
 
 #==================================================================================================
 def html_stack(*a,**ka):

@@ -1139,27 +1139,34 @@ Example of use (assuming :func:`sessionmaker` as above has been imported)::
 #==================================================================================================
 class spark:
   r"""
-By default, class method :meth:`init` of this class is identical to :meth:`default_init`. If a resource ``spark/pyspark.py`` exists in an XDG configuration file, that resource is executed (locally) and should define a function :func:`init` used as class method :meth:`init` instead. The defined function can of course invoke method :meth:`default_init`.
+If a resource ``spark/pyspark.py`` exists in an XDG configuration file, that resource is executed (locally) and should define a function :func:`init` used as class method :meth:`init` and meant to initialise Spark. The initialisation must assign a :class:`dict` (even an empty one) to attribute :attr:`conf`.
   """
 #==================================================================================================
-  sc = None
+  conf = None
 
   @classmethod
-  def default_init(cls,**ka):
+  def display_monitor_link(cls,sc):
     r"""
-Creates a :class:`pyspark.context.SparkContext` instance with keyword arguments *ka*, and stores it as class attribute :attr:`sc`. The value of key ``conf`` in *ka*, if present, is converted to an instance of :class:`SparkConf`, if not already one, by applying method :meth:`SparkConf.setAll`.
+Displays a link to the monitor of :class:`pyspark.SparkContext` *sc*. Recall that the monitor is active only between the creation of *sc* and its termination (when method :meth:`stop` is invoked).
     """
-    import atexit
+    from IPython.display import display_html
+    display_html('<a target="_blank" href="{}">SparkMonitor[{}@{}]</a>'.format(sc.uiWebUrl,sc.appName,sc.master),raw=True)
+
+  @classmethod
+  def SparkContext(cls,display=True,debug=False,**ka):
+    r"""
+Returns an instance of :class:`pyspark.SparkContext` created with the predefined configuration held in attribute :attr:`conf` of this class, possibly partially overridden if key `conf` is in *ka* (its value must then be a :class:`dict` of :class:`str`). If *debug* is :const:`True`, prints the exact configuration used. If *display* is :const:`True`, displays a link to the monitor of the created context.
+    """
     from pyspark import SparkContext, SparkConf
-    SparkContext._ensure_initialized()
-    if cls.sc is not None: cls.sc.stop()
-    conf = ka.get('conf')
-    if conf is not None: ka['conf'] = oconf = SparkConf(); oconf.setAll(conf)
-    cls.sc = sc = SparkContext(**ka)
-    atexit.register(sc.stop)
+    cfg = SparkConf().setAll(cls.conf.items())
+    for k,v in ka.pop('conf',{}).items(): cfg.set(k,v)
+    if debug: print(cfg.toDebugString())
+    sc = SparkContext(conf=cfg,**ka)
+    if display: cls.display_monitor_link(sc)
+    return sc
 
   init = config_xdg('spark/pyspark.py')
-  if init is None: init = default_init
+  if init is None: init = classmethod(lambda cls,**ka: None)
   else:
     D = {}
     exec(init,D)

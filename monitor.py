@@ -148,33 +148,30 @@ Returns a monitor managing the number of iterations and enabling basic logging.
 :type fmt: callable|\ :class:`NoneType`
   """
 #--------------------------------------------------------------------------------------------------
-  x = 1
+  from itertools import count
   if logger is None:
-    while True:
+    for x in count(1):
       if x == maxiter: env.stop = 'maxiter'
       elif env.cputime>maxcpu: env.stop = 'maxcpu'
       yield x
-      x += 1
   elif show is None:
-    while True:
-      if x == maxiter: env.stop = 'maxiter'
-      elif env.cputime>maxcpu: env.stop = 'maxcpu'
-      logger.info('%s %s',fmt(x,env),'' if env.stop is None else '!'+env.stop)
+    s = ''
+    for x in count(1):
+      if x == maxiter: env.stop = 'maxiter'; s=' !maxiter'
+      elif env.cputime>maxcpu: env.stop = 'maxcpu'; s=' !maxcpu'
+      logger.info('%s%s',fmt(x,env),s)
       yield x
-      x += 1
   else:
     waitshow = 0
-    coeff = 1/show-1
-    while True:
-      if x == maxiter: env.stop = 'maxiter'
-      elif env.cputime>maxcpu: env.stop = 'maxcpu'
-      if env.stop is not None: logger.info('%s !%s',fmt(x,env),env.stop)
-      elif waitshow==0:
-        logger.info('%s',fmt(x,env))
-        waitshow = int(x*coeff)
-      else: waitshow -= 1
+    coeff = 1./show-1.
+    s = ''
+    for x in count(1):
+      if x == maxiter: env.stop = 'maxiter'; s = ' !maxiter'
+      elif env.cputime>maxcpu: env.stop = 'maxcpu'; s = ' !maxcpu'
+      elif waitshow==0: waitshow = int(x*coeff)
+      else: waitshow -= 1; yield x; continue
+      logger.info('%s%s',fmt(x,env),s)
       yield x
-      x += 1
 
 #--------------------------------------------------------------------------------------------------
 @monitor

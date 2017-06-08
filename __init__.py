@@ -662,16 +662,16 @@ Display an IPython widget for basic database exploration. If a metadata structur
   from sqlalchemy import select, func, MetaData, create_engine
   from sqlalchemy.engine import Engine
   from IPython.display import display, clear_output
-  # Content retrieval
   style = '''
 table th {padding: 1mm; align: center; border:thin solid black;}
 table td {padding: 1mm; overflow:hidden; border: thin solid blue;}
 table td span {white-space: nowrap; position: relative; background-color: white;}
-table td.focus {overflow: visible;}
-table td.focus span {color:purple; z-index: 1;}
-table td.nofocus {overflow: hidden;}
-table td.nofocus span {color:black; z-index: 0;}
+table td.soh {overflow: hidden;}
+table td.soh span {color:black; z-index: 0;}
+table td.soh:hover {overflow: visible;}
+table td.soh:hover span {color:purple; z-index: 1;}
   '''
+  # Content retrieval
   @lru_cache(None)
   def detail(table):
     def fstr(x): return x
@@ -682,7 +682,7 @@ table td.nofocus span {color:black; z-index: 0;}
       except: return '*'
     schema = ('name',fstr,'name',4),('type',fany,'type',4),('primary_key',fbool,'P',.5),('nullable',fbool,'N',.5),('unique',fbool,'U',.5),('default',fany,'default',4),('constraints',fany,'constraints',4),('foreign_keys',fany,'foreign',4)
     thead = '<tr>{}<td style="min-width:5mm"/></tr>'.format(''.join('<th style="max-width: {}cm" title="{}">{}</th>'.format(x[3],x[0],x[2]) for x in schema))
-    tbody = ''.join('<tr>{}</tr>'.format(''.join('<td style="max-width: {}cm" class="nofocus" onmouseover="this.className=\'focus\'" onmouseout="this.className=\'nofocus\'"><span>{}</span></td>'.format(x[3],get(c,x)) for x in schema)) for c in tables[table].columns)
+    tbody = ''.join('<tr>{}</tr>'.format(''.join('<td style="max-width: {}cm" class="soh"><span>{}</span></td>'.format(x[3],get(c,x)) for x in schema)) for c in tables[table].columns)
     return '<div style="max-height:10cm; overflow-y:auto; overflow-x:hidden"><style scoped="scoped">{}</style><table><thead>{}</thead><tbody>{}</tbody></table></div>'.format(style,thead,tbody)
   def size(table):
     return engine.execute(select([func.count()]).select_from(tables[table])).fetchone()[0]

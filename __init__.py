@@ -383,7 +383,7 @@ Instances of this class have an ipython HTML representation based on :func:`html
   _html_limit = 50
   def _repr_html_(self):
     from lxml.etree import tostring
-    return tostring(html_incontext(self),encoding='unicode')
+    return tostring(html_incontext(self),encoding='unicode').replace('&gt;','>')
 
 #==================================================================================================
 class ARG (tuple):
@@ -662,28 +662,32 @@ Display an IPython widget for basic database exploration. If a metadata structur
   from sqlalchemy import select, func, MetaData, create_engine
   from sqlalchemy.engine import Engine
   from IPython.display import display, clear_output
-  style = '''
-table th {padding: 1mm; align: center; border:thin solid black;}
-table td {padding: 1mm; overflow:hidden; border: thin solid blue;}
-table td span {white-space: nowrap; position: relative; background-color: white;}
-table td.soh {overflow: hidden;}
-table td.soh span {color:black; z-index: 0;}
-table td.soh:hover {overflow: visible;}
-table td.soh:hover span {color:purple; z-index: 1;}
-  '''
   # Content retrieval
-  @lru_cache(None)
-  def detail(table):
+  def detailg():
     def fstr(x): return x
     def fbool(x): return 'x' if x else ''
     def fany(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
-    def get(c,x):
-      try: return x[1](getattr(c,x[0]))
-      except: return '*'
-    schema = ('name',fstr,'name',4),('type',fany,'type',4),('primary_key',fbool,'P',.5),('nullable',fbool,'N',.5),('unique',fbool,'U',.5),('default',fany,'default',4),('constraints',fany,'constraints',4),('foreign_keys',fany,'foreign',4)
-    thead = '<tr>{}<td style="min-width:5mm"/></tr>'.format(''.join('<th style="max-width: {}cm" title="{}">{}</th>'.format(x[3],x[0],x[2]) for x in schema))
-    tbody = ''.join('<tr>{}</tr>'.format(''.join('<td style="max-width: {}cm" class="soh"><span>{}</span></td>'.format(x[3],get(c,x)) for x in schema)) for c in tables[table].columns)
-    return '<div style="max-height:10cm; overflow-y:auto; overflow-x:hidden"><style scoped="scoped">{}</style><table><thead>{}</thead><tbody>{}</tbody></table></div>'.format(style,thead,tbody)
+    def row(c):
+      def val(x):
+        try: return x[1](getattr(c,x[0]))
+        except: return '*'
+      return '<tr>{}</tr>'.format(''.join('<td class="field-{}"><span>{}</span></td>'.format(x[0],val(x)) for x in schema))
+    schema = (
+      ('name',fstr,'name',4),
+      ('type',fany,'type',4),
+      ('primary_key',fbool,'P',.5),
+      ('nullable',fbool,'N',.5),
+      ('unique',fbool,'U',.5),
+      ('default',fany,'default',4),
+      ('constraints',fany,'constraints',4),
+      ('foreign_keys',fany,'foreign',4),
+    )
+    wstyle = '\n'.join('td.field-{} {{ min-width:{}cm; max-width:{}cm; }}'.format(x[0],x[3],x[3]) for x in schema)
+    thead = '<tr>{}</tr>'.format(''.join('<td title="{}" class="field-{}">{}</td>'.format(x[0],x[0],x[2]) for x in schema))
+    fmt = '<div><style scoped="scoped">{}{}</style><table><thead>{}</thead><tbody>'.format(exploredb.style['detail'],wstyle,thead),'</tbody></table></div>'
+    return lambda table,pre=fmt[0],suf=fmt[1]: pre+''.join(map(row,tables[table].columns))+suf
+  @lru_cache(None)
+  def detail(table,g=detailg()): return g(table)
   def size(table):
     return engine.execute(select([func.count()]).select_from(tables[table])).fetchone()[0]
   def sample(table,offset,nsample):
@@ -702,7 +706,7 @@ table td.soh:hover span {color:purple; z-index: 1;}
   engine = meta.bind
   active = True
   # widget creation
-  wtitle = ipywidgets.HTML('<div style="background-color:gray;color:white;font-weight:bold;padding:.2cm">{}</div>'.format(engine))
+  wtitle = ipywidgets.HTML('<div style="{}">{}</div>'.format(exploredb.style['title'],engine))
   wtable = ipywidgets.Select(options=sorted(tables),layout=ipywidgets.Layout(width='10cm'))
   wsize = ipywidgets.IntText(value=-1,tooltip='Number of rows',disabled=True,layout=ipywidgets.Layout(width='2cm'))
   wdetail = ipywidgets.HTML(layout=ipywidgets.Layout(display='none'))
@@ -735,8 +739,24 @@ table td.soh:hover span {color:purple; z-index: 1;}
   show()
   return ipywidgets.VBox(children=(wtitle,ipywidgets.HBox(children=(wtable,wsize,wdetailb,wreloadb)),wdetail,ipywidgets.HBox(children=(woffset,wnsample,))))
 
+exploredb.style = dict(
+  detail='''
+table { border-collapse: collapse; }
+thead { display:block; }
+tbody { display: block; max-height: 10cm; overflow-y: auto; padding-right: .4cm; }
+thead td { padding: 1mm; text-align: center; font-weight: bold; color: white; background-color: navy; border: thin solid white; }
+tbody td { padding: 1mm; overflow:hidden; border: thin solid blue; }
+tbody td span { white-space: nowrap; position: relative; background-color: white; }
+tbody td { overflow: hidden; }
+tbody td span { color:black; z-index: 0; }
+tbody td:hover { overflow: visible; }
+tbody td:hover span { color:purple; z-index: 1; }
+  ''',
+  title='background-color:gray; color:white; font-weight:bold; padding:.2cm',
+)
+
 #==================================================================================================
-def html_incontext(x,style='span.pointer {color: blue; background-color: #e0e0e0;}\ntable td,th {text-align:left; border: thin solid black;}'):
+def html_incontext(x):
   r"""
 :param x: an arbitrary python object
 
@@ -779,7 +799,7 @@ produces (up to some attributes)::
   from lxml.builder import E
   from lxml.etree import ElementTextIterator
   def hformat(L):
-    return E.DIV(E.STYLE(style,scoped='scoped'),E.TABLE(E.THEAD(E.TR(E.TD(L[0][1],colspan="2",style='padding:0; border-bottom: thick solid black;'))),E.TBODY(*(E.TR(E.TH(E.SPAN('?{}'.format(k),**{'class':'pointer'})),E.TD(x)) for k,x in L[1:]))))
+    return E.DIV(E.STYLE(html_incontext.style,scoped='scoped'),E.TABLE(E.THEAD(E.TR(E.TD(E.DIV(L[0][1],**{'class':'main'}),colspan="2"))),E.TBODY(*(E.TR(E.TD(E.SPAN('?{}'.format(k),**{'class':'pointer'})),E.TD(x)) for k,x in L[1:])),**{'class':'toplevel'}))
   def incontext(v):
     try: q = ctx.get(v)
     except: return E.SPAN(str(v)) # for unhashable objects
@@ -789,7 +809,7 @@ produces (up to some attributes)::
         ctx[v] = q = [k,ref,None]
         try: x = v.as_html(incontext)
         except: x = E.SPAN(repr(v)) # should not fail, but just in case
-        L.append((k,E.DIV(x,id=ref)))
+        L.append((k,E.DIV(x,id=ref,**{'class':'main'})))
         tit = q[2] = ' '.join(ElementTextIterator(x))
       else: return E.SPAN(str(v))
     else: k,ref,tit = q
@@ -800,6 +820,14 @@ produces (up to some attributes)::
   e = incontext(x)
   n = len(L)
   return e if n==0 else L[0][1] if n==1 else hformat(sorted(L))
+
+html_incontext.style = '''
+table.toplevel { border-collapse: collapse; }
+table.toplevel > thead > tr > td, table.toplevel > tbody > tr > td { border: thin solid black; background-color:white; text-align:left; }
+table.toplevel > thead > tr > td { padding:0; border-bottom-width: thick; }
+table.toplevel span.pointer { color: blue; background-color: #e0e0e0; font-weight:bold; }
+table.toplevel div.main { padding:0; max-height: 5cm; overflow-y: auto; }
+'''
 
 #==================================================================================================
 def html_parlist(La,Lka,incontext,deco=('','',''),padding='5px'):
@@ -815,7 +843,7 @@ def html_parlist(La,Lka,incontext,deco=('','',''),padding='5px'):
   return E.DIV(*h(),style='padding:0')
 
 #==================================================================================================
-def html_table(irows,fmts,hdrs=None,opening=None,closing=None,style='table th,td {text-align: left;}'):
+def html_table(irows,fmts,hdrs=None,opening=None,closing=None,htmlclass='default'):
   r"""
 :param irows: a generator of pairs of an object (key) and a tuple of objects (value)
 :param fmts: a tuple of format functions matching the length of the value tuples
@@ -827,14 +855,21 @@ Returns an HTML table object with one row for each pair generated from *irow*. T
 #==================================================================================================
   from lxml.builder import E
   def thead():
-    if opening is not None: yield E.TR(E.TD(opening,colspan=str(1+len(fmts))),style='background-color: gray; color: white')
+    if opening is not None: yield E.TR(E.TD(opening,colspan=str(1+len(fmts))))
     if hdrs is not None: yield E.TR(E.TD(),*(E.TH(hdr) for hdr in hdrs))
   def tbody():
     for ind,row in irows:
       yield E.TR(E.TH(str(ind)),*(E.TD(fmt(v)) for fmt,v in zip(fmts,row)))
   def tfoot():
-    if closing is not None: yield E.TR(E.TD(),E.TD(closing,colspan=str(len(fmts))),style='background-color: #f0f0f0; color: navy')
-  return E.DIV(E.STYLE(style,scoped='scoped'),E.TABLE(E.THEAD(*thead()),E.TBODY(*tbody()),E.TFOOT(*tfoot())))
+    if closing is not None: yield E.TR(E.TD(),E.TD(closing,colspan=str(len(fmts))))
+  return E.DIV(E.STYLE(html_table.style,scoped='scoped'),E.TABLE(E.THEAD(*thead()),E.TBODY(*tbody()),E.TFOOT(*tfoot()),**{'class':htmlclass}))
+
+html_table.style = '''
+  table.default { border-collapse: collapse; }
+  table.default > thead > tr > th, table.default > thead > tr > td, table.default > tbody > tr > th, table.default > tbody > tr > td, table.default > tfoot > tr > td  { background-color: white; text-align: left; vertical-align: top; border: thin solid black; }
+  table.default > thead > tr > th, table.default > thead > tr > td { background-color: gray; color: white }
+  table.default > tfoot > tr > td { background-color: #f0f0f0; color: navy; }
+'''
 
 #==================================================================================================
 def html_stack(*a,**ka):

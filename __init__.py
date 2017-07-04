@@ -742,15 +742,13 @@ Display an IPython widget for basic database exploration. If a metadata structur
 exploredb.style = dict(
   detail='''
 table { border-collapse: collapse; }
-thead { display:block; }
-tbody { display: block; max-height: 10cm; overflow-y: auto; padding-right: .4cm; }
-thead td { padding: 1mm; text-align: center; font-weight: bold; color: white; background-color: navy; border: thin solid white; }
-tbody td { padding: 1mm; overflow:hidden; border: thin solid blue; }
-tbody td span { white-space: nowrap; position: relative; background-color: white; }
-tbody td { overflow: hidden; }
-tbody td span { color:black; z-index: 0; }
-tbody td:hover { overflow: visible; }
-tbody td:hover span { color:purple; z-index: 1; }
+table > thead { display:block; }
+table > tbody { display: block; max-height: 10cm; overflow-y: auto; padding-right: 10cm; }
+table > thead > tr > td { padding: 1mm; text-align: center; font-weight: bold; color: white; background-color: navy; border: thin solid white; }
+table > tbody > tr > td { padding: 1mm; border: thin solid blue; overflow: hidden; }
+table > tbody > tr > td > span { position: relative; background-color: white; white-space: nowrap; color:black; z-index: 0; }
+table > tbody > tr > td:hover { overflow: visible; }
+table > tbody > tr > td:hover > span { color:purple; z-index: 1; }
   ''',
   title='background-color:gray; color:white; font-weight:bold; padding:.2cm',
 )

@@ -653,7 +653,7 @@ def exploredb(spec):
 :param spec: an sqlalchemy url or engine or metadata structure, defining the database to explore
 :type spec: :class:`sqlalchemy.engine.Engine`\|\ :class:`str`\|\ :class:`sqlalchemy.MetaData`
 
-Display an IPython widget for basic database exploration. If a metadata structure is specified, it must be bound to an existing engine, and it will be reflected.
+Display an IPython widget for basic database exploration. If a metadata structure is specified, it must be bound to an existing engine and reflected.
   """
 #==================================================================================================
   import ipywidgets
@@ -691,18 +691,23 @@ Display an IPython widget for basic database exploration. If a metadata structur
   def size(table):
     return engine.execute(select([func.count()]).select_from(tables[table])).fetchone()[0]
   def sample(table,offset,nsample):
-    sql = select(tables[table].columns,limit=nsample,offset=offset,order_by=list(tables[table].primary_key))
+    sql = select(tables[table].columns,limit=nsample,offset=offset,order_by=(list(tables[table].primary_key) or tables[table].columns.values()[:1]))
     r = read_sql_query(sql,engine)
     r.index = list(range(offset,offset+min(nsample,len(r))))
     return r.T
-  if isinstance(spec,str): meta = MetaData(bind=create_engine(spec))
-  elif isinstance(spec,Engine): meta = MetaData(bind=spec)
-  elif isinstance(spec,MetaData):
+  if isinstance(spec,MetaData):
     meta = spec
-    if meta.bind is None: raise ValueError('Argument of type {} must be bound to an existing engine'.format(MetaData))
-  else: raise TypeError('Expected {}|{}|{}; Found {}'.format(str,Engine,MetaData,type(spec)))
-  meta.reflect()
+    if not meta.is_bound(): raise ValueError('Argument of type {} must be bound to an existing engine'.format(MetaData))
+    no_table_msg = '{} object has no table (perhaps it was not reflected)'.format(MetaData) 
+  else:
+    if isinstance(spec,str): spec = create_engine(spec)
+    elif not isinstance(spec,Engine):
+      raise TypeError('Expected {}|{}|{}; Found {}'.format(str,Engine,MetaData,type(spec)))
+    meta = MetaData(bind=spec)
+    meta.reflect(views=True)
+    no_table_msg = 'Database is empty'
   tables = meta.tables
+  if not tables: return no_table_msg
   engine = meta.bind
   active = True
   # widget creation

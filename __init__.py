@@ -663,7 +663,7 @@ Display an IPython widget for basic database exploration. If a metadata structur
   from sqlalchemy.engine import Engine
   from IPython.display import display, clear_output
   # Content retrieval
-  def detailg():
+  def schemag():
     def fstr(x): return x
     def fbool(x): return 'x' if x else ''
     def fany(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
@@ -684,17 +684,17 @@ Display an IPython widget for basic database exploration. If a metadata structur
     )
     wstyle = '\n'.join('td.field-{} {{ min-width:{}cm; max-width:{}cm; }}'.format(x[0],x[3],x[3]) for x in schema)
     thead = '<tr>{}</tr>'.format(''.join('<td title="{}" class="field-{}">{}</td>'.format(x[0],x[0],x[2]) for x in schema))
-    fmt = '<div><style scoped="scoped">{}{}</style><table><thead>{}</thead><tbody>'.format(exploredb.style['detail'],wstyle,thead),'</tbody></table></div>'
+    fmt = '<div><style scoped="scoped">{}{}</style><table><thead>{}</thead><tbody>'.format(exploredb.style['schema'],wstyle,thead),'</tbody></table></div>'
     return lambda table,pre=fmt[0],suf=fmt[1]: pre+''.join(map(row,tables[table].columns))+suf
   @lru_cache(None)
-  def detail(table,g=detailg()): return g(table)
+  def schema(table,g=schemag()): return g(table)
   def size(table):
     return engine.execute(select([func.count()]).select_from(tables[table])).fetchone()[0]
   def sample(table,offset,nsample):
-    sql = select(tables[table].columns,limit=nsample,offset=offset,order_by=(list(tables[table].primary_key) or tables[table].columns.values()[:1]))
+    sql = select(wscol.value,limit=nsample,offset=offset,order_by=(list(tables[table].primary_key) or tables[table].columns.values()[:1]))
     r = read_sql_query(sql,engine)
     r.index = list(range(offset,offset+min(nsample,len(r))))
-    return r.T
+    return r
   if isinstance(spec,MetaData):
     meta = spec
     if not meta.is_bound(): raise ValueError('Argument of type {} must be bound to an existing engine'.format(MetaData))
@@ -710,42 +710,56 @@ Display an IPython widget for basic database exploration. If a metadata structur
   if not tables: return no_table_msg
   engine = meta.bind
   active = True
+  scol_ = dict((table,[(c.name,c) for c in t.columns]) for table,t in tables.items())
+  scol = dict((table,tuple(t.columns)) for table,t in tables.items())
   # widget creation
   wtitle = ipywidgets.HTML('<div style="{}">{}</div>'.format(exploredb.style['title'],engine))
   wtable = ipywidgets.Select(options=sorted(tables),layout=ipywidgets.Layout(width='10cm'))
   wsize = ipywidgets.IntText(value=-1,tooltip='Number of rows',disabled=True,layout=ipywidgets.Layout(width='2cm'))
-  wdetail = ipywidgets.HTML(layout=ipywidgets.Layout(display='none'))
-  wdetailb = ipywidgets.Button(tooltip='toggle detail display',icon='fa-info-circle',layout=ipywidgets.Layout(width='.4cm'))
+  wschema = ipywidgets.HTML(layout=ipywidgets.Layout(display='none'))
+  wschemab = ipywidgets.Button(tooltip='toggle schema display',icon='fa-info-circle',layout=ipywidgets.Layout(width='.4cm'))
   wreloadb = ipywidgets.Button(tooltip='reload table',icon='fa-refresh',layout=ipywidgets.Layout(width='.4cm'))
   woffset = ipywidgets.IntSlider(description='offset',min=0,step=1,layout=ipywidgets.Layout(width='12cm'))
   wnsample = ipywidgets.IntSlider(description='nsample',min=1,max=50,step=1,layout=ipywidgets.Layout(width='10cm'))
+  wscol = ipywidgets.SelectMultiple(options=[],layout=ipywidgets.Layout(display='none'))
+  wscolb = ipywidgets.Button(tooltip='select columns',icon='fa-cogs',layout=ipywidgets.Layout(width='.4cm',border='none'))
   # widget updaters
   def show():
     nonlocal active
     active = False
     woffset.value = 0
     wnsample.value = 5
+    wscol.value = ()
+    wscol.options =  scol_[wtable.value]
+    wscol.value = scol[wtable.value]
     active = True
     wsize.value = size(wtable.value)
-    wdetail.value = detail(wtable.value)
+    wschema.value = schema(wtable.value)
     showc()
   def showc():
     if active: clear_output(wait=True); display(sample(wtable.value,woffset.value,wnsample.value))
   def setoffsetmax(): woffset.max = max(wsize.value-1,0)
-  def toggledetail(inv={'inline':'none','none':'inline'}): wdetail.layout.display = inv[wdetail.layout.display]
+  def setscol():
+    if active: scol[wtable.value] = wscol.value
+    wscolb.layout.border = 'none' if len(scol[wtable.value]) == len(scol_[wtable.value]) else 'thin solid red'
+    showc()
+  def toggleschema(inv={'inline':'none','none':'inline'}): wschema.layout.display = inv[wschema.layout.display]
+  def togglescol(inv={'inline':'none','none':'inline'}): wscol.layout.display = inv[wscol.layout.display]
   # callback attachments
   wsize.observe((lambda c: setoffsetmax()),'value')
-  wdetailb.on_click((lambda b: toggledetail()))
+  wschemab.on_click((lambda b: toggleschema()))
+  wscolb.on_click((lambda b: togglescol()))
   wtable.observe((lambda c: show()),'value')
   wreloadb.on_click((lambda b: show()))
   woffset.observe((lambda c: showc()),'value')
   wnsample.observe((lambda c: showc()),'value')
+  wscol.observe((lambda c: setscol()),'value')
   # initialisation
   show()
-  return ipywidgets.VBox(children=(wtitle,ipywidgets.HBox(children=(wtable,wsize,wdetailb,wreloadb)),wdetail,ipywidgets.HBox(children=(woffset,wnsample,))))
+  return ipywidgets.VBox(children=(wtitle,ipywidgets.HBox(children=(wtable,wsize,wschemab,wreloadb)),wschema,ipywidgets.HBox(children=(wscolb,woffset,wnsample,)),wscol))
 
 exploredb.style = dict(
-  detail='''
+  schema='''
 table { border-collapse: collapse; }
 table > thead { display:block; }
 table > tbody { display: block; max-height: 10cm; overflow-y: auto; padding-right: 10cm; }

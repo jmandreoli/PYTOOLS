@@ -716,13 +716,14 @@ Display an IPython widget for basic database exploration. If a metadata structur
   wtitle = ipywidgets.HTML('<div style="{}">{}</div>'.format(exploredb.style['title'],engine))
   wtable = ipywidgets.Select(options=sorted(tables),layout=ipywidgets.Layout(width='10cm'))
   wsize = ipywidgets.IntText(value=-1,tooltip='Number of rows',disabled=True,layout=ipywidgets.Layout(width='2cm'))
-  wschema = ipywidgets.HTML(layout=ipywidgets.Layout(display='none'))
-  wschemab = ipywidgets.Button(tooltip='toggle schema display',icon='fa-info-circle',layout=ipywidgets.Layout(width='.4cm'))
+  wschema = ipywidgets.HTML()
+  wscol = ipywidgets.SelectMultiple(options=[],layout=ipywidgets.Layout(flex_flow='column'))
+  wdetail = ipywidgets.Tab(children=(wschema,wscol),layout=ipywidgets.Layout(display='none'))
+  wdetail.set_title(0,'Column definitions'); wdetail.set_title(1,'Column selection')
+  wdetailb = ipywidgets.Button(tooltip='toggle detail display',icon='fa-info-circle',layout=ipywidgets.Layout(width='.4cm'))
   wreloadb = ipywidgets.Button(tooltip='reload table',icon='fa-refresh',layout=ipywidgets.Layout(width='.4cm'))
   woffset = ipywidgets.IntSlider(description='offset',min=0,step=1,layout=ipywidgets.Layout(width='12cm'))
   wnsample = ipywidgets.IntSlider(description='nsample',min=1,max=50,step=1,layout=ipywidgets.Layout(width='10cm'))
-  wscol = ipywidgets.SelectMultiple(options=[],layout=ipywidgets.Layout(display='none'))
-  wscolb = ipywidgets.Button(tooltip='select columns',icon='fa-cogs',layout=ipywidgets.Layout(width='.4cm',border='none'))
   # widget updaters
   def show():
     nonlocal active
@@ -730,9 +731,10 @@ Display an IPython widget for basic database exploration. If a metadata structur
     woffset.value = 0
     wnsample.value = 5
     wscol.value = ()
-    wscol.options =  scol_[wtable.value]
+    wscol.options =  opts = scol_[wtable.value]
     wscol.value = scol[wtable.value]
     active = True
+    wscol.layout.height = '{}cm'.format(min(.5*len(opts),10))
     wsize.value = size(wtable.value)
     wschema.value = schema(wtable.value)
     showc()
@@ -741,14 +743,12 @@ Display an IPython widget for basic database exploration. If a metadata structur
   def setoffsetmax(): woffset.max = max(wsize.value-1,0)
   def setscol():
     if active: scol[wtable.value] = wscol.value
-    wscolb.layout.border = 'none' if len(scol[wtable.value]) == len(scol_[wtable.value]) else 'thin solid red'
+    wdetailb.layout.border = 'none' if len(scol[wtable.value]) == len(scol_[wtable.value]) else 'thin solid red'
     showc()
-  def toggleschema(inv={'inline':'none','none':'inline'}): wschema.layout.display = inv[wschema.layout.display]
-  def togglescol(inv={'inline':'none','none':'inline'}): wscol.layout.display = inv[wscol.layout.display]
+  def toggledetail(inv={'inline':'none','none':'inline'}): wdetail.layout.display = inv[wdetail.layout.display]
   # callback attachments
   wsize.observe((lambda c: setoffsetmax()),'value')
-  wschemab.on_click((lambda b: toggleschema()))
-  wscolb.on_click((lambda b: togglescol()))
+  wdetailb.on_click((lambda b: toggledetail()))
   wtable.observe((lambda c: show()),'value')
   wreloadb.on_click((lambda b: show()))
   woffset.observe((lambda c: showc()),'value')
@@ -756,7 +756,7 @@ Display an IPython widget for basic database exploration. If a metadata structur
   wscol.observe((lambda c: setscol()),'value')
   # initialisation
   show()
-  return ipywidgets.VBox(children=(wtitle,ipywidgets.HBox(children=(wtable,wsize,wschemab,wreloadb)),wschema,ipywidgets.HBox(children=(wscolb,woffset,wnsample,)),wscol))
+  return ipywidgets.VBox(children=(wtitle,ipywidgets.HBox(children=(wtable,wsize,wdetailb,wreloadb)),wdetail,ipywidgets.HBox(children=(woffset,wnsample,))))
 
 exploredb.style = dict(
   schema='''

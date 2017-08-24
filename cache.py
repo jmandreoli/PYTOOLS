@@ -768,7 +768,10 @@ A simple utility to manage a cache repository.
     import ipywidgets
     from IPython.display import clear_output, display
     from traceback import format_exc
-    def showdb(): clear_output(); display(self.db)
+    def showdb():
+      with wout:
+        clear_output()
+        display(self.db)
     def setdb(c): self.db = c.new; wconsole.layout.display='none'; wdryrun.value = c.new is not None; showdb()
     def refresh(): wconsole.layout.display = 'none'; showdb()
     def mkbutton(**ka):
@@ -784,6 +787,7 @@ A simple utility to manage a cache repository.
     wdb = ipywidgets.Dropdown(options=OrderedDict(chain((('!',None),),((p,CacheDB(p)) for p in paths))))
     wconsole = ipywidgets.Textarea(rows=1,value='console',disabled=True,layout=ipywidgets.Layout(width='20cm',display='none'))
     wdryrun = ipywidgets.Checkbox(layout=ipywidgets.Layout(width='.6cm'))
+    wout = ipywidgets.Output()
     wdb.observe(setdb,'value')
     toolbar = ipytoolbar()
     toolbar.add(refresh,tooltip='refresh',icon='fa-refresh',layout=dict(width='.4cm'))
@@ -793,4 +797,4 @@ A simple utility to manage a cache repository.
     def do(): return self.db.clear_obsolete(False,dry_run=wdryrun.value)
     @mkbutton(description='ClearObsoleteStrict',layout=dict(width='3.2cm'))
     def do(): return self.db.clear_obsolete(True,dry_run=wdryrun.value)
-    self.widget = ipywidgets.VBox(children=(ipywidgets.HBox(children=(wdb,toolbar.widget,wdryrun,ipywidgets.Label('dry-run',layout=dict(width='1.2cm')))),wconsole))
+    self.widget = ipywidgets.VBox(children=(ipywidgets.HBox(children=(wdb,toolbar.widget,wdryrun,ipywidgets.Label('dry-run',layout=dict(width='1.2cm')))),wconsole,wout))

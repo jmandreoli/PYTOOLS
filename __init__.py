@@ -547,11 +547,15 @@ A simple utility to browse sliceable objects page per page in IPython.
   P = (len(D)-1)//pgsize + 1
   if P==1: display(D)
   else:
-    def show(): clear_output(wait=True); display(D[(w.value-1)*pgsize:w.value*pgsize])
-    w = ipywidgets.IntSlider(description='page',value=(1 if start<1 else P if start>P else start),min=1,max=P)
+    def show():
+      with wout:
+        clear_output(wait=True)
+        display(D[(w.value-1)*pgsize:w.value*pgsize])
+    wout = ipywidgets.Output()
+    w = ipywidgets.IntSlider(description='page',value=(1 if start<1 else P if start>P else start),min=1,max=P,layout=ipywidgets.Layout(width='20cm'))
     w.observe((lambda c: show()),'value')
     show()
-    return w
+    return ipywidgets.VBox(children=(w,wout))
 
 #==================================================================================================
 def ipyfilebrowse(path,start=None,step=50,period=1.,context=(10,5),**ka):
@@ -724,6 +728,7 @@ Display an IPython widget for basic database exploration. If a metadata structur
   wreloadb = ipywidgets.Button(tooltip='reload table',icon='fa-refresh',layout=ipywidgets.Layout(width='.4cm'))
   woffset = ipywidgets.IntSlider(description='offset',min=0,step=1,layout=ipywidgets.Layout(width='12cm'))
   wnsample = ipywidgets.IntSlider(description='nsample',min=1,max=50,step=1,layout=ipywidgets.Layout(width='10cm'))
+  wout = ipywidgets.Output()
   # widget updaters
   def show():
     nonlocal active
@@ -739,7 +744,10 @@ Display an IPython widget for basic database exploration. If a metadata structur
     wschema.value = schema(wtable.value)
     showc()
   def showc():
-    if active: clear_output(wait=True); display(sample(wtable.value,woffset.value,wnsample.value))
+    if active:
+      with wout:
+        clear_output(wait=True)
+        display(sample(wtable.value,woffset.value,wnsample.value))
   def setoffsetmax(): woffset.max = max(wsize.value-1,0)
   def setscol():
     if active: scol[wtable.value] = wscol.value
@@ -756,7 +764,7 @@ Display an IPython widget for basic database exploration. If a metadata structur
   wscol.observe((lambda c: setscol()),'value')
   # initialisation
   show()
-  return ipywidgets.VBox(children=(wtitle,ipywidgets.HBox(children=(wtable,wsize,wdetailb,wreloadb)),wdetail,ipywidgets.HBox(children=(woffset,wnsample,))))
+  return ipywidgets.VBox(children=(wtitle,ipywidgets.HBox(children=(wtable,wsize,wdetailb,wreloadb)),wdetail,ipywidgets.HBox(children=(woffset,wnsample,)),wout))
 
 exploredb.style = dict(
   schema='''

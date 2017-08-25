@@ -785,8 +785,8 @@ A simple utility to manage a cache repository.
       return lambda f: toolbar.add((lambda: callback(f)),**ka)
     self.db = None
     wdb = ipywidgets.Dropdown(options=OrderedDict(chain((('!',None),),((p,CacheDB(p)) for p in paths))))
-    wconsole = ipywidgets.Textarea(rows=1,value='console',disabled=True,layout=ipywidgets.Layout(width='20cm',display='none'))
-    wdryrun = ipywidgets.Checkbox(layout=ipywidgets.Layout(width='.6cm'))
+    wconsole = ipywidgets.Textarea(rows=1,value='console',disabled=True,layout=dict(width='20cm',display='none'))
+    wdryrun = ipywidgets.Checkbox(layout=dict(width='.6cm'),indent=False)
     wout = ipywidgets.Output()
     wdb.observe(setdb,'value')
     toolbar = ipytoolbar()

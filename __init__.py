@@ -552,7 +552,7 @@ A simple utility to browse sliceable objects page per page in IPython.
         clear_output(wait=True)
         display(D[(w.value-1)*pgsize:w.value*pgsize])
     wout = ipywidgets.Output()
-    w = ipywidgets.IntSlider(description='page',value=(1 if start<1 else P if start>P else start),min=1,max=P,layout=ipywidgets.Layout(width='20cm'))
+    w = ipywidgets.IntSlider(description='page',value=(1 if start<1 else P if start>P else start),min=1,max=P,layout=dict(width='20cm'))
     w.observe((lambda c: show()),'value')
     show()
     return ipywidgets.VBox(children=(w,wout))
@@ -613,8 +613,8 @@ A simple utility to browse a byte file object, possibly while it expands. If *pe
     if start<0:
       start += fsize
       if start<0: start = 0
-  wwin = ipywidgets.Textarea(rows=context[0]+context[1],layout=ipywidgets.Layout(**ka))
-  wctrl = ipywidgets.IntSlider(min=0,max=fsize,step=step,value=start,layout=ipywidgets.Layout(width=wwin.layout.width))
+  wwin = ipywidgets.Textarea(rows=context[0]+context[1],layout=ka)
+  wctrl = ipywidgets.IntSlider(min=0,max=fsize,step=step,value=start,layout=dict(width=wwin.layout.width))
   wctrl.observe((lambda c: setpos(c.new)),'value')
   setpos(start)
   if period: Thread(target=track,daemon=True).start()
@@ -644,7 +644,7 @@ A simple utility to build a toolbar of buttons in IPython. Keyword arguments in 
       s = ka.pop('layout',None)
       s = {} if s is None else s.copy()
       for k,v in bstyle: s.setdefault(k,v)
-      b = ipywidgets.Button(layout=ipywidgets.Layout(**s),**ka)
+      b = ipywidgets.Button(layout=s,**ka)
       b.on_click(lambda b: callback())
       widget.children += (b,)
       return b
@@ -690,8 +690,7 @@ Display an IPython widget for basic database exploration. If a metadata structur
     thead = '<tr>{}</tr>'.format(''.join('<td title="{}" class="field-{}">{}</td>'.format(x[0],x[0],x[2]) for x in schema))
     fmt = '<div><style scoped="scoped">{}{}</style><table><thead>{}</thead><tbody>'.format(exploredb.style['schema'],wstyle,thead),'</tbody></table></div>'
     return lambda table,pre=fmt[0],suf=fmt[1]: pre+''.join(map(row,tables[table].columns))+suf
-  @lru_cache(None)
-  def schema(table,g=schemag()): return g(table)
+  schema = lru_cache(None)(schemag())
   def size(table):
     return engine.execute(select([func.count()]).select_from(tables[table])).fetchone()[0]
   def sample(table,offset,nsample):
@@ -718,16 +717,16 @@ Display an IPython widget for basic database exploration. If a metadata structur
   scol = dict((table,tuple(t.columns)) for table,t in tables.items())
   # widget creation
   wtitle = ipywidgets.HTML('<div style="{}">{}</div>'.format(exploredb.style['title'],engine))
-  wtable = ipywidgets.Select(options=sorted(tables),layout=ipywidgets.Layout(width='10cm'))
-  wsize = ipywidgets.IntText(value=-1,tooltip='Number of rows',disabled=True,layout=ipywidgets.Layout(width='2cm'))
+  wtable = ipywidgets.Select(options=sorted(tables),layout=dict(width='10cm'))
+  wsize = ipywidgets.Text(value='',tooltip='Number of rows',disabled=True,layout=dict(width='2cm'))
   wschema = ipywidgets.HTML()
-  wscol = ipywidgets.SelectMultiple(options=[],layout=ipywidgets.Layout(flex_flow='column'))
-  wdetail = ipywidgets.Tab(children=(wschema,wscol),layout=ipywidgets.Layout(display='none'))
+  wscol = ipywidgets.SelectMultiple(options=[],layout=dict(flex_flow='column'))
+  wdetail = ipywidgets.Tab(children=(wschema,wscol),layout=dict(display='none'))
   wdetail.set_title(0,'Column definitions'); wdetail.set_title(1,'Column selection')
-  wdetailb = ipywidgets.Button(tooltip='toggle detail display',icon='fa-info-circle',layout=ipywidgets.Layout(width='.4cm'))
-  wreloadb = ipywidgets.Button(tooltip='reload table',icon='fa-refresh',layout=ipywidgets.Layout(width='.4cm'))
-  woffset = ipywidgets.IntSlider(description='offset',min=0,step=1,layout=ipywidgets.Layout(width='12cm'))
-  wnsample = ipywidgets.IntSlider(description='nsample',min=1,max=50,step=1,layout=ipywidgets.Layout(width='10cm'))
+  wdetailb = ipywidgets.Button(tooltip='toggle detail display (red border means some columns are hidden)',icon='fa-info-circle',layout=dict(width='.4cm',padding='0'))
+  wreloadb = ipywidgets.Button(tooltip='reload table',icon='fa-refresh',layout=dict(width='.4cm',padding='0'))
+  woffset = ipywidgets.IntSlider(description='offset',min=0,step=1,layout=dict(width='12cm'))
+  wnsample = ipywidgets.IntSlider(description='nsample',min=1,max=50,step=1,layout=dict(width='10cm'))
   wout = ipywidgets.Output()
   # widget updaters
   def show():
@@ -739,8 +738,10 @@ Display an IPython widget for basic database exploration. If a metadata structur
     wscol.options =  opts = scol_[wtable.value]
     wscol.value = scol[wtable.value]
     active = True
-    wscol.layout.height = '{}cm'.format(min(.5*len(opts),10))
-    wsize.value = size(wtable.value)
+    wscol.rows = min(len(opts),20)
+    sz = size(wtable.value)
+    woffset.max = max(sz-1,0)
+    wsize.value = str(sz)
     wschema.value = schema(wtable.value)
     showc()
   def showc():
@@ -748,14 +749,12 @@ Display an IPython widget for basic database exploration. If a metadata structur
       with wout:
         clear_output(wait=True)
         display(sample(wtable.value,woffset.value,wnsample.value))
-  def setoffsetmax(): woffset.max = max(wsize.value-1,0)
   def setscol():
     if active: scol[wtable.value] = wscol.value
     wdetailb.layout.border = 'none' if len(scol[wtable.value]) == len(scol_[wtable.value]) else 'thin solid red'
     showc()
   def toggledetail(inv={'inline':'none','none':'inline'}): wdetail.layout.display = inv[wdetail.layout.display]
   # callback attachments
-  wsize.observe((lambda c: setoffsetmax()),'value')
   wdetailb.on_click((lambda b: toggledetail()))
   wtable.observe((lambda c: show()),'value')
   wreloadb.on_click((lambda b: show()))

@@ -148,9 +148,9 @@ Returns a context manager which clears *self* on enter and redraws :attr:`figure
 Factory of :class:`Cell` objects.
 
 :param fig: description of a target figure.
-:type fig: :const:`NoneType` | :class:`matplotlib.figure.Figure`
+:type fig: :class:`matplotlib.figure.Figure`
 :param sps: description of a subplot specification.
-:type sps: :const:`dict`
+:type sps: :const:`Dict`
 
 If *fig* is :const:`None`, a matplotlib figure in a new window is created, using *ka* as keyword arguments. Otherwise, *fig* must be an existing matplotlib figure and *ka* empty. Argument *sps* is a dict passed to :class:`matplotlib.gridspec.GridSpec`.
     """
@@ -258,6 +258,7 @@ Invoked when the pause status of the timer changes (or it ends). This implementa
 class Toolbar:
   r"""
 :param fig: a matplotlib figure
+:type fig: :class:`matplotlib.figure.Figure`
 :param size: the size of the toolbar in figure coordinates (hence between 0. and 1.)
 :type size: :class:`float`
 :param ka: passed to the button factory :class:`matplotlib.text.Text`
@@ -312,11 +313,15 @@ Objects of this class control a toolbar added to a figure. The toolbar is locate
 def pager(L,shape,vmake,vpaint,offset=0,toolbar=None,save=None,savedefaults=dict(dest='pager-sav',format='svg'),bstyle={},**_ka):
   r"""
 :param L: a list of arbitrary objects other than :const:`None`
-:param shape: a pair (number of rows, number of columns) or a single number if they are equat
+:type L: :class:`List[object]`
+:param shape: a pair (number of rows, number of columns) or a single number if they are equal
+:type shape: :class:`Union[int,Tuple[int,int]]`
 :param vmake: a function to initialise the display (see below)
+:type vmake: :class:`Callable[[Cell],None]`
 :param vpaint: a function to instantiate the display for a given page (see below)
+:type vpaint: :class:`Callable[[Cell,object],None]`
 :param savedefaults: used as default keyword arguments of method :meth:`savefig` when saving pages
-:type savedefaults: :class:`dict`
+:type savedefaults: :class:`Dict`
 
 This function first create a :class:`Cell` instance with all the remaining arguments, then splits it into a grid of sub-cells according to *shape*, then displays *L* page per page on the grid. Each page displays a slice of *L* of length equal to the product of the components of *shape* (or less, for the final page). The toolbar is enriched with page navigation buttons. A save button also allows to save the whole collection of pages in a given directory (beware: may be long).
 

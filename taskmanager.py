@@ -24,15 +24,15 @@ def mailprepare(msg=None,fromaddr=None,toaddr=None,ccaddr=None,bccaddr=None,dsta
 :param msg: email message
 :type msg: :class:`email.message`
 :param fromaddr: email address for 'from' field
-:type fromaddr: :const:`str`
+:type fromaddr: :class:`str`
 :param toaddr: list of email addresses for 'to' field
-:type toaddr: list(:const:`str`) | :const:`NoneType`
+:type toaddr: :class:`List[str]`
 :param ccaddr: list of email addresses for 'cc' field
-:type ccaddr: list(:const:`str`) | :const:`NoneType`
+:type ccaddr: :class:`List[str]`
 :param bccaddr: list of email addresses for 'bcc' field
-:type bccaddr: list(:const:`str`) | :const:`NoneType`
+:type bccaddr: :class:`List[str]`
 :param dstarget: docushare collection identifier for subject extension
-:type dstarget: :const:`str` | :const:`NoneType`
+:type dstarget: :class:`str`
 
 Appends to,cc,bcc fields to the email message *msg*, and possibly extends subject for docushare agent interaction.
   """
@@ -85,9 +85,9 @@ Displays content of *message*.
 def mailsend(sender=None,recipient=None,message=None,mailhost='smtphost'):
   r"""
 :param sender: specification of sender (unique email address)
-:type sender: :const:`str`
+:type sender: :class:`str`
 :param recipient: specification of recipients (comma separated email addresses)
-:type recipient: :const:`str`
+:type recipient: :class:`str`
 :param message: message content
 :type message: :class:`email.message`
 
@@ -107,15 +107,15 @@ def announcement(shorttxt=None,plaintxt=None,xhtml=None,icscal=None,filename=Non
 :param icscal: calendar version of the announcement
 :type icscal: :class:`icalendar.Calendar`
 :param plaintxt: plain text version of the announcement
-:type plaintxt: :const:`str`
+:type plaintxt: :class:`str`
 :param xhtml: xhtml version of the announcement
 :type xhtml: :class:`lxml.etree._Document`
 :param shorttxt: short (1 liner) text version of the announcement
-:type shorttxt: :const:`str`
+:type shorttxt: :class:`str`
 :param filename: file name associated to the ics calendar in the announcement
-:type filename: :const:`str`
+:type filename: :class:`str`
 :param charset: charset encoding specification
-:type charset: :const:`str`
+:type charset: :class:`str`
 :rtype: :class:`email.message`
 
 Returns the announcement specified in different forms (*shorttxt*, *plaintxt*, *xhtml*, *icscal*) as an email message.
@@ -143,13 +143,13 @@ Returns the announcement specified in different forms (*shorttxt*, *plaintxt*, *
 def calendar(content=None,method='PUBLISH',version='2.0',reminder=None):
   r"""
 :param content: list of events
-:type content: list(:class:`icalendar.Event`)
+:type content: :class:`List[icalendar.Event]`
 :param reminder: reminder
 :type reminder: :class:`datetime.timedelta`
 :param method: ics method for the icalendar
-:type method: :const:`str`
+:type method: :class:`str`
 :param version: icalendar version;should not be changed
-:type version: :const:`str`
+:type version: :class:`str`
 :rtype: :class:`icalendar.Calendar`
 
 Return a calendar object listing all the events in *content*, possibly augmented, for those confirmed, with a reminder specified by *reminder* (from start).
@@ -183,9 +183,9 @@ def event(start=None,duration=None,permalink=None,sequence=0,confirmed=True,prio
 :param duration: event duration
 :type duration: :class:`datetime.timedelta`
 :param confirmed: whether the event is confirmed
-:type confirmed: :const:`bool`
+:type confirmed: :class:`bool`
 :param permalink: permanent url for the event
-:type permalink: :const:`str` | :const:`NoneType`
+:type permalink: :class:`str`
 :rtype: :class:`icalendar.Event`
 
 Returns a calendar event, which can be further extended. The *permalink*, if not const:`None`, is used to generate a unique ID of the event.
@@ -223,7 +223,7 @@ Attributes:
 
 .. attribute:: executed
 
-   :const:`bool` flag indicating whether the trasaction has been executed.
+   :class:`bool` flag indicating whether the trasaction has been executed.
    A transaction can only be executed only once.
 
 Methods:
@@ -283,27 +283,27 @@ class MailingTransaction (Transaction):
 A mailing transaction. On prepare: compute sender, recipient and ask for confirmation; on commit: perform the sending.
 
 :param mailhost: specification of the mail host
-:type mailhost: :const:`str`
+:type mailhost: :class:`str`
 :param mailmsg: message to send
 :type mailmsg: :class:`email.message`
 :param distrib: specification of 'from','to','cc','bcc' fields
-:type distrib: :const:`dict`
+:type distrib: :class:`Dict[str,object]`
   """
 
   def __init__(self,mailhost=None,mailmsg=None,distrib=None):
     self.mailhost = mailhost
     self.mailmsg = mailmsg
     self.distrib = distrib
-    super(MailingTransaction,self).__init__()
+    super().__init__()
 
   def prepare(self):
     self.mail = mailprepare(self.mailmsg,**self.distrib)
     self.getconfirm()
-    super(MailingTransaction,self).prepare()
+    super().prepare()
 
   def commit(self):
     mailsend(mailhost=self.mailhost,**self.mail)
-    super(MailingTransaction,self).commit()
+    super().commit()
 
   def getconfirm(self,LINE=79*'-',textshow=('plain',)):
     print('Confirm sending the following mail:')
@@ -321,13 +321,13 @@ class XMLFileTransaction (Transaction):
 An XML file transaction. On prepare: parse the xml file and select nodes in the document; on commit: save the document.
 
 :param path: specification of the xml file path
-:type path: :const:`str`
+:type path: :class:`str`
 :param namespaces: association of xml tag prefixes with names
-:type namespaces: :const:`dict`
+:type namespaces: :class:`Dict[str,str]`
 :param target: xpath specification of initial selection
-:type target: :const:`str`
+:type target: :class:`str`
 :param targetnamer: xpath specification to name a selected node
-:type targetnamer: :const:`str`
+:type targetnamer: :class:`str`
   """
 
   def __init__(self,path=None,namespaces=None,target=None,targetnamer=None):
@@ -336,15 +336,15 @@ An XML file transaction. On prepare: parse the xml file and select nodes in the 
     self.target = target
     self.targetnamer = targetnamer
     self.unmodified = False
-    super(XMLFileTransaction,self).__init__()
+    super().__init__()
 
   def prepare(self):
     self.doc = xmlparse(self.path)
     self.select()
-    super(XMLFileTransaction,self).prepare()
+    super().prepare()
 
   def commit(self):
-    super(XMLFileTransaction,self).commit()
+    super().commit()
     if self.unmodified: return
     safedump(xmltostring(self.doc,encoding=self.doc.docinfo.encoding,xml_declaration=True),self.path,'wb')
 
@@ -374,7 +374,7 @@ Replaces each node of the form <?parm xx?> in *doc* by *d* ['xx'], which must be
 :param doc: target xml document
 :type doc: :class:`lxml.etree._Element`
 :param d: substitution table
-:type d: :const:`dict`
+:type d: :class:`Dict[str,lxml.etree._Element]`
   """
   for parm in doc.xpath('//processing-instruction("parm")'):
     x = d.get(parm.text)
@@ -389,9 +389,9 @@ def safedump(content,path,mode='w'):
 Saves string *content* into filesystem member *path* with some safety.
 
 :param content: target string
-:type content: :const:`str`
+:type content: :class:`str`
 :param path: target path
-:type path: :const:`str`
+:type path: :class:`str`
   """
   if os.path.exists(path):
     dirn,fn = os.path.split(path)
@@ -408,9 +408,9 @@ def choose1(L,pname,LINE=79*'-'):
 Picks option from menu *L*.
 
 :param L: list of options
-:type L: list(:const:`object`)
+:type L: :class:`List[object]`
 :param pname: print-name function for the options
-:type pname: :const:`object` -> :const:`str`
+:type pname: :class:`Callable[[object],str]`
   """
   N = len(L)
   assert N>0, Exception('No entry to choose from')
@@ -437,7 +437,7 @@ def editparams(d,LINE=79*'-'):
 Edits a dictionary *d*.
 
 :param d: target dictionary
-:type d: :const:`dict`
+:type d: :class:`Dict[str,str]`
   """
   p = {}
   L = list(d.keys())

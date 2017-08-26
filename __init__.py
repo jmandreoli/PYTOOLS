@@ -204,15 +204,14 @@ Reinitialises the argument values.
 :param name: name of the argument
 :type name: :class:`str`
 :param value: the initial value of the argument
-:type value: :class:`object`
 :param cat: the category of the argument
-:type cat: :class:`NoneType`\|\ :class:`slice`\|\ :class:`tuple`\|\ :class:`list`\|\ :class:`dict`
+:type cat: :class:`Union[slice,Tuple,List,Dict[str,object]]`
 :param helper: the helper for the argument
-:type helper: :class:`str`\|\ tuple(\ :class:`str`\|\ pair(\ :class:`str`,\ :class:`str`))
+:type helper: :class:`Union[str,Tuple[str,str]]`
 :param widget: the widget specification for the argument
-:type widget: :class:`NoneType`\|\ :class:`str`\|\ :class:`dict`
+:type widget: :class:`Union[str,Dict[str,object]]`
 :param cparser: the command line parser specification for the argument
-:type cparser: :class:`NoneType`\|\ :class:`str`\|\ :class:`dict`
+:type cparser: :class:`Union[str,Dict[str,object]]`
 
 * If *cat* is a :class:`slice`, the argument ranges over a subset of numbers.
 
@@ -419,8 +418,8 @@ def zipaxes(L,fig,sharex=False,sharey=False,**ka):
 :param fig: a figure
 :type fig: :class:`matplotlib.figure.Figure`
 :param sharex: whether all the axes share the same x-axis scale
-:type sharex: :class:`bool`
 :param sharey: whether all the axes share the same y-axis scale
+:type sharex: :class:`bool`
 :type sharey: :class:`bool`
 :param ka: passed to :meth:`add_subplot` generating new axes
 
@@ -535,9 +534,12 @@ Symbolic expressions of this class are also callables, and trigger incarnation o
 #==================================================================================================
 def ipybrowse(D,start=1,pgsize=10):
   r"""
-:param D: a sequence object (must have :func:`len`\ ).
+:param D: a sequence object (must have :func:`len`\ )
+:type D: :class:`Sequence`
 :param start: the index of the initial page
+:type start: :class:`int`
 :param pgsize: the size of the pages
+:type pgsize: :class:`int`
 
 A simple utility to browse sliceable objects page per page in IPython.
   """
@@ -561,15 +563,15 @@ A simple utility to browse sliceable objects page per page in IPython.
 def ipyfilebrowse(path,start=None,step=50,period=1.,context=(10,5),**ka):
   r"""
 :param path: a path to an existing file
-:type path: :class:`str`\|\ :class:`pathlib.Path`
+:type path: :class:`Union[str,pathlib.Path]`
 :param start: index of start pointed
-:type start: :class:`NoneType`\|\ :class:`int`\|\ :class:`float`
+:type start: :class:`Union[int,float]`
 :param step: step size in bytes
 :type step: :class:`int`
 :param period: period in sec between refreshing attempts
 :type period: :class:`float`
 :param context: pair of number of lines before and after to display around current position
-:type context: (\ :class:`int`,\ :class:`int`)
+:type context: :class:`Tuple[int,int]`
 
 A simple utility to browse a byte file object, possibly while it expands. If *period* is :const:`None`, no change tracking is performed. If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
   """
@@ -655,7 +657,7 @@ A simple utility to build a toolbar of buttons in IPython. Keyword arguments in 
 def exploredb(spec):
   r"""
 :param spec: an sqlalchemy url or engine or metadata structure, defining the database to explore
-:type spec: :class:`sqlalchemy.engine.Engine`\|\ :class:`str`\|\ :class:`sqlalchemy.MetaData`
+:type spec: :class:`Union[sqlalchemy.engine.Engine,str,sqlalchemy.sql.schema.MetaData]`
 
 Display an IPython widget for basic database exploration. If a metadata structure is specified, it must be bound to an existing engine and reflected.
   """
@@ -870,9 +872,13 @@ def html_parlist(La,Lka,incontext,deco=('','',''),padding='5px'):
 def html_table(irows,fmts,hdrs=None,opening=None,closing=None,htmlclass='default'):
   r"""
 :param irows: a generator of pairs of an object (key) and a tuple of objects (value)
+:type irows: :class:`Iterator[Tuple[object,Tuple[object,...]]]`
 :param fmts: a tuple of format functions matching the length of the value tuples
+:type fmts: :class:`Tuple[Callable[[object],str],...]`
 :param hdrs: a tuple of strings matching the length of the value tuples
+:type hdrs: :class:`Tuple[str,...]`
 :param opening,closing: strings at head and foot of table
+:type opening,closing: :class:`str`
 
 Returns an HTML table object with one row for each pair generated from *irow*. The key of each pair is in a column of its own with no header, and the value must be a tuple whose length matches the number of columns. The format functions in *fmts*, one for each column, are expected to return HTML objects (as understood by :mod:`lxml`). *hdrs* may specify headers as a tuple of strings, one for each column.
   """
@@ -932,6 +938,11 @@ prints pairs *school*, *L* where *L* is a list of pairs *age*, *height*.
 #==================================================================================================
 def SQliteNew(path,schema):
   r"""
+:param path: a path to an sqlite database
+:type path: :class:`str`
+:param schema: the schema specification as a list of SQL queries (possibly joined by \n\n)
+:type schema: :class:`Union[str,List[str]]`
+
 Makes sure the file at *path* is a SQlite3 database with schema exactly equal to *schema*.
   """
 #==================================================================================================
@@ -990,7 +1001,9 @@ Assumes that *pkgname* is the name of a python regular (non namespace) package a
 def SQLinit(engine,meta):
   r"""
 :param engine: a sqlalchemy engine (or its url)
+:type engine: :class:`Union[str,sqlalchemy.engine.Engine]`
 :param meta: a sqlalchemy metadata structure
+:type meta: :class:`sqlalchemy.sql.schema.MetaData`
 
 * When the database is empty, a ``Metainfo`` table with a single row matching exactly the :attr:`info` attribute of *meta* is created, then the database is populated using *meta*.
 
@@ -1037,7 +1050,9 @@ class SQLinitMetainfoException (Exception): pass
 class SQLHandler (logging.Handler):
   r"""
 :param engine: a sqlalchemy engine (or its url)
-:param label: a text label 
+:type engine: :class:`Union[str,sqlalchemy.engine.Engine]`
+:param label: a text label
+:type label: :class:`str`
 
 A logging handler class which writes the log messages into a database.
   """
@@ -1260,6 +1275,7 @@ Instances of this class maintain basic statistics about a group of values.
 def iso2date(iso):
   r"""
 :param iso: triple as returned by :meth:`datetime.date.isocalendar`
+:type iso: :class:`Tuple[int,int,int]`
 
 Returns the :class:`datetime.date` instance for which the :meth:`datetime.date.isocalendar` method returns *iso*::
 
@@ -1302,7 +1318,7 @@ Returns the representation of *size* with IEC prefix. Each prefix is *K* times t
 def time_fmt(time,precision=2):
   r"""
 :param time: a number representing a time in seconds
-:type time: :class:`int`\|\ :class:`float`
+:type time: :class:`Union[int,float]`
 :param precision: number of digits displayed
 :type precision: :class:`int`
 

@@ -76,12 +76,13 @@ Launches one experiment, i.e. a sequence of tests. Each test takes one input (a 
   def display(self,fig,target,meter=(lambda x: x),filtr=(lambda exp: True),fmt={},**kfiltr):
     r"""
 :param fig: a matplotlib figure
-:param target: the slot to plot
-:type target: ``host`` | ``name`` | ``args`` | ``exc``
+:param target: the slot to plot, among ``host``, ``name``, ``args``, ``exc``
+:type target: :class:`str`
 :param meter: a function which maps a test output into a number, or a key if test output is of type :class:`dict`
-:type meter: callable|\ :class:`str`
+:type meter: :class:`Union[str,Callable[[object],float]]`
 :param filtr: a function which maps an experiment into a boolean
-:param kfiltr: a dict with keys in ``host``, ``name``, ``args``, ``exc``
+:type filtr: :class:`Callable[[Experiment],bool]`
+:param kfiltr: additional filters which test the value of each slot among ``host``, ``name``, ``args``, ``exc``
 
 Displays the results of selected experiments in this context. The selection test is the conjunction of the filter function *filtr* applied to the experiment object, and for each item *s*,\ *v* of the dictionary *kfiltr*, whether slot *k* of the experiment is equal to *v*. If *v* is :const:`None`, it is replaced by a default value: the current host for ``host``, the current python executable for ``exc``, an empty dictionary for ``args`` and an empty string for ``name``.
     """

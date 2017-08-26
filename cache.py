@@ -108,7 +108,7 @@ Methods:
 Generates a :class:`CacheDB` object.
 
 :param spec: specification of the cache folder
-:type spec: :class:`CacheDB`\|\ :class:`pathlib.Path`\|\ :class:`str`
+:type spec: :class:`Union[CacheDB,pathlib.Path,str]`
 
 * If *spec* is a :class:`CacheDB` instance, that instance is returned
 * If *spec* is a path to a directory, returns a :class:`CacheDB` instance whose storage is an instance of :class:`DefaultStorage` pointing to that directory
@@ -223,6 +223,7 @@ class CacheBlock (MutableMapping,HtmlPlugin):
 Instances of this class implements blocks of cells sharing the same functor.
 
 :param db: specification of the cache repository where the block resides
+:type db: :class:`Union[CacheDB,pathlib.Path,str]`
 :param functor: functor of the block
 :type functor: :class:`Functor`
 :param cacheonly: if :const:`True`, cell creation is disallowed

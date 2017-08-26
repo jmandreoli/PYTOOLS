@@ -46,9 +46,9 @@ Enumerates *loop* and monitors it.
 
 :param loop: an iterable yielding arbitrary objects
 :param env: an environment, i.e. an object which can be assigned arbitrary attributes
-:type env: typically :class:`State`\|\ :class:`NoneType`
+:type env: typically :class:`State`
 :param detach: if not None, time (in sec) after which the loop is started on a separate thread
-:type detach: :class:`float`\|\ :class:`NoneType`
+:type detach: :class:`float`
 :param ka: passed to the thread in detach-mode, otherwise ignored (by default, key ``daemon`` in *ka* is set to :const:`True`)
 :return: the environment *env* at the end of the loop, or immediately if *detach* is not :const:`None`
 
@@ -141,11 +141,11 @@ Returns a monitor managing the number of iterations and enabling basic logging.
 :param maxcpu: stops the loop after that amount of cpu time (if reached)
 :type maxcpu: :class:`float`
 :param logger: the logger on which to report (optional)
-:type logger: :class:`logging.Logger`\|\ :class:`NoneType`
+:type logger: :class:`logging.Logger`
 :param show: controls the logging rate (see below)
-:type show: :class:`int`\|\ :class:`NoneType`
+:type show: :class:`int`
 :param fmt: invoked to produce the log string, passed the current iteration count and environment
-:type fmt: callable|\ :class:`NoneType`
+:type fmt: :class:`Callable[[int,object],str]`
   """
 #--------------------------------------------------------------------------------------------------
   from itertools import count
@@ -180,7 +180,7 @@ def averaging_monitor(env,targetf=None,rtype=namedtuple('stats',('count','mean',
 Returns a monitor which computes some basic statistics about the loop.
 
 :param targetf: extracts from the environment the variable on which to compute the statistics
-:type targetf: callable
+:type targetf: :class:`Callable[[object],Union[int,float,complex,numpy.array]]`
 
 The computed statistics consists of a named triple <count,mean,variance> of the list of results of applying callable *targetf* to the environment at each iteration.
   """
@@ -201,7 +201,7 @@ def buffer_monitor(env,size=0,targetf=None):
 Returns a monitor which buffers information collected from the loop.
 
 :param targetf: extracts from the environment the variable to buffer
-:type targetf: callable
+:type targetf: :class:`Callable[[object],object]`
 :param size: size of the buffer (if null, the buffer is infinite, otherwise first in first out policy is applied)
 :type size: :class:`int`
 

@@ -94,7 +94,7 @@ Methods:
   configstylesheet = 'QWidget[configlabel] {border-top: 2px solid blue; border-left: 1px dashed blue}\nQWidget[configclass] {border: 1px dashed black}'
 
   def __init__(self):
-    super(ExperimentUI,self).__init__()
+    super().__init__()
     self.actionRelaunch = self.action('relaunch')
     self.toolbar.addAction(self.actionRelaunch)
     def relaunch():
@@ -269,7 +269,7 @@ An instance of this class, when called, always returns its initial value, which 
 #--------------------------------------------------------------------------------------------------
 
   def __init__(self,v):
-    super(EmptyConfigurator,self).__init__()
+    super().__init__()
     self.value = v
 
   def __call__(self):
@@ -287,7 +287,7 @@ class NonEmptyConfigurator (Configurator):
 #--------------------------------------------------------------------------------------------------
 
   def __init__(self):
-    super(NonEmptyConfigurator,self).__init__()
+    super().__init__()
     self.widget = QtWidgets.QWidget()
 
   def hide(self,flag):
@@ -302,11 +302,12 @@ class BaseConfigurator (NonEmptyConfigurator):
 An instance of this class, when called, returns the value held by an editor widget, such as instances of :class:`EditWidget`.
 
 :param w: editor widget.
+:type w: :class:`QtWidget.Widget`
   """
 #--------------------------------------------------------------------------------------------------
 
   def __init__(self,w,getval=None,setval=None,onchange=None):
-    super(BaseConfigurator,self).__init__()
+    super().__init__()
     ws = QtWidgets.QStackedWidget()
     ws.setProperty('configclass',w.__class__.__name__)
     QtWidgets.QVBoxLayout(self.widget).addWidget(ws)
@@ -327,9 +328,9 @@ class CompoundConfigurator (NonEmptyConfigurator):
 A compound configurator merges several labeled child configurators (offspring).
 
 :param multi: whether multiple child configurators can be active simultaneously.
-:type multi: :const:`NoneType`\|\ :const:`bool`
+:type multi: :class:`bool`
 :param proc: how to merge the results of the execution of the active children.
-:type proc: 1-input callable
+:type proc: :class:`Callable[[Iterable[Tuple[str,object]]],object]`
 
 If *multi* is :const:`None`, all child configurators are active. If *multi* is not :const:`None`, some labels may be selectable to activate/deactivate the corresponding child.
 
@@ -342,7 +343,7 @@ Methods:
 #--------------------------------------------------------------------------------------------------
 
   def __init__(self,multi=None,proc=tuple):
-    super(CompoundConfigurator,self).__init__()
+    super().__init__()
     self.multi = multi
     self.proc = proc
     self.anchors = []
@@ -407,13 +408,13 @@ Methods:
 Adds a child configurator *c* to *self*.
 
 :param anchor: whether the child should be anchored.
-:type anchor: :const:`bool`
+:type anchor: :class:`bool`
 :param sel: whether the label should be initially selected.
-:type sel: :const:`NoneType`\|\ :const:`bool`
+:type sel: :class:`bool`
 :param accept: immediately invoked with *self*, *label*, *c* as input
-:type accept: 3-input function
+:type accept: :class:`Callable[[Configurator,str,Configurator],None]`
 :param tooltip: tooltip to appear on the child label
-:type tooltip: :const:`str`
+:type tooltip: :class:`str`
 
 If *sel* is not given, it defaults to *self*'s child activation status. If the latter is :const:`None` (no child activation is permitted) then *sel* must be :const:`None`. The *accept* function typically encodes repetitive operations on joints (like assigning a default parameter to the child obtained from the parent, or checking conformance to a rule).
     """
@@ -453,7 +454,7 @@ If *sel* is not given, it defaults to *self*'s child activation status. If the l
     self.layout.setRowStretch(row,1)
 
   def hide(self,flag):
-    super(CompoundConfigurator,self).hide(flag)
+    super().hide(flag)
     for c in self.anchors: c.hide(flag)
 
   def __call__(self):
@@ -470,7 +471,7 @@ Returns compound configurator *c*, modified by the *offspring* specification.
 :param c: a configurator
 :type c: :class:`CompoundConfigurator`
 :param offspring: a specification
-:type offspring: :const:`tuple` (see below)
+:type offspring: :class:`Tuple[Tuple[str,Dict[str,object],Configurator],...]`
 
 The offspring specification is a tuple of tuples, each consisting of the following components:
 
@@ -554,7 +555,7 @@ The widget consists of a viewer widget of class :class:`QtWidgets.QLabel` and an
   ready = QtCore.Signal()
 
   def __init__(self,initv,transf,itransf,parent=None,fmt=str,editor_location='right',tooltip=None):
-    super(ObjectEditWidget,self).__init__(parent)
+    super().__init__(parent)
     self.position = initv
     self.value = None
 
@@ -646,7 +647,7 @@ The ordering of values is assumed to follow the ordering of indices. The widget 
     vmin = vtype(vmin)
     vmax = vtype(vmax)
     assert vmax > vmin
-    super(ScalarEditWidget,self).__init__(parent)
+    super().__init__(parent)
     self.minimum = vmin
     self.maximum = vmax
     self.position = vmin
@@ -718,7 +719,7 @@ The value space is a linear scaled grid in an interval of whole or real numbers.
     transf = lambda k: vmin+k*step
     itransf = lambda v,vref=vmin: int(floor(.5+(v-vref)/step))
     itransfd = lambda v: itransf(v,vtype(0))
-    super(LinScalarEditWidget,self).__init__(vmin,vmax,transf,itransf,itransfd,vtype=vtype,tooltip=tt,**ka)
+    super().__init__(vmin,vmax,transf,itransf,itransfd,vtype=vtype,tooltip=tt,**ka)
 
 #--------------------------------------------------------------------------------------------------
 class LogScalarEditWidget (ScalarEditWidget):
@@ -745,7 +746,7 @@ The value space is a log scaled grid in an interval of real numbers.
     transf = lambda k: vmin*(mstep**k)
     itransf = lambda v,vref=vmin: int(floor(.5+log(v/vref)/lstep))
     itransfd = lambda v: itransf(v,1.)
-    super(LogScalarEditWidget,self).__init__(vmin,vmax,transf,itransf,itransfd,fmt=fmt,vtype=float,tooltip=dict(mstep=mstep),**ka)
+    super().__init__(vmin,vmax,transf,itransf,itransfd,fmt=fmt,vtype=float,tooltip=dict(mstep=mstep),**ka)
 
 #--------------------------------------------------------------------------------------------------
 class SetEditWidget (EditWidget):
@@ -753,9 +754,9 @@ class SetEditWidget (EditWidget):
 An instance of this class edits a subset from an explicit set of string options. 
 
 :param options: list of options or option-tooltip pairs.
-:type options: iterable(:const:`str`\|tuple(:const:`str`,\ :const:`str`))
+:type options: :class:`Iterable[Union[str,Tuple[str,str]]]`
 :param multi: if :const:`False`, one option at most is selected.
-:type multi: :const:`bool`
+:type multi: :class:`bool`
 :param parent: parent widget.
 
 The widget consists of one checkable widget of class :class:`QtWidgets.QPressButton` for each option. The edited value consists of the set of checked options. This editor does not support the :attr:`ready` signal.
@@ -770,7 +771,7 @@ The widget consists of one checkable widget of class :class:`QtWidgets.QPressBut
 
   def __init__(self,options=(),multi=False,parent=None):
     assert isinstance(multi,bool)
-    super(SetEditWidget,self).__init__(parent)
+    super().__init__(parent)
 
     layout = QtWidgets.QBoxLayout(QtWidgets.QBoxLayout.Direction(QtWidgets.QBoxLayout.TopToBottom),self)
     bgroup = QtWidgets.QButtonGroup(self)
@@ -861,7 +862,7 @@ The widget consists of a single widget of class :class:`QtWidgets.QCheckBox`. Th
     return self.getval()
 
   def __init__(self,parent=None):
-    super(BooleanEditWidget,self).__init__(parent)
+    super().__init__(parent)
     layout = QtWidgets.QVBoxLayout(self)
     w = QtWidgets.QCheckBox()
     layout.addWidget(w)
@@ -892,7 +893,7 @@ The widget consists of a viewer widget of class :class:`QtWidgets.QLabel`. This 
 
   def __init__(self,parent=None,op='open',**ka):
     assert op=='open' or op=='save'
-    super(FilenameEditWidget,self).__init__(parent)
+    super().__init__(parent)
     layout = QtWidgets.QHBoxLayout(self)
     editbutton = QtWidgets.QPushButton('^')
     viewer = QtWidgets.QLabel()
@@ -939,7 +940,7 @@ Methods:
   statusChanged = QtCore.Signal(int)
 
   def __init__(self,parent=None):
-    super(Animator,self).__init__(parent)
+    super().__init__(parent)
     self.timer = QtCore.QTimer()
     self.step = None
     self.state = None
@@ -960,12 +961,12 @@ Methods:
 Launches the animation.
 
 :param t: time between steps in ms.
-:type t: :const:`int`
+:type t: :class:`int`
 :param f: state transformer executed at each step (input=oldstate; output=newstate).
 :type f: 1-input, 1-output callable
 :param s: initial :attr:`state`.
 :param paused: initial :attr:`paused`.
-:type paused: :const:`bool`
+:type paused: :class:`bool`
     """
     assert self.step is None
     self.step = f
@@ -1020,7 +1021,7 @@ Creates and returns a matplotlib figure.
 :parameter x: a layout or a widget.
 :type x: :class:`QtWidgets.QBoxLayout`\|\ :class:`QtWidgets.QWidget`
 :parameter withtoolbar: whether a toolbar should also be added to the layout.
-:type withtoolbar: :const:`bool`
+:type withtoolbar: :class:`bool`
 :parameter ka: passed as keyword arguments to the figure constructor.
 
 The canvas widget of the created figure is added to *layout*, together with a matplotlib toolbar if *withtoolbar* is :const:`True`. *layout* is either *x* if that is a :class:`QtWidgets.QBoxLayout` instance or a :class:`QtWidgets.QVBoxLayout` instance associated to *x* if *x* is a :class:`QtWidgets.QWidget` instance.
@@ -1062,7 +1063,7 @@ Creates and returns a pausable matplotlib timer attached to a figure.
 :param fig: a figure with a canvas having a toolbar
 :type fig: :class:`matplotlib.figure.Figure`
 :param toolbar: a toolbar
-:type toolbar: :const:`NoneType`\|\ :class:`QtWidgets.QToolbar`
+:type toolbar: :class:`QtWidgets.QToolbar`
 :rtype: :class:`myutil.mplext.Timer`
 
 A 'pause' and a `1-step` buttons are added to *toolbar*. The former allows to toggle the pause status of the timer, and the latter, only visible when the timer is paused, allows to simulate one tick of the timer. If *toolbar* is :const:`None`, the figure's own toolbar is used.
@@ -1089,7 +1090,7 @@ Adds a new tab to a tabulated UI, holding a mplext cell.
 :param e: a tabulated UI
 :type e: :class:`BaseTabUI`
 :param label: label of the tab
-:type label: :const:`str`
+:type label: :class:`str`
 :rtype: :class:`myutil.mplext.Cell`
     """
     assert isinstance(e,BaseTabUI) and isinstance(label,str)
@@ -1124,7 +1125,7 @@ When passed the result of a compound configurator, returns the list of values (d
 Returns a compound configurator.
 
 :param D: stored as attribute :attr:`keywords` (see :meth:`i`).
-:type D: :const:`dict`
+:type D: :class:`Dict`
 :param f: stored as attribute :attr:`proc` (see the :class:`CompoundConfigurator` constructor).
 :type f: callable
     """

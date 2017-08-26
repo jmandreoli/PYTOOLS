@@ -12,8 +12,7 @@
 # All configuration values have a default; values that are commented out
 # serve to show the default.
 
-import sys
-import os
+import sys,os
 sys.path.insert(0,'/home/andreoli/src/distrib')
 
 # If extensions (or modules to document with autodoc) are in another directory,

@@ -90,32 +90,37 @@ Objects of this class present an attribute oriented interface to an underlying p
   def __repr__(self): return repr(self.__proxy__)
 
 #==================================================================================================
-def config_xdg(rsc,deflt=None):
+def config_xdg(rsc,dflt=None):
   r"""
 :param rsc: the name of an XDG resource
-:param deflt: a default value
+:type rsc: :class:`str`
+:param dflt: a default value
+:type dflt: :class:`object`
 
-Returns the content of the XDG resource named *rsc* or *deflt* if the resource is not found.
+Returns the content of the XDG resource named *rsc* or *dflt* if the resource is not found.
   """
 #==================================================================================================
   try: from xdg.BaseDirectory import load_first_config
-  except: return deflt
+  except: return dflt
   p = load_first_config(rsc)
-  if p is None: return deflt
+  if p is None: return dflt
   with open(p) as u: return u.read()
 
 #==================================================================================================
-def config_env(name,deflt=None,asfile=False):
+def config_env(name,dflt=None,asfile=False):
   r"""
 :param name: the name of an environment variable
-:param deflt: a default value
+:type name: :class:`str`
+:param dflt: a default value
+:type dflt: :class:`object`
 :param asfile: whether to treat the value of the environment variable as a path to a file
+:type asfile: :class:`bool`
 
-Returns the string value of an environment variable (or the content of the file pointed by it if *asfile* is set) or *deflt* if the environment variable is not assigned.
+Returns the string value of an environment variable (or the content of the file pointed by it if *asfile* is set) or *dflt* if the environment variable is not assigned.
   """
 #==================================================================================================
   x = os.environ.get(name)
-  if x is None: return deflt
+  if x is None: return dflt
   if asfile:
     with open(x) as u: x = u.read(x)
   return x
@@ -124,9 +129,13 @@ Returns the string value of an environment variable (or the content of the file 
 def autoconfig(module,name,dflt=None,asfile=False):
   r"""
 :param module: the name of a module
+:type module: :class:`str`
 :param name: the name of a configuration parameter for that module
+:type name: :class:`str`
 :param dflt: a default value for the configuration parameter
+:type dflt: :class:`object`
 :param asfile: whether to treat the value of the environment variable as a path to a file
+:type asfile: :class:`bool`
 
 Returns an object obtained from an environment variable whose name is derived from *module* and *name*. For example, if *module* is ``mypackage.mymodule`` and *name* is ``myparam`` then the environment variable is ``MYPACKAGE_MYMODULE_MYPARAM``. The value of that variable (or the content of the file pointed by it if *asfile* is set) is executed in an empty dictionary and the value attached to key *name* is returned. If the variable is not assigned, *dflt* is returned.
   """
@@ -147,6 +156,10 @@ Instances of this class represent configurations which can be consistently setup
 :param initv: an argument assignment applied at initialisation
   """
 #==================================================================================================
+  widget_layout = dict(width='15cm')
+  label_layout = dict(width='2cm',padding='0cm',align_self='flex-start')
+  rbutton_layout = dict(width='0.5cm',padding='0cm')
+  button_layout = dict()
   class Pconf:
     __slots__ = 'name','value','helper','widget','cparser'
     def __init__(s,*a):
@@ -159,9 +172,6 @@ Instances of this class represent configurations which can be consistently setup
     from collections import OrderedDict
     self.pconf = OrderedDict()
     self.initial = {}
-    self.widget_style = dict(width='15cm')
-    self.label_style = dict(width='2cm',padding='0cm',align_self='flex-start')
-    self.button_style = dict()
     for a,ka in conf: self.add_argument(*a,**ka)
     self.reset(**initv)
 
@@ -204,10 +214,11 @@ Reinitialises the argument values.
 :param name: name of the argument
 :type name: :class:`str`
 :param value: the initial value of the argument
+:type value: :class:`object`
 :param cat: the category of the argument
-:type cat: :class:`Union[slice,Tuple,List,Dict[str,object]]`
+:type cat: :class:`Union[slice,Tuple[object,...],List[object],Dict[str,object]]`
 :param helper: the helper for the argument
-:type helper: :class:`Union[str,Tuple[str,str]]`
+:type helper: :class:`str`
 :param widget: the widget specification for the argument
 :type widget: :class:`Union[str,Dict[str,object]]`
 :param cparser: the command line parser specification for the argument
@@ -218,14 +229,17 @@ Reinitialises the argument values.
   - If the ``stop`` attribute of *cat* is an integer, the target range is the set of integers between the values of *cat* attributes ``start`` (default 0)  and ``stop`` minus 1. The ``step`` attribute (default 1) only specifies a sampling step.
   - If the ``stop`` attribute of *cat* is real, the target range is the set of reals between the values of *cat* attributes ``start`` (default 0) and ``stop``. The ``step`` attribute (default 100) specifies a sampling step, directly if it is a real or adjusted so as to obtain exactly that number of samples if it is an integer.
 
-* If *cat* is a :class:`tuple` or :class:`list`, it is turned into a :class:`collections.OrderedDict` whose keys are the string values of its elements.
-* If *cat* is a :class:`dict` (which includes :class:`collections.OrderedDict`), the range is the set of values of *cat*. The keys are simply string names to denote these values. If the special key ``__multiple__`` is set to :const:`True`, it is deleted and the target range is in fact the set of tuples of the other values of *cat*.
+* If *cat* is a :class:`Tuple[object,...]` or :class:`List[object]`, it is turned into a :class:`collections.OrderedDict` whose keys are the string values of its elements.
+* If *cat* is a :class:`Dict[str,object]` (which includes :class:`collections.OrderedDict`), the range is the set of values of *cat*. The keys are simply string names to denote these values. If the special key ``__multiple__`` is set to :const:`True`, it is deleted and the target range is in fact the set of tuples of the other values of *cat*.
 
-If *widget* is :const:`None`, it is replaced by an empty dict, and if it is a string, it is replaced with a dict with a single key ``type`` assigned that string. The ``type`` key, if present, must be the name of a widget constructor in module :mod:`ipywidgets` and must be compatible with *cat* and *value*. If not present, a default value is guessed from *cat* and *value*. The ``layout`` key, if present, must be a dict passed to :class:`ipywidgets.Layout`, itself passed to the widget constructor. The other key-value pairs of *widget* are passed to the widget constructor as keyword arguments.
+*helper* can contain patterns of the form ``{widget-help|cparser-help}`` so the helper has a different form in the two contexts.
+
+If *widget* is :const:`None`, it is replaced by an empty dict, and if it is a string, it is replaced with a dict with a single key ``type`` assigned that string. The ``type`` key, if present, must be the name of a widget constructor in module :mod:`ipywidgets` and must be compatible with *cat* and *value*. If not present, a default value is guessed from *cat* and *value*. The other key-value pairs of *widget* are passed to the widget constructor as keyword arguments.
 
 If *cparser* is :const:`None`, the argument is ignored by the command line parser. If it is a string, it is replaced by a dict with a single key ``spec`` assigned that string. The ``spec`` key holds the name of the argument as it appears in the command line. The other key-value pairs of *cparser* are passed to the :meth:`ArgumentParser.add_argument` method of the constructed parser.
     """
 #--------------------------------------------------------------------------------------------------
+    import re
     from collections import OrderedDict
     from functools import partial
     def checkbounds(x,typ,vmin,vmax,name):
@@ -236,6 +250,19 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
     def checkchoice(x,options,name):
       try: return options[x]
       except KeyError: raise ConfigException('Choice constraint violated',name) from None
+    def parsealt(x,pat=re.compile(r'\{([^}]+)\}'),n=2):
+      pos = 0
+      for m in pat.finditer(x):
+        b,e = m.span()
+        yield n*(x[pos:b],)
+        s = m.group(1).split('|'); pos = e
+        if len(s)==n: yield tuple(s)
+        else: raise Exception('Inconsistent number of alternatives')
+      yield n*(x[pos:],)
+    def set_widget_type(widget,*L):
+      if 'type' in widget:
+        if widget['type'] not in L: raise ConfigException('Inconsistent widget for value type',name)
+      else: widget.update(type=L[0])
     type2widget = {
       bool:('Checkbox','ToggleButton'),
       int:('IntText',),
@@ -246,13 +273,8 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
       True:('SelectMultiple',),
       False:('Dropdown','Select','RadioButtons','ToggleButtons',),
     }
-    def set_widget_type(*L):
-      if 'type' in widget:
-        if widget['type'] not in L: raise ConfigException('Inconsistent widget for value type',name)
-      else: widget.update(type=L[0])
-    if isinstance(helper,str): helper = helper,helper
-    elif isinstance(helper,tuple): helper = tuple(map(''.join,zip(*(((x,x) if isinstance(x,str) else x) for x in helper))))
-    else: raise ConfigException('Invalid helper spec',name)
+    try: helper = tuple(''.join(l) for l in zip(*parsealt(helper)))
+    except: raise ConfigException('Invalid helper spec',name)
     if widget is None: widget = {}
     elif isinstance(widget,str): widget = dict(type=widget)
     elif isinstance(widget,dict): widget = widget.copy()
@@ -265,7 +287,7 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
       typ = type(value)
       L = type2widget.get(typ)
       if L is None: raise ConfigException('Inconsistent cat for value type',name)
-      set_widget_type(*L)
+      set_widget_type(widget,*L)
       if cparser is not None:
         if typ is bool: cparser.update(action=('store_false' if value else 'store_true'))
         else: cparser.update(type=(lambda x: eval(x,{})))
@@ -281,7 +303,7 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
         elif isinstance(step,int): step = (stop-start)/step
         slider,typ = 'FloatSlider',float
       else: raise ConfigException('Invalid slice cat',name)
-      set_widget_type(slider)
+      set_widget_type(widget,slider)
       widget.update(min=start,max=stop,step=step)
       if cparser is not None:
         cparser.update(type=partial(checkbounds,typ=typ,vmin=start,vmax=stop,name=name))
@@ -289,7 +311,7 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
       if isinstance(cat,(tuple,list)): cat = OrderedDict((str(x),x) for x in cat)
       else: cat = cat.copy()
       multiple = bool(cat.pop('__multiple__',False))
-      set_widget_type(*mult2widget[multiple])
+      set_widget_type(widget,*mult2widget[multiple])
       cvalues = tuple(cat.values())
       values = value if multiple else (value,)
       if any(v not in cvalues for v in values):
@@ -314,29 +336,27 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
     def row(e):
       ka = e.widget.copy()
       w = getattr(ipywidgets,ka.pop('type'))
-      style = ka.pop('layout',None)
-      w = w(value=e.value,layout=(widget_layout if style is None else ipywidgets.Layout(**ChainMap(style,self.widget_style))),**ka)
-      hb = ipywidgets.Button(icon='fa-undo',tooltip='Reset to default',layout=rbutton_layout)
+      layout = ka.pop('layout',{})
+      w = w(value=e.value,layout=ipywidgets.Layout(**ChainMap(layout,self.widget_layout)),**ka)
+      hb = ipywidgets.Button(icon='fa-undo',tooltip='Reset to default',layout=ipywidgets.Layout(**self.rbutton_layout))
       hb.on_click(lambda but,w=w,x=e.value: updw(w,x))
-      lb = ipywidgets.HTML('<span title="{}">{}</span>'.format(e.helper[0],e.name),layout=label_layout)
+      lb = ipywidgets.HTML('<span title="{}">{}</span>'.format(e.helper[0],e.name),layout=ipywidgets.Layout(**self.label_layout))
       w.observe((lambda evt,e=e,w=w: upde(e,w)),'value')
       return (e.name,w),ipywidgets.HBox(children=(hb,lb,w))
-    widget_layout = ipywidgets.Layout(**self.widget_style)
-    label_layout = ipywidgets.Layout(**self.label_style)
-    rbutton_layout = ipywidgets.Layout(width='0.5cm',padding='0cm')
     W,L = zip(*(row(e) for e in self.pconf.values()))
-    header,buttons,footer = self.widget_context()
+    header,footer,buttons = [],[],[]
+    self.widget_context(header,footer,buttons)
     if buttons: buttons = [ipywidgets.HBox(children=buttons)]
     w = ipywidgets.VBox(children=header+list(L)+buttons+footer)
     w.pconf = dict(W)
     return w
 #--------------------------------------------------------------------------------------------------
-  def widget_context(self):
+  def widget_context(self,header,footer,buttons):
     r"""
-Returns a triple of a list of prolog widgets, a list of buttons and a list of epilog widgets, put around the argument widgets. This implementations returns no prolog, no epilog and a single button resetting the configuration to its initial value. Subclasses can refine that behaviour.
+Updates any of: the list of prolog widgets, the list of buttons and the list of epilog widgets. These widgets are put around the argument widgets. This implementations only adds a reset button. Subclasses can refine that behaviour.
     """
 #--------------------------------------------------------------------------------------------------
-    return [],[self.make_widget_reset_button(self.initial,icon='fa-undo',description='reset')],[]
+    buttons.append(self.make_widget_reset_button(self.initial,icon='fa-undo',description='reset'))
 #--------------------------------------------------------------------------------------------------
   def make_widget_reset_button(self,data,**ka):
 #--------------------------------------------------------------------------------------------------
@@ -345,8 +365,8 @@ Returns a triple of a list of prolog widgets, a list of buttons and a list of ep
     def click(b):
       for k,w in self.widget.pconf.items():
         if k in data: w.value = data[k]
-    style = ka.pop('layout',None)
-    b = ipywidgets.Button(layout=ipywidgets.Layout(**(self.button_style if style is None else ChainMap(style,self.button_style))),**ka)
+    layout = ka.pop('layout',{})
+    b = ipywidgets.Button(layout=ipywidgets.Layout(**ChainMap(layout,self.button_layout)),**ka)
     b.on_click(click)
     return b
 
@@ -355,8 +375,9 @@ Returns a triple of a list of prolog widgets, a list of buttons and a list of ep
   def cparser(self):
 #--------------------------------------------------------------------------------------------------
     from argparse import ArgumentParser
-    header,footer = self.cparser_context()
-    p = ArgumentParser(description=header,epilog=footer)
+    header,footer = [],[]
+    self.cparser_context(header,footer)
+    p = ArgumentParser(description=''.join(header),epilog=''.join(footer))
     for e in self.pconf.values():
       if e.cparser is not None:
         ka = e.cparser.copy()
@@ -364,9 +385,9 @@ Returns a triple of a list of prolog widgets, a list of buttons and a list of ep
         p.add_argument(*spec,dest=e.name,default=e.value,help=e.helper[1],**ka)
     return p
 #--------------------------------------------------------------------------------------------------
-  def cparser_context(self):
+  def cparser_context(self,header,footer):
     r"""
-Returns a pair of a prolog and an epilog (both :class:`str` or :class:`NoneType`) for the command line parser. This implemetation returns :const:`None` for both prolog and epilog. Subclasses can refine that behaviour.
+Updates any of the two lists of strings *header* and *footer*. They are each concatenated and passed to the command line parser as prolog and epilog, respectively. This implemetation returns :const:`None` for both prolog and epilog. Subclasses can refine that behaviour.
     """
 #--------------------------------------------------------------------------------------------------
     return None, None
@@ -415,6 +436,7 @@ Returns a variant of *self* where *a* is appended to the positional arguments an
 def zipaxes(L,fig,sharex=False,sharey=False,**ka):
   r"""
 :param L: an arbitrary sequence
+:type L: :class:`Sequence[object]`
 :param fig: a figure
 :type fig: :class:`matplotlib.figure.Figure`
 :param sharex: whether all the axes share the same x-axis scale
@@ -635,18 +657,16 @@ class ipytoolbar:
 A simple utility to build a toolbar of buttons in IPython. Keyword arguments in the toolbar constructor are used as default values for all the buttons created. To create a new button, use method :meth:`add` with one positional argument: *callback* (a callable with no argument to invoke when the action is activated). If keyword arguments are present, they are passed to the button constructor. The button widget is returned. Method :meth:`display` displays the toolbar. The toolbar widget is available as attribute :attr:`widget`.
   """
 #==================================================================================================
-  bstyle=dict(padding='0cm')
+  blayout = dict(padding='0cm')
   def __init__(self,**ka):
     import ipywidgets
+    from collections import ChainMap
     from IPython.display import display
-    for k,v in self.bstyle.items(): ka.setdefault(k,v)
-    bstyle = ka.items()
     self.widget = widget = ipywidgets.HBox(children=())
+    blayout = ChainMap(ka,self.blayout)
     def add(callback,**ka):
-      s = ka.pop('layout',None)
-      s = {} if s is None else s.copy()
-      for k,v in bstyle: s.setdefault(k,v)
-      b = ipywidgets.Button(layout=s,**ka)
+      s = ka.pop('layout',{})
+      b = ipywidgets.Button(layout=dict(**ChainMap(s,blayout)),**ka)
       b.on_click(lambda b: callback())
       widget.children += (b,)
       return b

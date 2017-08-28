@@ -159,7 +159,7 @@ Instances of this class represent configurations which can be consistently setup
   widget_layout = dict(width='15cm')
   label_layout = dict(width='2cm',padding='0cm',align_self='flex-start')
   rbutton_layout = dict(width='0.5cm',padding='0cm')
-  button_layout = dict()
+  button_layout = dict(padding='0cm')
   class Pconf:
     __slots__ = 'name','value','helper','widget','cparser'
     def __init__(s,*a):
@@ -336,8 +336,8 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
     def row(e):
       ka = e.widget.copy()
       w = getattr(ipywidgets,ka.pop('type'))
-      layout = ka.pop('layout',{})
-      w = w(value=e.value,layout=ipywidgets.Layout(**ChainMap(layout,self.widget_layout)),**ka)
+      layout = ChainMap(ka.pop('layout',{}),self.widget_layout)
+      w = w(value=e.value,layout=ipywidgets.Layout(**layout),**ka)
       hb = ipywidgets.Button(icon='fa-undo',tooltip='Reset to default',layout=ipywidgets.Layout(**self.rbutton_layout))
       hb.on_click(lambda but,w=w,x=e.value: updw(w,x))
       lb = ipywidgets.HTML('<span title="{}">{}</span>'.format(e.helper[0],e.name),layout=ipywidgets.Layout(**self.label_layout))
@@ -356,7 +356,7 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
 Updates any of: the list of prolog widgets, the list of buttons and the list of epilog widgets. These widgets are put around the argument widgets. This implementations only adds a reset button. Subclasses can refine that behaviour.
     """
 #--------------------------------------------------------------------------------------------------
-    buttons.append(self.make_widget_reset_button(self.initial,icon='fa-undo',description='reset'))
+    buttons.append(self.make_widget_reset_button(self.initial,icon='fa-undo',description='reset',layout=dict(width='1.8cm')))
 #--------------------------------------------------------------------------------------------------
   def make_widget_reset_button(self,data,**ka):
 #--------------------------------------------------------------------------------------------------
@@ -365,8 +365,8 @@ Updates any of: the list of prolog widgets, the list of buttons and the list of 
     def click(b):
       for k,w in self.widget.pconf.items():
         if k in data: w.value = data[k]
-    layout = ka.pop('layout',{})
-    b = ipywidgets.Button(layout=ipywidgets.Layout(**ChainMap(layout,self.button_layout)),**ka)
+    layout = ChainMap(ka.pop('layout',{}),self.button_layout)
+    b = ipywidgets.Button(layout=ipywidgets.Layout(**layout),**ka)
     b.on_click(click)
     return b
 
@@ -657,16 +657,16 @@ class ipytoolbar:
 A simple utility to build a toolbar of buttons in IPython. Keyword arguments in the toolbar constructor are used as default values for all the buttons created. To create a new button, use method :meth:`add` with one positional argument: *callback* (a callable with no argument to invoke when the action is activated). If keyword arguments are present, they are passed to the button constructor. The button widget is returned. Method :meth:`display` displays the toolbar. The toolbar widget is available as attribute :attr:`widget`.
   """
 #==================================================================================================
-  blayout = dict(padding='0cm')
+  button_layout = dict(padding='0cm')
   def __init__(self,**ka):
     import ipywidgets
     from collections import ChainMap
     from IPython.display import display
     self.widget = widget = ipywidgets.HBox(children=())
-    blayout = ChainMap(ka,self.blayout)
+    button_layout = ChainMap(ka,self.button_layout)
     def add(callback,**ka):
-      s = ka.pop('layout',{})
-      b = ipywidgets.Button(layout=dict(**ChainMap(s,blayout)),**ka)
+      layout = ChainMap(ka.pop('layout',{}),button_layout)
+      b = ipywidgets.Button(layout=ipywidgets.Layout(**layout),**ka)
       b.on_click(lambda b: callback())
       widget.children += (b,)
       return b

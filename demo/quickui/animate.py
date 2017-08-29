@@ -12,12 +12,12 @@ matplotlibcfg()
 del matplotlibcfg
 
 #--------------------------------------------------------------------------------------------------
-def launch(syst=None,animate=None,axes=(lambda fig: fig.add_subplot(1,1,1)),**ka):
+def launch(syst=None,animate=None,axes=(lambda fig: fig.add_axes((0,0,1,1),aspect='equal')),**ka):
 #--------------------------------------------------------------------------------------------------
     from matplotlib.pyplot import figure, show
     from matplotlib.animation import FuncAnimation
-    fig = figure()
-    syst.display(axes(fig),animate=partial(FuncAnimation,**animate),**ka)
+    fig = figure(figsize=(9,9))
+    x = syst.display(axes(fig),animate=partial(FuncAnimation,**animate),**ka)
     show()
 
 #--------------------------------------------------------------------------------------------------
@@ -35,7 +35,7 @@ def launchui(cfg,axes=(lambda view: view.make_axes()),width=None):
       def exper(ka):
         timer.shutdown()
         with view.clearm(): main(view,**ka)
-      super(MyExperimentUI,self).setup(cfg(timer),exper)
+      super().setup(cfg(timer),exper)
 
   with quickui.startup():
     w = MyExperimentUI()
@@ -125,7 +125,7 @@ def config(x,**ka):
 class pdict (dict):
   class obj(object): pass
   def __init__(self,**kwd):
-    super(pdict,self).__init__((k,v) for k,v in kwd.items() if not isinstance(v,pdict))
+    super().__init__((k,v) for k,v in kwd.items() if not isinstance(v,pdict))
     self._ = config(self.obj(),**dict((k,v) for k,v in kwd.items() if isinstance(v,pdict)))
   def update(self,**d):
     if not d: return
@@ -134,4 +134,4 @@ class pdict (dict):
       except: pass
       else: v.update(**dd)
     if not d: return
-    super(pdict,self).update(**d)
+    super().update(**d)

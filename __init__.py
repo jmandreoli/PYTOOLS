@@ -18,15 +18,15 @@ A decorator to declare, in a class, a computable attribute which is computed onl
      @ondemand
      def att(self): print('Computing att...'); return self.u+1
    x = c(3); print(x.att)
-   #>>> Computing att...
-   #>>> 4
+   #> Computing att...
+   #> 4
    print(x.att)
-   #>>> 4
+   #> 4
    x.u = 6; print(x.att)
-   #>>> 4
+   #> 4
    del x.att; print(x.att)
-   #>>> Computing att...
-   #>>> 7
+   #> Computing att...
+   #> 7
   """
 #==================================================================================================
 
@@ -53,13 +53,13 @@ class odict:
 Objects of this class present an attribute oriented interface to an underlying proxy mapping object. Keys in the proxy are turned into attributes of the instance. If a positional argument is passed, it must be the only argument and is taken as proxy, otherwise the proxy is built from the keyword arguments. Example::
 
    x = odict(a=3,b=6); print(x.a)
-   #>>> 3
+   #> 3
    del x.a; print(x)
-   #>>> {'b':6}
+   #> {'b':6}
    x.b += 7; x.__proxy__
-   #>>> {'b':13}
+   #> {'b':13}
    x == x.__proxy__
-   #>>> True
+   #> True
   """
 #==================================================================================================
   __slot__ = '__proxy__',
@@ -353,16 +353,26 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
 #--------------------------------------------------------------------------------------------------
   def widget_context(self,header,footer,buttons):
     r"""
-Updates any of: the list of prolog widgets, the list of buttons and the list of epilog widgets. These widgets are put around the argument widgets. This implementations only adds a reset button. Subclasses can refine that behaviour.
+:param header,footer,buttons: lists of widgets to update
+:type header,footer,buttons: :class:`List[ipywidgets.Widget]`
+
+Updates any of: the list *header* of prolog widgets, the list *footer* of epilog widgets and the list *buttons* of buttons. These widgets are put around the argument widgets. This implementations only adds a reset button. Subclasses can refine that behaviour.
     """
 #--------------------------------------------------------------------------------------------------
     buttons.append(self.make_widget_reset_button(self.initial,icon='fa-undo',description='reset',layout=dict(width='1.8cm')))
 #--------------------------------------------------------------------------------------------------
   def make_widget_reset_button(self,data,**ka):
+    r"""
+:param data: specification of how to reset this :class:`Config`
+:type data: :class:`Dict[str,object]`
+:rtype: :class:`ipywidgets.Button`
+
+Returns a button widget which resets the arguments of :class:`Config` according to *data*. The keys in *data*must correspond to argument name, and the corresponding values are set as corresponding argument value. The keyword parameters *ka* are passed to the button constructor.
+    """
 #--------------------------------------------------------------------------------------------------
     from collections import ChainMap
     import ipywidgets
-    def click(b):
+    def click(but):
       for k,w in self.widget.pconf.items():
         if k in data: w.value = data[k]
     layout = ChainMap(ka.pop('layout',{}),self.button_layout)
@@ -387,10 +397,13 @@ Updates any of: the list of prolog widgets, the list of buttons and the list of 
 #--------------------------------------------------------------------------------------------------
   def cparser_context(self,header,footer):
     r"""
-Updates any of the two lists of strings *header* and *footer*. They are each concatenated and passed to the command line parser as prolog and epilog, respectively. This implemetation returns :const:`None` for both prolog and epilog. Subclasses can refine that behaviour.
+:param header,footer: lists of strings to update
+:type header,footer: :class:`List[str]`
+
+Updates any of the two lists of strings *header* and *footer*. They are each concatenated and passed to the command line parser as prolog and epilog, respectively. This implemetation does nothing. Subclasses can refine that behaviour.
     """
 #--------------------------------------------------------------------------------------------------
-    return None, None
+    pass
 
 class ConfigException (Exception): pass
 
@@ -403,7 +416,8 @@ Instances of this class have an ipython HTML representation based on :func:`html
   _html_limit = 50
   def _repr_html_(self):
     from lxml.etree import tostring
-    return tostring(html_incontext(self),encoding='unicode').replace('&gt;','>')
+    # should not need to replace &gt;
+    return tostring(html_incontext(self),encoding='str').replace('&gt;','>')
 
 #==================================================================================================
 class ARG (tuple):
@@ -439,10 +453,8 @@ def zipaxes(L,fig,sharex=False,sharey=False,**ka):
 :type L: :class:`Sequence[object]`
 :param fig: a figure
 :type fig: :class:`matplotlib.figure.Figure`
-:param sharex: whether all the axes share the same x-axis scale
-:param sharey: whether all the axes share the same y-axis scale
-:type sharex: :class:`bool`
-:type sharey: :class:`bool`
+:param sharex,sharey: whether all the axes share the same x-axis (resp. y-axis) scale
+:type sharex,sharey: :class:`bool`
 :param ka: passed to :meth:`add_subplot` generating new axes
 
 Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. The axes are spread more or less uniformly.
@@ -556,7 +568,7 @@ Symbolic expressions of this class are also callables, and trigger incarnation o
 #==================================================================================================
 def ipybrowse(D,start=1,pgsize=10):
   r"""
-:param D: a sequence object (must have :func:`len`\ )
+:param D: a sequence object (must have :func:`len`)
 :type D: :class:`Sequence`
 :param start: the index of the initial page
 :type start: :class:`int`
@@ -614,16 +626,32 @@ A simple utility to browse a byte file object, possibly while it expands. If *pe
         else: setpos(n)
         c = fsize
       sleep(period)
-  def setpos(n,nbefore=context[0],d=200*context[0],nafter=context[1]):
+  def setpos(n,nbefore=context[0]+1,nafter=context[1]+1):
+    lines = (nbefore+nafter-1)*[b'']
+    ncurrent = nbefore
+    d = 1000*nbefore
     m = n-d
     if m<0: m,d = 0,n
     file.seek(m)
-    x = file.read(d)
-    y = x.rsplit(b'\n',nbefore)
-    if len(y)>nbefore: x = b'\n'.join(y[1:])
+    x = file.read(d).rsplit(b'\n',nbefore)
+    lines[ncurrent] += b'\n'.join(x[-1:])
+    x = x[-nbefore:-1]
+    lines[ncurrent-1-len(x):ncurrent-1] = x
+    d = 1000*nafter
     file.seek(n)
-    x += b''.join(file.readline() for i in range(nafter))
-    wwin.value = x.decode()
+    x = file.read(d).split(b'\n',nafter)
+    lines[ncurrent] += b'\n'.join(x[:1])
+    x = x[1:nafter]
+    lines[ncurrent+1:ncurrent+1+len(x)] = x
+    xbefore,xcurrent,xafter = (b'\n'.join(lines[z]).decode().replace('<','&lt;').replace('>','&gt;') for z in (slice(None,ncurrent),slice(ncurrent,ncurrent+1),slice(ncurrent+1,None)))
+    wwin.value = '<div style="white-space: pre; font-family: monospace; line-height:130%">{}<span style="background-color: gray; color: white; border: thin solid gray;">{}</span>\n{}</div>'.format(xbefore,xcurrent,xafter)
+  def toend():
+    if wctrl.value != fsize: wctrl.value = fsize
+  def close():
+    nonlocal period
+    period = 0.
+    file.close()
+    w.close()
   if isinstance(path,str): path = Path(path)
   else: assert isinstance(path,Path)
   file = path.open('rb')
@@ -637,18 +665,18 @@ A simple utility to browse a byte file object, possibly while it expands. If *pe
     if start<0:
       start += fsize
       if start<0: start = 0
-  wwin = ipywidgets.Textarea(rows=context[0]+context[1],layout=ka)
+  ka.setdefault('width','15cm')
+  ka.setdefault('border','thin solid black')
+  wwin = ipywidgets.HTML(layout=dict(overflow_x='auto',overflow_y='hidden',**ka))
   wctrl = ipywidgets.IntSlider(min=0,max=fsize,step=step,value=start,layout=dict(width=wwin.layout.width))
+  wtoend = ipywidgets.Button(icon='fa-angle-double-right',tooltip='Jump to end of file',layout=dict(width='.5cm',padding='0cm'))
+  wclose = ipywidgets.Button(icon='fa-close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
+  w = ipywidgets.VBox(children=(ipywidgets.HBox(children=(wctrl,wtoend,wclose)),wwin))
   wctrl.observe((lambda c: setpos(c.new)),'value')
+  wclose.on_click(lambda b: close())
+  wtoend.on_click(lambda b: toend())
   setpos(start)
   if period: Thread(target=track,daemon=True).start()
-  w = ipywidgets.VBox(children=(wctrl,wwin))
-  def close(wclose=w.close):
-    nonlocal period
-    period = 0.
-    file.close()
-    wclose()
-  w.close = close
   return w
 
 #==================================================================================================
@@ -1169,16 +1197,16 @@ Example of use (assuming :func:`sessionmaker` as above has been imported)::
    with mysession() as s: # first session, define two entries
      jack = s.root.new('jack',45); joe = s.root.new('joe',29)
      print('Listing:',*s.root.values()) # s.root used as a mapping
-   #>>> Listing: Entry<1,jack> Entry<2,joe>
+   #> Listing: Entry<1,jack> Entry<2,joe>
 
    with mysession() as s: # second session, possibly on another process (if not memory db)
      jack = s.root.pop(1) # remove jack (directly from mapping)
      print('Deleted: {}'.format(jack),'; Listing',*s.root.values())
-   #>>> Deleted: Entry<1,jack> ; Listing: Entry<2,joe>
+   #> Deleted: Entry<1,jack> ; Listing: Entry<2,joe>
 
    with mysession() as s: # But of course direct sqlalchemy operations are available
      for x in s.query(Entry.name).filter(Entry.age>25): print(*x)
-   #>>> joe
+   #> joe
   """
 #==================================================================================================
 
@@ -1322,7 +1350,7 @@ def size_fmt(size,binary=True,precision=4,suffix='B'):
 Returns the representation of *size* with IEC prefix. Each prefix is *K* times the previous one for some constant *K* which depends on the convention: *K*\ =1024 with the binary convention (marked with an ``i`` after the prefix); *K*\ =1000 with the decimal convention. Example::
 
    print(size_fmt(2**30), size_fmt(5300), size_fmt(5300,binary=False), size_fmt(42897.3,binary=False,suffix='m')
-   #>>> 1GiB 5.176KiB 5.3KB 42.9Km
+   #> 1GiB 5.176KiB 5.3KB 42.9Km
   """
 #==================================================================================================
   thr,mark = (1024.,'i') if binary else (1000.,'')
@@ -1345,7 +1373,7 @@ def time_fmt(time,precision=2):
 Returns the representation of *time* in one of days,hours,minutes,seconds (depending on magnitude). Example::
 
    print(time_fmt(100000,4),time_fmt(4238.45),time_fmt(5.35,0))
-   #>>> 1.1574day 1.18hr 5sec
+   #> 1.1574day 1.18hr 5sec
   """
 #==================================================================================================
   fmt = '{{:.{}f}}'.format(precision).format

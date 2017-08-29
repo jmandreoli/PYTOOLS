@@ -85,7 +85,7 @@ Attribute:
 
 .. attribute:: configstylesheet
 
-   Stylesheet specification to apply to the configuration tab.
+   Stylesheet specification to apply to the configuration tab
 
 Methods:
   """
@@ -186,7 +186,12 @@ Methods:
 
   def setup(self,c0,exper):
     r"""
-Completes the initialisation of *self*, using configurator *c0* and one-input, one-output experiment function *exper*. At the end of :meth:`__init__`, :meth:`setup` is invoked with no argument. Subclasses must override method :meth:`setup` with no argument to make it invoke this method :meth:`setup` with the appropriate arguments.
+:param c0: A configurator to use in this setup 
+:type c0: :class:`Configurator`
+:param exper: Experiment function
+:type exper: :class:`Callable[[object],None]`
+
+Completes the initialisation of *self*, using configurator *c0* and experiment function *exper*. At the end of :meth:`__init__`, :meth:`setup` is invoked with no argument. Subclasses must override method :meth:`setup` with no argument to make it invoke this method :meth:`setup` with the appropriate arguments.
     """
     assert self.exper is None
     self.navig = [c0]
@@ -264,7 +269,8 @@ class EmptyConfigurator (Configurator):
   r"""
 An instance of this class, when called, always returns its initial value, which is immutable.
 
-:param v: initial value of the configurator.
+:param v: initial value of the configurator
+:type v: :class:`object`
   """
 #--------------------------------------------------------------------------------------------------
 
@@ -301,7 +307,7 @@ class BaseConfigurator (NonEmptyConfigurator):
   r"""
 An instance of this class, when called, returns the value held by an editor widget, such as instances of :class:`EditWidget`.
 
-:param w: editor widget.
+:param w: editor widget
 :type w: :class:`QtWidget.Widget`
   """
 #--------------------------------------------------------------------------------------------------
@@ -327,9 +333,9 @@ class CompoundConfigurator (NonEmptyConfigurator):
   r"""
 A compound configurator merges several labeled child configurators (offspring).
 
-:param multi: whether multiple child configurators can be active simultaneously.
+:param multi: whether multiple child configurators can be active simultaneously
 :type multi: :class:`bool`
-:param proc: how to merge the results of the execution of the active children.
+:param proc: how to merge the results of the execution of the active children
 :type proc: :class:`Callable[[Iterable[Tuple[str,object]]],object]`
 
 If *multi* is :const:`None`, all child configurators are active. If *multi* is not :const:`None`, some labels may be selectable to activate/deactivate the corresponding child.
@@ -407,9 +413,9 @@ Methods:
     r"""
 Adds a child configurator *c* to *self*.
 
-:param anchor: whether the child should be anchored.
+:param anchor: whether the child should be anchored
 :type anchor: :class:`bool`
-:param sel: whether the label should be initially selected.
+:param sel: whether the label should be initially selected
 :type sel: :class:`bool`
 :param accept: immediately invoked with *self*, *label*, *c* as input
 :type accept: :class:`Callable[[Configurator,str,Configurator],None]`
@@ -470,8 +476,7 @@ Returns compound configurator *c*, modified by the *offspring* specification.
 
 :param c: a configurator
 :type c: :class:`CompoundConfigurator`
-:param offspring: a specification
-:type offspring: :class:`Tuple[Tuple[str,Dict[str,object],Configurator],...]`
+:param offspring: a specification (see below)
 
 The offspring specification is a tuple of tuples, each consisting of the following components:
 
@@ -497,19 +502,19 @@ Attributes:
 
 .. attribute:: valueChanged
 
-   A signal triggered when the edited value is changed, either due to the editor activity or to external assignment.
+   A signal triggered when the edited value is changed, either due to the editor activity or to external assignment
 
 .. attribute:: ready
 
-   A signal triggered when the editor is in a coherent state. Available only where the editor supports transient incoherent states.
+   A signal triggered when the editor is in a coherent state. Available only where the editor supports transient incoherent states
 
 .. attribute:: value
 
-   The edited value.
+   The edited value
 
 .. attribute:: position
 
-   Should only be used in a slot associated with signal :attr:`ready`. Holds the current edited value.
+   Should only be used in a slot associated with signal :attr:`ready`. Holds the current edited value
 
 Methods:
 
@@ -533,21 +538,26 @@ class ObjectEditWidget (EditWidget):
   r"""
 An instance of this classes edits an arbitrary value which can be parsed from a single line string.
 
-:param initv: initial value.
-:param transf: mapping from string space to value space (parser).
-:param itransf: mapping from value space to string space (generator).
-:param parent: parent widget.
-:param fmt: mapping from value space to informal strings (viewer).
+:param initv: initial value
+:type initv: :class:`Tval`
+:param transf: mapping from string space to value space (parser)
+:type transf: :class:`Callable[[str],Tval]`
+:param itransf: mapping from value space to string space (generator)
+:type itransf: :class:`Callable[[Tval],str]`
+:param parent: parent widget
+:type parent: :class:`QtWidgets.QWidget`
+:param fmt: mapping from value space to informal strings (viewer)
+:type fmt: :class:`Callable[[Tval],str]`
 
 The widget consists of a viewer widget of class :class:`QtWidgets.QLabel` and an editor widget of class :class:`QtWidgets.QLineEdit`. The editor widget is hidden by default, and becomes visible when the viewer widget is clicked. Signal :attr:`ready` is emitted when the return key is hit in the editor.
 
 .. attribute:: editor
 
-   The editor widget.
+   The editor widget
 
 .. attribute:: viewer
 
-   The viewer widget.
+   The viewer widget
   """
 #--------------------------------------------------------------------------------------------------
 
@@ -619,24 +629,32 @@ class ScalarEditWidget (EditWidget):
   r"""
 An instance of this class edits an object in a value space which is iso-morphic to an integer interval (index space).
 
-:param vmin: lower bound, value space.
-:param vmax: upper bound, value space.
-:param transf: mapping from index space to value space.
-:param itransf: mapping from value space to index space (inverse of transf).
-:param itransfd: mapping from value-delta space to index-delta space.
-:param parent: parent widget.
-:param vtype: coercing mapping into value space.
-:param fmt: mapping from value space to informal strings (viewer).
+:param vmin: lower bound
+:type vmin: :class:`object`
+:param vmax: upper bound
+:type vmax: :class:`object`
+:param transf: mapping from index to value
+:type transf: :class:`Callable[[Tind],Tval]`
+:param itransf: mapping from value to index (inverse of transf)
+:type itransf: :class:`Callable[[Tval],Tind]`
+:param itransfd: mapping from value-delta to index-delta
+:type itransfd: :class:`Callable[[Tvald],Tindd]`
+:param parent: parent widget
+:type parent: :class:`QtWidgets.QWidget`
+:param vtype: coercing mapping from arbitrary objects into value
+:type vtype: :class:`Callable[[object],Tval]`
+:param fmt: mapping from value space to informal strings (viewer)
+:type fmt: :class:`Callable[[Tval],str]`
 
 The ordering of values is assumed to follow the ordering of indices. The widget consists of a viewer widget of class :class:`QtWidgets.QLabel` and an editor widget of class :class:`QtWidgets.QSlider`. Signal :attr:`ready` is emitted  each time the slider is on one of its degrees.
 
 .. attribute:: editor
 
-   The editor widget.
+   The editor widget
 
 .. attribute:: viewer
 
-   The viewer widget.
+   The viewer widget
   """
 #--------------------------------------------------------------------------------------------------
 
@@ -644,8 +662,7 @@ The ordering of values is assumed to follow the ordering of indices. The widget 
   ready = QtCore.Signal(int)
 
   def __init__(self,vmin,vmax,transf,itransf,itransfd,parent=None,vtype=None,fmt=str,tooltip=None):
-    vmin = vtype(vmin)
-    vmax = vtype(vmax)
+    vmin,vmax = vtype(vmin),vtype(vmax)
     assert vmax > vmin
     super().__init__(parent)
     self.minimum = vmin
@@ -699,26 +716,31 @@ The ordering of values is assumed to follow the ordering of indices. The widget 
 #--------------------------------------------------------------------------------------------------
 class LinScalarEditWidget (ScalarEditWidget):
   r"""
-The value space is a linear scaled grid in an interval of whole or real numbers. 
+The value space is a linear scaled grid in an interval of whole or real numbers.
 
-:param step: additive size of grid step, starting at *vmin*.
-:param nval: number of grid steps (exclusive with *step* ).
+:param step: additive size of grid step
+:type step: :class:`Tvald`
+:param nval: number of grid steps
+:type nval: :class:`int`
+
+Only one of *step*, *nval* can be specified. If both are :const:`None`, then *step* defaults to 1.
   """
 #--------------------------------------------------------------------------------------------------
 
-  def __init__(self,step=None,vmin=0,vmax=1000,nval=1000,vtype=None,**ka):
+  def __init__(self,vmin=0,vmax=1000,*,step=None,nval=None,vtype=None,**ka):
     from math import floor
-    if step is None:
-      assert isinstance(nval,int) and nval>1
-      tt = 'n={}'.format(nval)
-      step = (vmax-vmin)/nval
-      if step == 0: step = vtype(1)
-    else:
+    if nval is None:
+      step = vtype(1 if step is None else step)
       tt = 's={}'.format(step)
-      step = vtype(step)
+    else:
+      assert step is None
+      tt = 'n={}'.format(nval)
+      step = vtype((vmax-vmin)/nval)
+      if step == 0: step = vtype(1)
+    vmin,vmax = vtype(vmin),vtype(vmax)
     transf = lambda k: vmin+k*step
     itransf = lambda v,vref=vmin: int(floor(.5+(v-vref)/step))
-    itransfd = lambda v: itransf(v,vtype(0))
+    itransfd = lambda v,vref=vtype(0): itransf(v,vref)
     super().__init__(vmin,vmax,transf,itransf,itransfd,vtype=vtype,tooltip=tt,**ka)
 
 #--------------------------------------------------------------------------------------------------
@@ -726,19 +748,24 @@ class LogScalarEditWidget (ScalarEditWidget):
   r"""
 The value space is a log scaled grid in an interval of real numbers. 
 
-:param mstep: multiplicative size of grid step, starting at *vmin*.
-:param nval: number of grid steps (exclusive with *mstep* ).
+:param mstep: multiplicative size of grid step (must be greater than 1.)
+:type mstep: :class:`float`
+:param nval: number of grid steps
+:type nval: :class:`int`
+
+Only one of *mstep*, *nval* can be specified. If both are :const:`None`, then *mstep* defaults to 2.
   """
 #--------------------------------------------------------------------------------------------------
 
-  def __init__(self,vmin=.01,vmax=100,mstep=2,nval=None,fmt='{0:.2e}'.format,**ka):
+  def __init__(self,vmin=.01,vmax=100,*,mstep=None,nval=None,fmt='{0:.2e}'.format,**ka):
     from math import log,floor
     if nval is None:
-      assert mstep > 1.
+      if mstep is None: mstep = 2.
+      else: assert mstep > 1.
       tt = 's=*{}'.format(mstep)
       lstep=log(mstep)
     else:
-      assert isinstance(nval,int) and nval>1
+      assert mstep is None and isinstance(nval,int) and nval>1
       tt = 'n=*{}'.format(nval)
       r = vmax/vmin
       lstep = log(r)/nval
@@ -753,11 +780,12 @@ class SetEditWidget (EditWidget):
   r"""
 An instance of this class edits a subset from an explicit set of string options. 
 
-:param options: list of options or option-tooltip pairs.
+:param options: list of options or option-tooltip pairs
 :type options: :class:`Iterable[Union[str,Tuple[str,str]]]`
-:param multi: if :const:`False`, one option at most is selected.
+:param multi: if :const:`False`, one option at most is selected
 :type multi: :class:`bool`
-:param parent: parent widget.
+:param parent: parent widget
+:type parent: :class:`QtWidgets.QWidget`
 
 The widget consists of one checkable widget of class :class:`QtWidgets.QPressButton` for each option. The edited value consists of the set of checked options. This editor does not support the :attr:`ready` signal.
   """
@@ -849,7 +877,8 @@ class BooleanEditWidget (EditWidget):
   r"""
 An instance of this class edits a Boolean flag. 
 
-:param parent: parent widget.
+:param parent: parent widget
+:type parent: :class:`QtWidgets.QWidget`
 
 The widget consists of a single widget of class :class:`QtWidgets.QCheckBox`. This editor does not support the :attr:`ready` signal.
   """
@@ -879,9 +908,12 @@ class FilenameEditWidget (EditWidget):
   r"""
 An instance of this class edits a file path.
 
-:param parent: parent widget.
+:param parent: parent widget
+:type parent: :class:`QtWidgets.QWidget`
+:param op: opening operation
+:type op: :class:`str`
 
-The widget consists of a viewer widget of class :class:`QtWidgets.QLabel`. This editor does not support the :attr:`ready` signal.
+The widget consists of a viewer widget of class :class:`QtWidgets.QLabel`. This editor does not support the :attr:`ready` signal. The *op* argument must be ``open`` or ``save``.
   """
 #--------------------------------------------------------------------------------------------------
 
@@ -916,22 +948,25 @@ class Animator (QtCore.QObject):
   r"""
 An instance of this class is used to create animations.
 
+:param parent: parent widget
+:type parent: :class:`QtWidgets.QWidget`
+
 Attributes:
 
 .. attribute:: state
 
-   Can be any object. Each animation step can either update it inline or return a new object.
+   Can be any object; each animation step can either update it inline or return a new object
 
 .. attribute:: paused
 
-   A boolean holding whether the animator is paused.
+   A boolean holding whether the animator is paused
 
 .. attribute:: statusChanged
 
    A signal, emitted when the animator changes status, with argument either
    :const:`0` (not running),
    :const:`1` (running, not paused),
-   :const:`-1` (running, paused),
+   :const:`-1` (running, paused)
 
 Methods:
   """
@@ -960,12 +995,13 @@ Methods:
     r"""
 Launches the animation.
 
-:param t: time between steps in ms.
+:param t: time between steps in ms
 :type t: :class:`int`
-:param f: state transformer executed at each step (input=oldstate; output=newstate).
-:type f: 1-input, 1-output callable
-:param s: initial :attr:`state`.
-:param paused: initial :attr:`paused`.
+:param f: state transformer executed at each step
+:type f: :class:`Callable[[Tstate],Tstate]`
+:param s: initial :attr:`state`
+:type s: :class:`Tstate`
+:param paused: initial :attr:`paused`
 :type paused: :class:`bool`
     """
     assert self.step is None
@@ -1018,11 +1054,11 @@ def figure(x,withtoolbar=True,**ka):
   r"""
 Creates and returns a matplotlib figure.
 
-:parameter x: a layout or a widget.
-:type x: :class:`QtWidgets.QBoxLayout`\|\ :class:`QtWidgets.QWidget`
-:parameter withtoolbar: whether a toolbar should also be added to the layout.
+:parameter x: a layout or a widget
+:type x: :class:`Union[QtWidgets.QBoxLayout,QtWidgets.QWidget]`
+:parameter withtoolbar: whether a toolbar should also be added to the layout
 :type withtoolbar: :class:`bool`
-:parameter ka: passed as keyword arguments to the figure constructor.
+:parameter ka: passed as keyword arguments to the figure constructor
 
 The canvas widget of the created figure is added to *layout*, together with a matplotlib toolbar if *withtoolbar* is :const:`True`. *layout* is either *x* if that is a :class:`QtWidgets.QBoxLayout` instance or a :class:`QtWidgets.QVBoxLayout` instance associated to *x* if *x* is a :class:`QtWidgets.QWidget` instance.
   """
@@ -1095,7 +1131,7 @@ Adds a new tab to a tabulated UI, holding a mplext cell.
     """
     assert isinstance(e,BaseTabUI) and isinstance(label,str)
     from .mplext import Cell
-    return Cell.new(figure(e.addtab(label)))
+    return Cell.create(figure(e.addtab(label)))
 
   @staticmethod
   def i(c1,lbl,c2):
@@ -1124,10 +1160,10 @@ When passed the result of a compound configurator, returns the list of values (d
     r"""
 Returns a compound configurator.
 
-:param D: stored as attribute :attr:`keywords` (see :meth:`i`).
+:param D: stored as attribute :attr:`keywords` (see :meth:`i`)
 :type D: :class:`Dict`
-:param f: stored as attribute :attr:`proc` (see the :class:`CompoundConfigurator` constructor).
-:type f: callable
+:param f: stored as attribute :attr:`proc` (see the :class:`CompoundConfigurator` constructor)
+:type f: :class:`Callable[[Iterable[Tuple[str,object]]],object]`
     """
     assert callable(f)
     c = CompoundConfigurator(proc=f,**ka)
@@ -1139,10 +1175,10 @@ Returns a compound configurator.
     r"""
 Returns a compound configurator.
 
-:param f: a transfer function.
-:type f: callable
+:param f: a transfer function
+:type f: :class:`Callable`
 
-* Attribute :attr:`proc` is set to the function which converts its argument to a dictionary *D* and returns *f*\ (** *D*\ ) .
+* Attribute :attr:`proc` is set to the function which converts its argument to a dictionary *D* and returns *f*(** *D*).
 * Attribute :attr:`keyword` is set to the dictionary of default values of *f* (which can be a function or obtained by :func:`functools.partial`).
 * Child configurators must be added separately.
     """
@@ -1156,8 +1192,8 @@ Returns a compound configurator.
     r"""
 Returns a compound configurator.
 
-:param f: a transfer function.
-:type f: callable
+:param f: a transfer function
+:type f: :class:`Callable`
 
 * Attribute :attr:`proc` is set to the function which converts its argument to a dictionary *D* and returns the closure (obtained by :func:`functools.partial`) of *f* by *D*.
 * Attribute :attr:`keyword` is set to the dictionary of default values of *f* (which can be a function or obtained by :func:`functools.partial`).
@@ -1184,4 +1220,3 @@ The cookbook also exposes the following functions which returns instances of :cl
     Boolean = make(BooleanEditWidget)
     Filename = make(FilenameEditWidget)
     del make
-

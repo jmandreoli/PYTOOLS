@@ -50,7 +50,12 @@ A decorator to declare, in a class, a computable attribute which is computed onl
 #==================================================================================================
 class odict:
   r"""
-Objects of this class present an attribute oriented interface to an underlying proxy mapping object. Keys in the proxy are turned into attributes of the instance. If a positional argument is passed, it must be the only argument and is taken as proxy, otherwise the proxy is built from the keyword arguments. Example::
+Objects of this class present an attribute oriented interface to an underlying proxy mapping object.
+
+:param __proxy__: a mapping object used as proxy
+:type __proxy__: :class:`Dict[str,object]`
+
+Keys in the proxy are turned into attributes of this instance. If *__proxy__* is :const:`None`, the proxy is a new empty dictionary, otherwise *__proxy__* must be a mapping object, and *__proxy__* (or its proxy if it is itself of class :class:`odict`) is taken as proxy. The proxy is first updated with the keyword arguments *ka*. Example::
 
    x = odict(a=3,b=6); print(x.a)
    #> 3
@@ -63,25 +68,24 @@ Objects of this class present an attribute oriented interface to an underlying p
   """
 #==================================================================================================
   __slot__ = '__proxy__',
-  def __init__(self,*a,**ka):
-    if a:
-      n = len(a)
-      if n>1: raise TypeError('expected at most 1 positional argument, got {}'.format(n))
-      if ka: raise TypeError('expected no keyword arguments, got {}'.format(len(ka)))
-      r = a[0]
-      while isinstance(r,odict): r = r.__proxy__
+  def __init__(self,__proxy__=None,**ka):
+    r = __proxy__
+    if r is None: r = dict(ka)
+    else:
+      if isinstance(r,odict): r = r.__proxy__
       assert isinstance(r,collections.abc.Mapping)
-    else: r = dict(**ka)
-    object.__setattr__(self,'__proxy__',r)
+      if ka: r.update(ka)
+    super().__setattr__('__proxy__',r)
   def __eq__(self,other):
     return self.__proxy__ == (other.__proxy__ if isinstance(other,odict) else other)
   def __ne__(self,other):
     return self.__proxy__ != (other.__proxy__ if isinstance(other,odict) else other)
+  def __hash__(self): return hash(self.__proxy__)
   def __getattr__(self,a):
     try: return self.__proxy__[a]
     except KeyError: raise AttributeError(a) from None
   def __setattr__(self,a,v):
-    if a=='__proxy__': raise AttributeError(a)
+    if a.startswith('__'): raise AttributeError(a)
     self.__proxy__[a] = v
   def __delattr__(self,a):
     try: del self.__proxy__[a]
@@ -152,18 +156,19 @@ class Config (collections.abc.Mapping):
   r"""
 Instances of this class represent configurations which can be consistently setup either from ipython widgets or from command line arguments.
 
-:param conf: the specification of each argument passed to the :meth:`add_argument` method
-:param initv: an argument assignment applied at initialisation
+:param conf: specification of the items of this configuration
+:param initv: an assignment of the items of this configuration, applied at initialisation
+
+Each element in *conf* specifies an item as a pair :class:`Tuple[Tuple[object,...],Dict[str,object]]`, specifying the positional and keyword arguments to be passed to method :meth:`add_argument`.
   """
 #==================================================================================================
   widget_layout = dict(width='15cm')
   label_layout = dict(width='2cm',padding='0cm',align_self='flex-start')
-  rbutton_layout = dict(width='0.5cm',padding='0cm')
   button_layout = dict(padding='0cm')
+  rbutton_layout = dict(width='0.5cm',padding='0cm')
   class Pconf:
     __slots__ = 'name','value','helper','widget','cparser'
-    def __init__(s,*a):
-      for k,v in zip(s.__slots__,a): setattr(s,k,v)
+    def __init__(s,*a): s.name,s.value,s.helper,s.widget,s.cparser = a
     def __repr__(s): return 'Pconf<{}>'.format(','.join('{}={}'.format(k,repr(getattr(s,k))) for k in s.__slots__))
 
 #--------------------------------------------------------------------------------------------------
@@ -184,7 +189,7 @@ Instances of this class represent configurations which can be consistently setup
 #--------------------------------------------------------------------------------------------------
   def fromipyui(self):
     r"""
-Instantiates the arguments through a ipython user interface.
+Instantiates the items through a ipython user interface.
     """
 #--------------------------------------------------------------------------------------------------
     from IPython.display import display
@@ -192,7 +197,7 @@ Instantiates the arguments through a ipython user interface.
 #--------------------------------------------------------------------------------------------------
   def fromcmdline(self,args):
     r"""
-Instantiates the arguments by parsing *args*.
+Instantiates the items by parsing *args*.
     """
 #--------------------------------------------------------------------------------------------------
     self.cparser.parse_args(args,odict(self))
@@ -200,7 +205,7 @@ Instantiates the arguments by parsing *args*.
 #--------------------------------------------------------------------------------------------------
   def reset(self,**ka):
     r"""
-Reinitialises the argument values.
+Reinitialises the item values.
     """
 #--------------------------------------------------------------------------------------------------
     for k in ka:
@@ -211,28 +216,28 @@ Reinitialises the argument values.
 #--------------------------------------------------------------------------------------------------
   def add_argument(self,name,value,cat=None,helper='',widget=None,cparser=None):
     r"""
-:param name: name of the argument
+:param name: name of the item
 :type name: :class:`str`
-:param value: the initial value of the argument
+:param value: the initial value of the item
 :type value: :class:`object`
-:param cat: the category of the argument
-:type cat: :class:`Union[slice,Tuple[object,...],List[object],Dict[str,object]]`
-:param helper: the helper for the argument
+:param cat: the category of the item
+:type cat: :class:`Union[slice,Sequence[object],Dict[str,object]]`
+:param helper: the helper for the item
 :type helper: :class:`str`
-:param widget: the widget specification for the argument
+:param widget: the widget specification for the item
 :type widget: :class:`Union[str,Dict[str,object]]`
-:param cparser: the command line parser specification for the argument
+:param cparser: the command line parser specification for the item
 :type cparser: :class:`Union[str,Dict[str,object]]`
 
-* If *cat* is a :class:`slice`, the argument ranges over a subset of numbers.
+* If *cat* is a :class:`slice`, the item value ranges over a subset of numbers.
 
-  - If the ``stop`` attribute of *cat* is an integer, the target range is the set of integers between the values of *cat* attributes ``start`` (default 0)  and ``stop`` minus 1. The ``step`` attribute (default 1) only specifies a sampling step.
+  - If the ``stop`` attribute of *cat* is an integer, the target range is the set of integers between the values of *cat* attributes ``start`` (default 0)  and ``stop`` minus 1. The ``step`` attribute (default 1) specifies a sampling step.
   - If the ``stop`` attribute of *cat* is real, the target range is the set of reals between the values of *cat* attributes ``start`` (default 0) and ``stop``. The ``step`` attribute (default 100) specifies a sampling step, directly if it is a real or adjusted so as to obtain exactly that number of samples if it is an integer.
 
-* If *cat* is a :class:`Tuple[object,...]` or :class:`List[object]`, it is turned into a :class:`collections.OrderedDict` whose keys are the string values of its elements.
-* If *cat* is a :class:`Dict[str,object]` (which includes :class:`collections.OrderedDict`), the range is the set of values of *cat*. The keys are simply string names to denote these values. If the special key ``__multiple__`` is set to :const:`True`, it is deleted and the target range is in fact the set of tuples of the other values of *cat*.
+* If *cat* is a :class:`Sequence[object]`, it is turned into a :class:`collections.OrderedDict` whose keys are the string values of its elements.
+* If *cat* is a :class:`Dict[str,object]` (which includes :class:`collections.OrderedDict` as obtained above), the range is the set of values of *cat*. The keys are simply string names to denote these values. If the special key ``__multiple__`` is set to :const:`True`, it is deleted and the target range is in fact the set of tuples of the other values of *cat*.
 
-*helper* can contain patterns of the form ``{widget-help|cparser-help}`` so the helper has a different form in the two contexts.
+*helper* can contain patterns of the form ``{widget-version|cparser-version}`` so the helper can have a different version in the two contexts.
 
 If *widget* is :const:`None`, it is replaced by an empty dict, and if it is a string, it is replaced with a dict with a single key ``type`` assigned that string. The ``type`` key, if present, must be the name of a widget constructor in module :mod:`ipywidgets` and must be compatible with *cat* and *value*. If not present, a default value is guessed from *cat* and *value*. The other key-value pairs of *widget* are passed to the widget constructor as keyword arguments.
 
@@ -307,9 +312,10 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
       widget.update(min=start,max=stop,step=step)
       if cparser is not None:
         cparser.update(type=partial(checkbounds,typ=typ,vmin=start,vmax=stop,name=name))
-    elif isinstance(cat,(tuple,list,dict)):
-      if isinstance(cat,(tuple,list)): cat = OrderedDict((str(x),x) for x in cat)
-      else: cat = cat.copy()
+    else:
+      if isinstance(cat,collections.abc.Sequence): cat = OrderedDict((str(x),x) for x in cat)
+      elif isinstance(cat,collections.abc.Mapping): cat = OrderedDict(cat)
+      else: raise ConfigException('Invalid cat type',name)
       multiple = bool(cat.pop('__multiple__',False))
       set_widget_type(widget,*mult2widget[multiple])
       cvalues = tuple(cat.values())
@@ -320,7 +326,6 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
       if cparser is not None:
         cparser.update(type=partial(checkchoice,options=cat,name=name))
         if multiple: cparser.update(nargs='*')
-    else: raise ConfigException('Unrecognised cat',name)
     self.pconf[name] = self.Pconf(name,value,helper,widget,cparser)
     self.initial[name] = value
 
@@ -338,11 +343,13 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
       w = getattr(ipywidgets,ka.pop('type'))
       layout = ChainMap(ka.pop('layout',{}),self.widget_layout)
       w = w(value=e.value,layout=ipywidgets.Layout(**layout),**ka)
-      hb = ipywidgets.Button(icon='fa-undo',tooltip='Reset to default',layout=ipywidgets.Layout(**self.rbutton_layout))
-      hb.on_click(lambda but,w=w,x=e.value: updw(w,x))
-      lb = ipywidgets.HTML('<span title="{}">{}</span>'.format(e.helper[0],e.name),layout=ipywidgets.Layout(**self.label_layout))
+      rbutton = ipywidgets.Button(icon='fa-undo',tooltip='Reset to default',layout=rbutton_layout)
+      label = ipywidgets.HTML('<span title="{}">{}</span>'.format(e.helper[0],e.name),layout=label_layout)
+      rbutton.on_click(lambda but,w=w,x=e.value: updw(w,x))
       w.observe((lambda evt,e=e,w=w: upde(e,w)),'value')
-      return (e.name,w),ipywidgets.HBox(children=(hb,lb,w))
+      return (e.name,w),ipywidgets.HBox(children=(rbutton,label,w))
+    rbutton_layout = ipywidgets.Layout(**self.rbutton_layout)
+    label_layout = ipywidgets.Layout(**self.label_layout)
     W,L = zip(*(row(e) for e in self.pconf.values()))
     header,footer,buttons = [],[],[]
     self.widget_context(header,footer,buttons)
@@ -356,7 +363,7 @@ If *cparser* is :const:`None`, the argument is ignored by the command line parse
 :param header,footer,buttons: lists of widgets to update
 :type header,footer,buttons: :class:`List[ipywidgets.Widget]`
 
-Updates any of: the list *header* of prolog widgets, the list *footer* of epilog widgets and the list *buttons* of buttons. These widgets are put around the argument widgets. This implementations only adds a reset button. Subclasses can refine that behaviour.
+Updates any of: the list *header* of prolog widgets, the list *footer* of epilog widgets and the list *buttons* of buttons. These widgets are put around the item widgets. This implementations only adds a reset button. Subclasses can refine that behaviour.
     """
 #--------------------------------------------------------------------------------------------------
     buttons.append(self.make_widget_reset_button(self.initial,icon='fa-undo',description='reset',layout=dict(width='1.8cm')))
@@ -367,7 +374,7 @@ Updates any of: the list *header* of prolog widgets, the list *footer* of epilog
 :type data: :class:`Dict[str,object]`
 :rtype: :class:`ipywidgets.Button`
 
-Returns a button widget which resets the arguments of :class:`Config` according to *data*. The keys in *data*must correspond to argument name, and the corresponding values are set as corresponding argument value. The keyword parameters *ka* are passed to the button constructor.
+Returns a button widget which resets the values of the items of this :class:`Config` according to *data*. The keys in *data* must correspond to items name, and the corresponding values are set as corresponding item value. The keyword parameters *ka* are passed to the button constructor.
     """
 #--------------------------------------------------------------------------------------------------
     from collections import ChainMap
@@ -568,7 +575,7 @@ Symbolic expressions of this class are also callables, and trigger incarnation o
 #==================================================================================================
 def ipybrowse(D,start=1,pgsize=10):
   r"""
-:param D: a sequence object (must have :func:`len`)
+:param D: a sequence object
 :type D: :class:`Sequence`
 :param start: the index of the initial page
 :type start: :class:`int`
@@ -647,6 +654,8 @@ A simple utility to browse a byte file object, possibly while it expands. If *pe
     wwin.value = '<div style="white-space: pre; font-family: monospace; line-height:130%">{}<span style="background-color: gray; color: white; border: thin solid gray;">{}</span>\n{}</div>'.format(xbefore,xcurrent,xafter)
   def toend():
     if wctrl.value != fsize: wctrl.value = fsize
+  def tobeg():
+    if wctrl.value != 0: wctrl.value = 0
   def close():
     nonlocal period
     period = 0.
@@ -670,10 +679,12 @@ A simple utility to browse a byte file object, possibly while it expands. If *pe
   wwin = ipywidgets.HTML(layout=dict(overflow_x='auto',overflow_y='hidden',**ka))
   wctrl = ipywidgets.IntSlider(min=0,max=fsize,step=step,value=start,layout=dict(width=wwin.layout.width))
   wtoend = ipywidgets.Button(icon='fa-angle-double-right',tooltip='Jump to end of file',layout=dict(width='.5cm',padding='0cm'))
+  wtobeg = ipywidgets.Button(icon='fa-angle-double-left',tooltip='Jump to beginning of file',layout=dict(width='.5cm',padding='0cm'))
   wclose = ipywidgets.Button(icon='fa-close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
-  w = ipywidgets.VBox(children=(ipywidgets.HBox(children=(wctrl,wtoend,wclose)),wwin))
+  w = ipywidgets.VBox(children=(ipywidgets.HBox(children=(wctrl,wtobeg,wtoend,wclose)),wwin))
   wctrl.observe((lambda c: setpos(c.new)),'value')
   wclose.on_click(lambda b: close())
+  wtobeg.on_click(lambda b: tobeg())
   wtoend.on_click(lambda b: toend())
   setpos(start)
   if period: Thread(target=track,daemon=True).start()
@@ -705,7 +716,7 @@ A simple utility to build a toolbar of buttons in IPython. Keyword arguments in 
 def exploredb(spec):
   r"""
 :param spec: an sqlalchemy url or engine or metadata structure, defining the database to explore
-:type spec: :class:`Union[sqlalchemy.engine.Engine,str,sqlalchemy.sql.schema.MetaData]`
+:type spec: :class:`Union[str,sqlalchemy.engine.Engine,sqlalchemy.sql.schema.MetaData]`
 
 Display an IPython widget for basic database exploration. If a metadata structure is specified, it must be bound to an existing engine and reflected.
   """
@@ -785,7 +796,7 @@ Display an IPython widget for basic database exploration. If a metadata structur
     woffset.value = 0
     wnsample.value = 5
     wscol.value = ()
-    wscol.options =  opts = scol_[wtable.value]
+    wscol.options = opts = scol_[wtable.value]
     wscol.value = scol[wtable.value]
     active = True
     wscol.rows = min(len(opts),20)
@@ -834,17 +845,17 @@ def html_incontext(x):
   r"""
 :param x: an arbitrary python object
 
-Returns an HTML object (etree as understood by package :mod:`lxml`) representing object *x*. The representation is by default simply the string representation of *x* (enclosed in a SPAN element), but can be customised if *x* supports method :meth:`as_html`.
+Returns an HTML object (etree as understood by package :mod:`lxml`) representing object *x*. The representation is by default simply the string representation of *x* (enclosed in a ``span`` element), but can be customised if *x* supports method :meth:`as_html`.
 
-Method :meth:`as_html` should only be defined for hashable objects. It takes as input a function *incontext* and returns the base HTML representation of the object. If invoked on a compound object, it should not recursively invoke method :meth:`html_incontext` nor :meth:`as_html` on its components to obtain their HTML representations, because that would produce representations of unmanageable size in case of recursions or repetitions (if two components share a common sub-component). Instead, the representation of a component object should be a "pointer" in the form of a string `?`\ *n* (within a SPAN element) where *n* is a unique reference number. The pointer for a component can be obtained by calling the argument function *incontext* with that object as argument. The scope of such pointers is the toplevel call of function :func:`html_incontext`, and two occurrences of equal objects will have the same pointer.
+Method :meth:`as_html` should only be defined for hashable objects. It takes as input a function *incontext* and returns the base HTML representation of the object. If invoked on a compound object, it should not recursively invoke method :meth:`html_incontext` nor :meth:`as_html` on its components to obtain their HTML representations, because that would produce representations of unmanageable size in case of recursions or repetitions (if two components share a common sub-component). Instead, the representation of a component object should be a "pointer" in the form of a string `?`\ *n* (within a ``span`` element) where *n* is a unique reference number. The pointer for a component can be obtained by calling the argument function *incontext* with that object as argument. The scope of such pointers is the toplevel call of function :func:`html_incontext`, and two occurrences of equal objects will have the same pointer.
 
-When pointers are created, the result of calling function :func:`html_incontext` on a object *x* is the base HTML representation of *x* including its pointers, followed by a TABLE mapping each pointer reference *n* to the base HTML representation of the reference object (possibly containing pointers itself, recursively). In the following example, the base HTML representation of a node in a graph is given by its label followed by the sequence of pointers to its successor nodes::
+The result of calling function :func:`html_incontext` on a compound object *x* is a ``table`` element whose head row is the base HTML representation of *x* (including its pointers), and whose body rows align each pointer reference *n* to the base HTML representation of the referenced object (possibly containing pointers itself, recursively). In the following example, the base HTML representation of a node in a graph is given by its label followed by the sequence of pointers to its successor nodes::
 
    class N: # class of nodes in a (possibly cyclic) directed graph
      def __init__(self,tag,*succ): self.tag,self.succ = tag,succ
      def as_html(self,incontext):
        from lxml.builder import E
-       return E.DIV(E.B(self.tag),'[|',*(y for x in self.succ for y in (incontext(x),'|')),']')
+       return E.div(E.b(self.tag),'[|',*(y for x in self.succ for y in (incontext(x),'|')),']')
    # Let's build a trellis DAG
    n = N('')
    na,nb,nc = N('a',n),N('b',n),N('c',n)
@@ -852,22 +863,24 @@ When pointers are created, the result of calling function :func:`html_incontext`
    nabc = N('abc',nab,nbc,nac)
    html_incontext(nabc)
 
-produces (up to some attributes)::
+produces (up to some attributes):
 
-   <TABLE>
-     <!-- THEAD: base HTML representation (with pointers) of the initial object -->
-     <THEAD><TR><TD colspan="2"> <DIV><B>abc</>[|<SPAN>?1</>|<SPAN>?5</>|<SPAN>?7</>|]</DIV> </TD></TR></THEAD>
-     <!-- TBODY: mapping each pointer to the base HTML representation of its reference -->
-     <TBODY>
-       <TR> <TH>?1</TH> <TD> <DIV><B>ab</>[|<SPAN>?2</>|<SPAN>?4</>|]</DIV> </TD> </TR>
-       <TR> <TH>?2</TH> <TD> <DIV><B>a</>[|<SPAN>?3</>|]</DIV> </TD> </TR>
-       <TR> <TH>?3</TH> <TD> <DIV><B></>[|]</DIV> </TD> </TR>
-       <TR> <TH>?4</TH> <TD> <DIV><B>b</>[|<SPAN>?3</>|]</DIV> </TD> </TR>
-       <TR> <TH>?5</TH> <TD> <DIV><B>bc</>[|<SPAN>?4</>|<SPAN>?6</>|]</DIV> </TD> </TR>
-       <TR> <TH>?6</TH> <TD> <DIV><B>c</>[|<SPAN>?3</>|]</DIV> </TD> </TR>
-       <TR> <TH>?7</TH> <TD> <DIV><B>ac</>[|<SPAN>?2</>|<SPAN>?6</>|]</DIV> </TD> </TR>
-     </TBODY>
-   </TABLE>
+.. code-block:: html
+
+   <table>
+     <!-- thead: base HTML representation (with pointers) of the initial object -->
+     <thead><tr><td colspan="2"> <div><b>abc</b>[|<span>?1</span>|<span>?5</span>|<span>?7</span>|]</div> </td></tr></thead>
+     <!-- tbody: mapping each pointer to the base HTML representation of its reference -->
+     <tbody>
+       <tr> <th>?1</th> <td> <div><b>ab</b>[|<span>?2</span>|<span>?4</span>|]</div> </td> </tr>
+       <tr> <th>?2</th> <td> <div><b>a</b>[|<span>?3</span>|]</div> </td> </tr>
+       <tr> <th>?3</th> <td> <div><b></b>[|]</div> </td> </tr>
+       <tr> <th>?4</th> <td> <div><b>b</b>[|<span>?3</span>|]</div> </td> </tr>
+       <tr> <th>?5</th> <td> <div><b>bc</b>[|<span>?4</span>|<span>?6</span>|]</div> </td> </tr>
+       <tr> <th>?6</th> <td> <div><b>c</b>[|<span>?3</span>|]</div> </td> </tr>
+       <tr> <th>?7</th> <td> <div><b>ac</b>[|<span>?2</span>|<span>?6</span>|]</div> </td> </tr>
+     </tbody>
+   </table>
   """
 #==================================================================================================
   from lxml.builder import E
@@ -928,7 +941,7 @@ def html_table(irows,fmts,hdrs=None,opening=None,closing=None,htmlclass='default
 :param opening,closing: strings at head and foot of table
 :type opening,closing: :class:`str`
 
-Returns an HTML table object with one row for each pair generated from *irow*. The key of each pair is in a column of its own with no header, and the value must be a tuple whose length matches the number of columns. The format functions in *fmts*, one for each column, are expected to return HTML objects (as understood by :mod:`lxml`). *hdrs* may specify headers as a tuple of strings, one for each column.
+Returns an HTML table object (as understood by :mod:`lxml`) with one row for each pair generated from *irow*. The key of each pair is in a column of its own with no header, and the value must be a tuple whose length matches the number of columns. The format functions in *fmts*, one for each column, are expected to return HTML objects. *hdrs* may specify headers as a tuple of strings, one for each column.
   """
 #==================================================================================================
   from lxml.builder import E
@@ -988,7 +1001,7 @@ def SQliteNew(path,schema):
   r"""
 :param path: a path to an sqlite database
 :type path: :class:`str`
-:param schema: the schema specification as a list of SQL queries (possibly joined by \n\n)
+:param schema: the schema specification as a list of SQL queries (possibly joined by ``\n\n``)
 :type schema: :class:`Union[str,List[str]]`
 
 Makes sure the file at *path* is a SQlite3 database with schema exactly equal to *schema*.

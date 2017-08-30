@@ -21,7 +21,7 @@ from collections import namedtuple
 Distr = namedtuple('Distr',('name','dom','domv','mean','std','pdf','cdf'))
 
 def display(*l,**ka): # l must be a list of Distr instances (probability distributions)
-  view = Cell.new(**ka)
+  view = Cell.create(**ka)
   with view.clearm():
     # turn the cell *view* into a grid-cell:
     view.make_grid(5*len(l)+1,2)

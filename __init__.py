@@ -35,8 +35,8 @@ A decorator to declare, in a class, a computable attribute which is computed onl
   def __init__(self,get):
     from inspect import signature
     L = list(signature(get).parameters.values())
-    if any(p.kind!=p.POSITIONAL_OR_KEYWORD for p in L) or any(p.default==p.empty for p in L[1:]):
-      raise Exception('ondemand attribute definition must be a function with a single argument')
+    if len(L)==0 or any(p.default==p.empty for p in L[1:]):
+      raise TypeError('ondemand attribute definition must be a function with a single argument')
     self.get = get
 
   def __get__(self,instance,typ):

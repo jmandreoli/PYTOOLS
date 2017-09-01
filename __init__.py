@@ -73,7 +73,7 @@ Keys in the proxy are turned into attributes of this instance. If *__proxy__* is
     if r is None: r = dict(ka)
     else:
       if isinstance(r,odict): r = r.__proxy__
-      assert isinstance(r,collections.abc.Mapping)
+      else: assert isinstance(r,collections.abc.Mapping)
       if ka: r.update(ka)
     super().__setattr__('__proxy__',r)
   def __eq__(self,other):
@@ -85,7 +85,6 @@ Keys in the proxy are turned into attributes of this instance. If *__proxy__* is
     try: return self.__proxy__[a]
     except KeyError: raise AttributeError(a) from None
   def __setattr__(self,a,v):
-    if a.startswith('__'): raise AttributeError(a)
     self.__proxy__[a] = v
   def __delattr__(self,a):
     try: del self.__proxy__[a]
@@ -169,7 +168,7 @@ Each element in *conf* specifies an item as a pair :class:`Tuple[Tuple[object,..
   class Pconf:
     __slots__ = 'name','value','helper','widget','cparser'
     def __init__(s,*a): s.name,s.value,s.helper,s.widget,s.cparser = a
-    def __repr__(s): return 'Pconf<{}>'.format(','.join('{}={}'.format(k,repr(getattr(s,k))) for k in s.__slots__))
+    def __repr__(s): return 'Pconf<name={0.name!r},value={0.value!r},helper={0.helper!r},widget={0.widget!r},cparser={0.cparser!r}>'.format(s)
 
 #--------------------------------------------------------------------------------------------------
   def __init__(self,*conf,**initv):
@@ -229,13 +228,16 @@ Reinitialises the item values.
 :param cparser: the command line parser specification for the item
 :type cparser: :class:`Union[str,Dict[str,object]]`
 
+Adds an item to this configuration.
+
+* If *cat* is :const:`None`, the item value range is guessed from the type of *value*, which must be a number or string type.
 * If *cat* is a :class:`slice`, the item value ranges over a subset of numbers.
 
-  - If the ``stop`` attribute of *cat* is an integer, the target range is the set of integers between the values of *cat* attributes ``start`` (default 0)  and ``stop`` minus 1. The ``step`` attribute (default 1) specifies a sampling step.
-  - If the ``stop`` attribute of *cat* is real, the target range is the set of reals between the values of *cat* attributes ``start`` (default 0) and ``stop``. The ``step`` attribute (default 100) specifies a sampling step, directly if it is a real or adjusted so as to obtain exactly that number of samples if it is an integer.
+  - If the :attr:`stop` attribute of *cat* is an integer, the target range is the set of integers between the values of *cat* attributes :attr:`start` (default :const:`0`)  and :attr:`stop` minus 1. The :attr:`step` attribute (default :const:`1`) specifies a sampling step.
+  - If the :attr:`stop` attribute of *cat* is real, the target range is the set of reals between the values of *cat* attributes :attr:`start` (default :const:`0`) and :attr:`stop`. The :attr:`step` attribute (default 100) specifies a sampling step, directly if it is a real or adjusted so as to obtain exactly that number of samples if it is an integer.
 
 * If *cat* is a :class:`Sequence[object]`, it is turned into a :class:`collections.OrderedDict` whose keys are the string values of its elements.
-* If *cat* is a :class:`Dict[str,object]` (which includes :class:`collections.OrderedDict` as obtained above), the range is the set of values of *cat*. The keys are simply string names to denote these values. If the special key ``__multiple__`` is set to :const:`True`, it is deleted and the target range is in fact the set of tuples of the other values of *cat*.
+* If *cat* is a :class:`Dict[str,object]` (which includes :class:`collections.OrderedDict` as obtained above), the item value range is the set of values of *cat*. The keys are simply string names to denote these values. If the special key ``__multiple__`` is set to :const:`True`, it is deleted and the target range is in fact the set of tuples of the other values of *cat*.
 
 *helper* can contain patterns of the form ``{widget-version|cparser-version}`` so the helper can have a different version in the two contexts.
 
@@ -417,14 +419,117 @@ class ConfigException (Exception): pass
 #==================================================================================================
 class HtmlPlugin:
   r"""
-Instances of this class have an ipython HTML representation based on :func:`html_incontext`.
+Instances of this class have an ipython HTML representation. The representation is by default simply the string representation of the instance (enclosed in a ``span`` element), but can be customised if it supports method :meth:`as_html`.
+
+Method :meth:`as_html` should only be defined for hashable objects. It takes as input a function *as_html_p* and returns the base HTML representation of the object (as understood by module :mod:`lxml.html`). If invoked on a compound object, it should not recursively invoke method :meth:`as_html` on its components to obtain their HTML representations, because that would be liable to unmanageable repetitions (if two components share a common sub-component) or infinite recursions. Instead, the representation of a component object should be obtained by calling function *as_html_p* with that object as argument. It returns a "pointer" in the form of a string ``?``\ *n* (within a ``span`` element) where *n* is a unique reference number. The scope of such pointers is the toplevel call of method :meth:`_repr_html_`, which guarantees that two occurrences of equal objects will have the same pointer.
+
+The :class:`HtmlPlugin` representation of an object is a ``table`` element whose head row is the base HTML representation of that object (including its pointers), and whose body rows align each pointer reference to the base HTML representation of its referenced object (possibly containing pointers itself, recursively). In the following example, the base HTML representation of a node in a graph is given by its label followed by the sequence of pointers to its successor nodes::
+
+   class N (HtmlPlugin): # class of nodes in a (possibly cyclic) directed graph
+     def __init__(self,tag,*succ): self.tag,self.succ = tag,list(succ)
+     def as_html(self,incontext):
+       from lxml.html.builder import E
+       return E.div(E.b(self.tag),'[|',*(y for x in self.succ for y in (incontext(x),'|')),']')
+   # Let's build a trellis DAG
+   n = N('')
+   na,nb,nc = N('a',n),N('b',n),N('c',n)
+   nab,nbc,nac = N('ab',na,nb),N('bc',nb,nc),N('ac',na,nc)
+   nabc = N('abc',nab,nbc,nac)
+   # n.succ.append(nabc) # makes the graph cyclic
+   from IPython.display import display
+   display(nabc)
+
+produces (up to some attributes):
+
+.. code-block:: html
+
+   <table>
+     <!-- thead: base HTML representation (with pointers) of the initial object -->
+     <thead><tr><td colspan="2"> <div><b>abc</b>[|<span>?1</span>|<span>?5</span>|<span>?7</span>|]</div> </td></tr></thead>
+     <!-- tbody: mapping each pointer to the base HTML representation of its reference -->
+     <tbody>
+       <tr> <th>?1</th> <td> <div><b>ab</b>[|<span>?2</span>|<span>?4</span>|]</div> </td> </tr>
+       <tr> <th>?2</th> <td> <div><b>a</b>[|<span>?3</span>|]</div> </td> </tr>
+       <tr> <th>?3</th> <td> <div><b></b>[|]</div> </td> </tr>
+       <tr> <th>?4</th> <td> <div><b>b</b>[|<span>?3</span>|]</div> </td> </tr>
+       <tr> <th>?5</th> <td> <div><b>bc</b>[|<span>?4</span>|<span>?6</span>|]</div> </td> </tr>
+       <tr> <th>?6</th> <td> <div><b>c</b>[|<span>?3</span>|]</div> </td> </tr>
+       <tr> <th>?7</th> <td> <div><b>ac</b>[|<span>?2</span>|<span>?6</span>|]</div> </td> </tr>
+     </tbody>
+   </table>
+
+which displays roughly as:
+   +----+----------------------+
+   | **abc**\[\|?1\|?5\|?7\|\] |
+   +----+----------------------+
+   | ?1 | **ab**\[\|?2\|?4\|\] |
+   +----+----------------------+
+   | ?2 | **a**\[\|?3\|\]      |
+   +----+----------------------+
+   | ?3 | \[\|\]               |
+   +----+----------------------+
+   | ?4 | **b**\[\|?3\|\]      |
+   +----+----------------------+
+   | ?5 | **bc**\[\|?4\|?6\|\] |
+   +----+----------------------+
+   | ?6 | **c**\[\|?3\|\]      |
+   +----+----------------------+
+   | ?7 | **ac**\[\|?2\|?6\|\] |
+   +----+----------------------+
   """
 #==================================================================================================
+  _html_style = '''
+#toplevel { border-collapse: collapse; }
+#toplevel > thead > tr > td, #toplevel > tbody > tr > td { border: thin solid black; background-color:white; text-align:left; }
+#toplevel > thead > tr > td { padding:0; border-bottom-width: thick; }
+#toplevel span.pointer { color: blue; background-color: #e0e0e0; font-weight:bold; }
+#toplevel div.main { padding:0; max-height: 5cm; overflow-y: auto; }
+'''
   _html_limit = 50
   def _repr_html_(self):
-    from lxml.etree import tostring
-    # should not need to replace &gt;
-    return tostring(html_incontext(self),encoding='str').replace('&gt;','>')
+    from lxml.html.builder import E
+    from lxml.html import tostring
+    from collections import OrderedDict
+    def hformat(p,*L,style=self._html_style):
+      if L:
+        x = E.table(E.thead(E.tr(E.td(E.div(p.html,**{'class':'main'}),colspan='2'))),E.tbody(*(E.tr(E.td(p.element(**{'class':'pointer'})),E.td(p.html)) for p in L)),id=tid)
+        return E.div(E.style(style.replace('#toplevel','#'+tid),scoped='scoped'),x)
+      else: return p.html
+    def as_html(v):
+      try: p = ctx.get(v)
+      except: return E.span(str(v)) # for unhashable objects
+      if p is None:
+        if isinstance(v,HtmlPlugin):
+          ctx[v] = p = HtmlPluginPointer(tid,len(ctx))
+          try: x = v.as_html(as_html)
+          except: x = E.span(repr(v)) # should not fail, but just in case
+          p.sethtml(x)
+        else: return E.span(str(v))
+      return p.element(asref=True,**{'class':'pointer'})
+    tid = unid('htmlplugin')
+    ctx = OrderedDict()
+    e = as_html(self)
+    return tostring(hformat(*ctx.values()) if ctx else e,encoding=str)
+class HtmlPluginPointer:
+  __slots__ = 'k','name','short','js','html','refs'
+  def __init__(self,tid,k):
+    self.k = k; self.name = '?'+str(k); self.refs = []
+    self.js = tuple('document.getElementById(\'{}\').rows[{}].style.outline=\'{}\''.format(tid,k,v) for v in ('thick solid red','inherit'))
+  def element(self,asref=False,**ka):
+    from lxml.html.builder import E
+    x = E.span(self.name)
+    for k,v in ka.items(): x.set(k,v)
+    if asref:
+      for k,v in zip(('onmouseenter','onmouseleave'),self.js): x.set(k,v)
+      if self.refs is None: x.set('title',self.short)
+      else: self.refs.append(x)
+    return x
+  def sethtml(self,x):
+    from lxml.etree import ElementTextIterator
+    from lxml.html.builder import E
+    self.html,self.short = E.div(x,**{'class':'main'}), ' '.join(ElementTextIterator(x))
+    for x in self.refs: x.set('title',self.short)
+    self.refs = None
 
 #==================================================================================================
 class ARG (tuple):
@@ -536,11 +641,11 @@ Set *f* as the config function of this instance. Raises an error if the instance
     return k
 
   def as_html(self,incontext):
-    from lxml.builder import E
+    from lxml.html.builder import E
     func,a,ka = self.config
     x = html_parlist(a,sorted(ka.items()),incontext,deco=('[|','|',']'))
-    x.insert(0,E.B('::'))
-    x.insert(0,(E.SPAN if self.incarnated else E.EM)(str(func),style='padding:5px;'))
+    x.insert(0,E.b('::'))
+    x.insert(0,(E.span if self.incarnated else E.em)(str(func),style='padding:5px;'))
     return x
 
   def __getstate__(self): return self.freeze()
@@ -747,9 +852,10 @@ Display an IPython widget for basic database exploration. If a metadata structur
       ('constraints',fany,'constraints',4),
       ('foreign_keys',fany,'foreign',4),
     )
-    wstyle = '\n'.join('td.field-{} {{ min-width:{}cm; max-width:{}cm; }}'.format(x[0],x[3],x[3]) for x in schema)
+    style = exploredb.style['schema']+'\n'.join('#toplevel td.field-{} {{ min-width:{}cm; max-width:{}cm; }}'.format(x[0],x[3],x[3]) for x in schema)
     thead = '<tr>{}</tr>'.format(''.join('<td title="{}" class="field-{}">{}</td>'.format(x[0],x[0],x[2]) for x in schema))
-    fmt = '<div><style scoped="scoped">{}{}</style><table><thead>{}</thead><tbody>'.format(exploredb.style['schema'],wstyle,thead),'</tbody></table></div>'
+    tid = unid('exploredb')
+    fmt = '<div><style scoped="scoped">{}</style><table id="{}"><thead>{}</thead><tbody>'.format(style.replace('#toplevel','#'+tid),tid,thead),'</tbody></table></div>'
     return lambda table,pre=fmt[0],suf=fmt[1]: pre+''.join(map(row,tables[table].columns))+suf
   schema = lru_cache(None)(schemag())
   def size(table):
@@ -828,109 +934,33 @@ Display an IPython widget for basic database exploration. If a metadata structur
 
 exploredb.style = dict(
   schema='''
-table { border-collapse: collapse; }
-table > thead { display:block; }
-table > tbody { display: block; max-height: 10cm; overflow-y: auto; padding-right: 10cm; }
-table > thead > tr > td { padding: 1mm; text-align: center; font-weight: bold; color: white; background-color: navy; border: thin solid white; }
-table > tbody > tr > td { padding: 1mm; border: thin solid blue; overflow: hidden; }
-table > tbody > tr > td > span { position: relative; background-color: white; white-space: nowrap; color:black; z-index: 0; }
-table > tbody > tr > td:hover { overflow: visible; }
-table > tbody > tr > td:hover > span { color:purple; z-index: 1; }
+#toplevel { border-collapse: collapse; }
+#toplevel > thead { display:block; }
+#toplevel > tbody { display: block; max-height: 10cm; overflow-y: auto; padding-right: 10cm; }
+#toplevel > thead > tr > td { padding: 1mm; text-align: center; font-weight: bold; color: white; background-color: navy; border: thin solid white; }
+#toplevel > tbody > tr > td { padding: 1mm; border: thin solid blue; overflow: hidden; }
+#toplevel > tbody > tr > td > span { position: relative; background-color: white; white-space: nowrap; color:black; z-index: 0; }
+#toplevel > tbody > tr > td:hover { overflow: visible; }
+#toplevel > tbody > tr > td:hover > span { color:purple; z-index: 1; }
   ''',
   title='background-color:gray; color:white; font-weight:bold; padding:.2cm',
 )
 
 #==================================================================================================
-def html_incontext(x):
-  r"""
-:param x: an arbitrary python object
-
-Returns an HTML object (etree as understood by package :mod:`lxml`) representing object *x*. The representation is by default simply the string representation of *x* (enclosed in a ``span`` element), but can be customised if *x* supports method :meth:`as_html`.
-
-Method :meth:`as_html` should only be defined for hashable objects. It takes as input a function *incontext* and returns the base HTML representation of the object. If invoked on a compound object, it should not recursively invoke method :meth:`html_incontext` nor :meth:`as_html` on its components to obtain their HTML representations, because that would produce representations of unmanageable size in case of recursions or repetitions (if two components share a common sub-component). Instead, the representation of a component object should be a "pointer" in the form of a string `?`\ *n* (within a ``span`` element) where *n* is a unique reference number. The pointer for a component can be obtained by calling the argument function *incontext* with that object as argument. The scope of such pointers is the toplevel call of function :func:`html_incontext`, and two occurrences of equal objects will have the same pointer.
-
-The result of calling function :func:`html_incontext` on a compound object *x* is a ``table`` element whose head row is the base HTML representation of *x* (including its pointers), and whose body rows align each pointer reference *n* to the base HTML representation of the referenced object (possibly containing pointers itself, recursively). In the following example, the base HTML representation of a node in a graph is given by its label followed by the sequence of pointers to its successor nodes::
-
-   class N: # class of nodes in a (possibly cyclic) directed graph
-     def __init__(self,tag,*succ): self.tag,self.succ = tag,succ
-     def as_html(self,incontext):
-       from lxml.builder import E
-       return E.div(E.b(self.tag),'[|',*(y for x in self.succ for y in (incontext(x),'|')),']')
-   # Let's build a trellis DAG
-   n = N('')
-   na,nb,nc = N('a',n),N('b',n),N('c',n)
-   nab,nbc,nac = N('ab',na,nb),N('bc',nb,nc),N('ac',na,nc)
-   nabc = N('abc',nab,nbc,nac)
-   html_incontext(nabc)
-
-produces (up to some attributes):
-
-.. code-block:: html
-
-   <table>
-     <!-- thead: base HTML representation (with pointers) of the initial object -->
-     <thead><tr><td colspan="2"> <div><b>abc</b>[|<span>?1</span>|<span>?5</span>|<span>?7</span>|]</div> </td></tr></thead>
-     <!-- tbody: mapping each pointer to the base HTML representation of its reference -->
-     <tbody>
-       <tr> <th>?1</th> <td> <div><b>ab</b>[|<span>?2</span>|<span>?4</span>|]</div> </td> </tr>
-       <tr> <th>?2</th> <td> <div><b>a</b>[|<span>?3</span>|]</div> </td> </tr>
-       <tr> <th>?3</th> <td> <div><b></b>[|]</div> </td> </tr>
-       <tr> <th>?4</th> <td> <div><b>b</b>[|<span>?3</span>|]</div> </td> </tr>
-       <tr> <th>?5</th> <td> <div><b>bc</b>[|<span>?4</span>|<span>?6</span>|]</div> </td> </tr>
-       <tr> <th>?6</th> <td> <div><b>c</b>[|<span>?3</span>|]</div> </td> </tr>
-       <tr> <th>?7</th> <td> <div><b>ac</b>[|<span>?2</span>|<span>?6</span>|]</div> </td> </tr>
-     </tbody>
-   </table>
-  """
-#==================================================================================================
-  from lxml.builder import E
-  from lxml.etree import ElementTextIterator
-  def hformat(L):
-    return E.DIV(E.STYLE(html_incontext.style,scoped='scoped'),E.TABLE(E.THEAD(E.TR(E.TD(E.DIV(L[0][1],**{'class':'main'}),colspan="2"))),E.TBODY(*(E.TR(E.TD(E.SPAN('?{}'.format(k),**{'class':'pointer'})),E.TD(x)) for k,x in L[1:])),**{'class':'toplevel'}))
-  def incontext(v):
-    try: q = ctx.get(v)
-    except: return E.SPAN(str(v)) # for unhashable objects
-    if q is None:
-      if hasattr(v,'as_html'):
-        k,ref = len(ctx),'py_{}'.format(id(v))
-        ctx[v] = q = [k,ref,None]
-        try: x = v.as_html(incontext)
-        except: x = E.SPAN(repr(v)) # should not fail, but just in case
-        L.append((k,E.DIV(x,id=ref,**{'class':'main'})))
-        tit = q[2] = ' '.join(ElementTextIterator(x))
-      else: return E.SPAN(str(v))
-    else: k,ref,tit = q
-    js = lambda x,ref=ref: 'document.getElementById(\'{}\').style.outline=\'{}\''.format(ref,('thick solid red' if x else 'inherit'))
-    return E.SPAN('?{}'.format(k),title=tit,onmouseenter=js(True),onmouseleave=js(False),**{'class':'pointer'})
-  L = []
-  ctx = {}
-  e = incontext(x)
-  n = len(L)
-  return e if n==0 else L[0][1] if n==1 else hformat(sorted(L))
-
-html_incontext.style = '''
-table.toplevel { border-collapse: collapse; }
-table.toplevel > thead > tr > td, table.toplevel > tbody > tr > td { border: thin solid black; background-color:white; text-align:left; }
-table.toplevel > thead > tr > td { padding:0; border-bottom-width: thick; }
-table.toplevel span.pointer { color: blue; background-color: #e0e0e0; font-weight:bold; }
-table.toplevel div.main { padding:0; max-height: 5cm; overflow-y: auto; }
-'''
-
-#==================================================================================================
 def html_parlist(La,Lka,incontext,deco=('','',''),padding='5px'):
 #==================================================================================================
-  from lxml.builder import E
+  from lxml.html.builder import E
   def h():
     opn,sep,cls = deco
     stl = 'padding: {}'.format(padding)
     yield opn
-    for v in La: yield E.SPAN(incontext(v),style=stl); yield sep
-    for k,v in Lka: yield E.SPAN(E.B(k),'=',incontext(v),style=stl); yield sep
+    for v in La: yield E.span(incontext(v),style=stl); yield sep
+    for k,v in Lka: yield E.span(E.b(k),'=',incontext(v),style=stl); yield sep
     yield cls
-  return E.DIV(*h(),style='padding:0')
+  return E.div(*h(),style='padding:0')
 
 #==================================================================================================
-def html_table(irows,fmts,hdrs=None,opening=None,closing=None,htmlclass='default'):
+def html_table(irows,fmts,hdrs=None,opening=None,closing=None,encoding=None):
   r"""
 :param irows: a generator of pairs of an object (key) and a tuple of objects (value)
 :type irows: :class:`Iterator[Tuple[object,Tuple[object,...]]]`
@@ -940,39 +970,44 @@ def html_table(irows,fmts,hdrs=None,opening=None,closing=None,htmlclass='default
 :type hdrs: :class:`Tuple[str,...]`
 :param opening,closing: strings at head and foot of table
 :type opening,closing: :class:`str`
+:param encoding: encoding of the result
+:type encoding: :class:`Union[type,str]`
 
-Returns an HTML table object (as understood by :mod:`lxml`) with one row for each pair generated from *irow*. The key of each pair is in a column of its own with no header, and the value must be a tuple whose length matches the number of columns. The format functions in *fmts*, one for each column, are expected to return HTML objects. *hdrs* may specify headers as a tuple of strings, one for each column.
+Returns an HTML table object (as understood by :mod:`lxml`) with one row for each pair generated from *irow*. The key of each pair is in a column of its own with no header, and the value must be a tuple whose length matches the number of columns. The format functions in *fmts*, one for each column, are expected to return HTML objects. *hdrs* may specify headers as a tuple of strings, one for each column. If *encoding* is :const:`None`, the result is returned as an :mod:`lxml.html` object, otherwise it is returned as a string with the specified encoding.
   """
 #==================================================================================================
-  from lxml.builder import E
+  from lxml.html.builder import E
+  from lxml.html import tostring
   def thead():
-    if opening is not None: yield E.TR(E.TD(opening,colspan=str(1+len(fmts))))
-    if hdrs is not None: yield E.TR(E.TD(),*(E.TH(hdr) for hdr in hdrs))
+    if opening is not None: yield E.tr(E.td(opening,colspan=str(1+len(fmts))))
+    if hdrs is not None: yield E.tr(E.td(),*(E.th(hdr) for hdr in hdrs))
   def tbody():
     for ind,row in irows:
-      yield E.TR(E.TH(str(ind)),*(E.TD(fmt(v)) for fmt,v in zip(fmts,row)))
+      yield E.tr(E.th(str(ind)),*(E.td(fmt(v)) for fmt,v in zip(fmts,row)))
   def tfoot():
-    if closing is not None: yield E.TR(E.TD(),E.TD(closing,colspan=str(len(fmts))))
-  return E.DIV(E.STYLE(html_table.style,scoped='scoped'),E.TABLE(E.THEAD(*thead()),E.TBODY(*tbody()),E.TFOOT(*tfoot()),**{'class':htmlclass}))
+    if closing is not None: yield E.tr(E.td(),E.td(closing,colspan=str(len(fmts))))
+  tid = unid('table')
+  t = E.div(E.style(html_table.style.replace('#toplevel','#'+tid),scoped='scoped'),E.table(E.thead(*thead()),E.tbody(*tbody()),E.tfoot(*tfoot()),id=tid))
+  return t if encoding is None else tostring(t,encoding=encoding)
 
 html_table.style = '''
-  table.default { border-collapse: collapse; }
-  table.default > thead > tr > th, table.default > thead > tr > td, table.default > tbody > tr > th, table.default > tbody > tr > td, table.default > tfoot > tr > td  { background-color: white; text-align: left; vertical-align: top; border: thin solid black; }
-  table.default > thead > tr > th, table.default > thead > tr > td { background-color: gray; color: white }
-  table.default > tfoot > tr > td { background-color: #f0f0f0; color: navy; }
+  #toplevel { border-collapse: collapse; }
+  #toplevel > thead > tr > th, #toplevel > thead > tr > td, #toplevel > tbody > tr > th, #toplevel > tbody > tr > td, #toplevel > tfoot > tr > td  { background-color: white; text-align: left; vertical-align: top; border: thin solid black; }
+  #toplevel > thead > tr > th, #toplevel > thead > tr > td { background-color: gray; color: white }
+  #toplevel > tfoot > tr > td { background-color: #f0f0f0; color: navy; }
 '''
 
 #==================================================================================================
 def html_stack(*a,**ka):
   r"""
-:param a: a list of (lists of) HTML objects (as understood by :mod:`lxml`)
+:param a: a list of (lists of) HTML objects (as understood by :mod:`lxml.html`)
 :param ka: a dictionary of HTML attributes for the DIV encapsulating each object
 
 Merges the list of HTML objects into a single HTML object, which is returned.
   """
 #==================================================================================================
-  from lxml.builder import E
-  return E.DIV(*(E.DIV(x,**ka) for x in a))
+  from lxml.html.builder import E
+  return E.div(*(E.div(x,**ka) for x in a))
 
 #==================================================================================================
 class SQliteStack:
@@ -1401,7 +1436,7 @@ Returns the representation of *time* in one of days,hours,minutes,seconds (depen
 #==================================================================================================
 def versioned(v):
   r"""
-A decorator which assigns attribute ``version`` of the target function to *v*. The function must be defined at the toplevel of its module. The version must be a simple value.
+A decorator which assigns attribute :attr:`version` of the target function to *v*. The function must be defined at the toplevel of its module. The version must be a simple value.
   """
 #==================================================================================================
   def transf(f):
@@ -1413,6 +1448,15 @@ A decorator which assigns attribute ``version`` of the target function to *v*. T
 #==================================================================================================
 # Utilities
 #==================================================================================================
+
+#--------------------------------------------------------------------------------------------------
+def unid(post='',pre=__name__):
+  r"""
+Returns a "unique" id for miscellanous uses.
+  """
+#--------------------------------------------------------------------------------------------------
+  from time import time
+  return (pre+str(time())+post).replace('.','_')
 
 #--------------------------------------------------------------------------------------------------
 class pickleclass:

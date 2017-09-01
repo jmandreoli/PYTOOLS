@@ -16,7 +16,7 @@ from collections import namedtuple, OrderedDict
 from collections.abc import MutableMapping
 from weakref import WeakValueDictionary
 from time import process_time, perf_counter
-from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlist, HtmlPlugin, pickleclass, ipytoolbar
+from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlist, HtmlPlugin, pickleclass
 
 SCHEMA = '''
 CREATE TABLE Block (
@@ -760,42 +760,47 @@ Note that this method may import modules which in turn may create cache entries 
     return ()
 
 #--------------------------------------------------------------------------------------------------
-class dbmanage:
+def dbmanage(*paths,consoledict=None):
   r"""
-A simple utility to manage a cache repository.
+A simple tool to manage a set of :class:`CacheDB` instances, specified by their paths.
   """
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,*paths):
-    import ipywidgets
-    from IPython.display import clear_output, display
-    from traceback import format_exc
-    def showdb():
-      with wout:
-        clear_output()
-        display(self.db)
-    def setdb(c): self.db = c.new; wconsole.layout.display='none'; wdryrun.value = c.new is not None; showdb()
-    def refresh(): wconsole.layout.display = 'none'; showdb()
-    def mkbutton(**ka):
-      def callback(f):
-        if self.db is None: return
-        wconsole.layout.display = ''
-        try: x = f()
-        except: wconsole.value = format_exc(); return
-        else: wconsole.value = str(x)
-        if x and not wdryrun.value: showdb()
-      return lambda f: toolbar.add((lambda: callback(f)),**ka)
-    self.db = None
-    wdb = ipywidgets.Dropdown(options=OrderedDict(chain((('!',None),),((p,CacheDB(p)) for p in paths))))
-    wconsole = ipywidgets.Textarea(rows=1,value='console',disabled=True,layout=dict(width='20cm',display='none'))
-    wdryrun = ipywidgets.Checkbox(layout=dict(width='.6cm'),indent=False)
-    wout = ipywidgets.Output()
-    wdb.observe(setdb,'value')
-    toolbar = ipytoolbar()
-    toolbar.add(refresh,tooltip='refresh',icon='fa-refresh',layout=dict(width='.4cm'))
-    @mkbutton(description='ClearError',layout=dict(width='1.8cm'))
-    def do(): return [(c.block,L) for c in list(self.db.values()) for L in (c.clear_error(dry_run=wdryrun.value),) if L]
-    @mkbutton(description='ClearObsolete',layout=dict(width='2.4cm'))
-    def do(): return self.db.clear_obsolete(False,dry_run=wdryrun.value)
-    @mkbutton(description='ClearObsoleteStrict',layout=dict(width='3.2cm'))
-    def do(): return self.db.clear_obsolete(True,dry_run=wdryrun.value)
-    self.widget = ipywidgets.VBox(children=(ipywidgets.HBox(children=(wdb,toolbar.widget,wdryrun,ipywidgets.Label('dry-run',layout=dict(width='1.2cm')))),wconsole,wout))
+  import ipywidgets
+  from IPython.display import clear_output, display
+  from traceback import print_exc
+  def runc(c,pre='>>> '):
+    x = c.new
+    if x == '': return
+    x = x.strip()
+    if x[:4] == pre: x = x[4:].strip()
+    if x == '': return
+    with wout:
+      clear_output()
+      print(pre+x)
+      try: x = eval(x,consoledict,localconsoledict)
+      except: print_exc()
+      else: display(x)
+    win.value = ''
+  def autorunc(c):
+    if c.new == autorun_: return
+    win.value = dict(
+      Errors = '[(c.block,L) for c in list(db.values()) for L in (c.clear_error(dry_run={}),) if L]'.format(wdryrun.value),
+      Obsolete = 'db.clear_obsolete(False,dry_run={})'.format(wdryrun.value),
+      ObsoleteStrict = 'db.clear_obsolete(True,dry_run={})'.format(wdryrun.value),
+      )[c.new]
+    wautocmd.value = autorun_
+  def setdb(c): localconsoledict['db'] = c.new; wout.clear_output(); showdb()
+  def showdb(): win.value = 'db'
+  localconsoledict = dict(db=None)
+  autorun_ = 'clear...'
+  wdb = ipywidgets.Dropdown(options=OrderedDict(chain((('...',()),),((p,CacheDB(p)) for p in paths))))
+  wshow = ipywidgets.Button(tooltip='show db',icon='fa-refresh',layout=dict(width='.4cm',padding='0cm'))
+  wautocmd = ipywidgets.Dropdown(options=(autorun_,'Errors','Obsolete','ObsoleteStrict'),layout=dict(width='3cm'))
+  wdryrun = ipywidgets.Checkbox(value=True,layout=dict(width='.6cm'),indent=False)
+  win = ipywidgets.Text(continuous_update=False,layout=dict(width='20cm'))
+  wout = ipywidgets.Output()
+  wdb.observe(setdb,'value')
+  win.observe(runc,'value')
+  wautocmd.observe(autorunc,'value')
+  wshow.on_click(lambda b: showdb())
+  return ipywidgets.VBox(children=(ipywidgets.HBox(children=(ipywidgets.Label('db',layout=dict(width='.4cm')),wdb,wshow,wautocmd,wdryrun,ipywidgets.Label('dry-run',layout=dict(width='1.2cm')))),ipywidgets.HBox(children=(ipywidgets.Label('console',layout=dict(width='1.2cm')),win)),wout))

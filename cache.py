@@ -760,47 +760,48 @@ Note that this method may import modules which in turn may create cache entries 
     return ()
 
 #--------------------------------------------------------------------------------------------------
-def dbmanage(*paths,consoledict=None):
+def dbmanage(*paths,ivname='db'):
   r"""
 A simple tool to manage a set of :class:`CacheDB` instances, specified by their paths.
   """
 #--------------------------------------------------------------------------------------------------
   import ipywidgets
   from IPython.display import clear_output, display
-  from traceback import print_exc
-  def runc(c,pre='>>> '):
+  from IPython.core.getipython import get_ipython
+  def setdb(c): nonlocal db; db = c.new; interpreter.push({ivname:db}); showdb()
+  def showdb():
+    wmsg.clear_output()
+    with wout: clear_output(); display(db)
+  def runc(c):
     x = c.new
-    if x == '': return
-    x = x.strip()
-    if x[:4] == pre: x = x[4:].strip()
-    if x == '': return
-    with wout:
-      clear_output()
-      print(pre+x)
-      try: x = eval(x,consoledict,localconsoledict)
-      except: print_exc()
-      else: display(x)
-    win.value = ''
-  def autorunc(c):
-    if c.new == autorun_: return
-    win.value = dict(
-      Errors = '[(c.block,L) for c in list(db.values()) for L in (c.clear_error(dry_run={}),) if L]'.format(wdryrun.value),
-      Obsolete = 'db.clear_obsolete(False,dry_run={})'.format(wdryrun.value),
-      ObsoleteStrict = 'db.clear_obsolete(True,dry_run={})'.format(wdryrun.value),
-      )[c.new]
-    wautocmd.value = autorun_
-  def setdb(c): localconsoledict['db'] = c.new; wout.clear_output(); showdb()
-  def showdb(): win.value = 'db'
-  localconsoledict = dict(db=None)
+    if x == autorun_: return
+    wautorun.value = autorun_
+    try:
+      with wmsg:
+        clear_output()
+        print('Operation:','clear'+x,'(dryrun: {} unchanged)'.format(ivname) if wdryrun.value else '')
+        r = autorun[x]()
+        print('Result:',r)
+    except: return
+    if not wdryrun.value and r:
+      with wout: clear_output(); display(db)
+  autorun = dict(
+    Error = (lambda: [x for x in ((c.block,c.clear_error(dry_run=wdryrun.value)) for c in list(db.values())) if x[1]]),
+    Obsolete = (lambda: db.clear_obsolete(False,dry_run=wdryrun.value)),
+    ObsoleteStrict = (lambda: db.clear_obsolete(True,dry_run=wdryrun.value)),
+  )
+  interpreter = get_ipython()
   autorun_ = 'clear...'
-  wdb = ipywidgets.Dropdown(options=OrderedDict(chain((('...',()),),((p,CacheDB(p)) for p in paths))))
+  db = ()
+  interpreter.push({ivname:db})
+  wdb = ipywidgets.Dropdown(description=ivname,options=OrderedDict(chain((('...',()),),((p,CacheDB(p)) for p in paths))),style={'description_width':'initial'})
   wshow = ipywidgets.Button(tooltip='show db',icon='fa-refresh',layout=dict(width='.4cm',padding='0cm'))
-  wautocmd = ipywidgets.Dropdown(options=(autorun_,'Errors','Obsolete','ObsoleteStrict'),layout=dict(width='3cm'))
-  wdryrun = ipywidgets.Checkbox(value=True,layout=dict(width='.6cm'),indent=False)
-  win = ipywidgets.Text(continuous_update=False,layout=dict(width='20cm'))
+  wautorun = ipywidgets.Dropdown(options=(autorun_,'Error','Obsolete','ObsoleteStrict'),layout=dict(width='3cm'))
+  wdryrun = ipywidgets.Checkbox(description='dry-run',value=True,style={'description_width':'initial'})
   wout = ipywidgets.Output()
+  wmsg = ipywidgets.Output(layout=dict(border='thin solid black'))
   wdb.observe(setdb,'value')
-  win.observe(runc,'value')
-  wautocmd.observe(autorunc,'value')
+  wautorun.observe(runc,'value')
   wshow.on_click(lambda b: showdb())
-  return ipywidgets.VBox(children=(ipywidgets.HBox(children=(ipywidgets.Label('db',layout=dict(width='.4cm')),wdb,wshow,wautocmd,wdryrun,ipywidgets.Label('dry-run',layout=dict(width='1.2cm')))),ipywidgets.HBox(children=(ipywidgets.Label('console',layout=dict(width='1.2cm')),win)),wout))
+  showdb()
+  return ipywidgets.VBox(children=(ipywidgets.HBox(children=(wdb,wshow,wautorun,wdryrun)),wmsg,wout))

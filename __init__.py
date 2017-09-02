@@ -1459,6 +1459,28 @@ Returns a "unique" id for miscellanous uses.
   return (pre+str(time())+post).replace('.','_')
 
 #--------------------------------------------------------------------------------------------------
+def printast(x):
+  r"""
+:param x: an AST or string (parsed into an AST)
+:type x: :class:`Union[str,ast.AST]`
+
+Pretty-prints the AST object (python abstract syntax tree).
+  """
+#--------------------------------------------------------------------------------------------------
+  import ast
+  def pp(x,pre,indent):
+    if isinstance(x,ast.AST):
+      print(indent,pre,':',x.__class__.__name__)
+      indent += ' | '
+      for k,y in ast.iter_fields(x): pp(y,k,indent)
+    elif isinstance(x,list):
+      for i,y in enumerate(x): pp(y,'{}[{}]'.format(pre,i),indent)
+    else: print(indent,pre,'=',x)
+  if isinstance(x,str): x = ast.parse(x)
+  else: assert isinstance(x,ast.AST)
+  pp(x,'top','')
+
+#--------------------------------------------------------------------------------------------------
 class pickleclass:
   r"""
 This namespace class defines class methods :meth:`load`, :meth:`loads`, :meth:`dump`, :meth:`dumps`, similar to those of the standard :mod:`pickle` module, but with class specific Pickler/Unpickler which must be defined in subclasses.

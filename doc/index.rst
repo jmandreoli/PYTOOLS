@@ -15,6 +15,7 @@ Contents:
    quickui.rst
    mplext.rst
    monitor.rst
+   tfutil.rst
    perfmgr.rst
    cpuinfomgr.rst
    taskmanager.rst

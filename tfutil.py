@@ -239,12 +239,12 @@ Returns a tensorboard url.
       wtoggle.description = 'start'
       wlink.value = ''
       wout.layout.border = 'thin solid black'
-    def toggle(server_launchcmd=str(Path(sys.executable).parent/'Scripts'/'tensorboard.exe')):
+    def toggle(server_launchcmd=str(Path(sys.executable).parent/'tensorboard')):
       nonlocal sub
       if sub is None:
         port = str(randint(10000,20000))
         wout.clear_output()
-        sub = subprocess.Popen((server_launchcmd,'--host',hostname,'--port',port,'--logdir',str(self.path)),stdout=subprocess.PIPE,universal_newlines=True)
+        sub = subprocess.Popen((server_launchcmd,'--host',hostname,'--port',port,'--logdir',str(self.path)),stdout=subprocess.PIPE,stderr=subprocess.STDOUT,universal_newlines=True)
         wtoggle.description = 'stop'
         wlink.value = '<a href="http://{}:{}" target="_blank">view</a>'.format(hostname,port)
         wout.layout.border = 'thin solid blue'
@@ -345,7 +345,7 @@ class EVFile (HtmlPlugin):
 #==================================================================================================
 def tf_accuracy(y,y_,name='accuracy',sname='train-accuracy'):
   r"""
-Returns the accuracy op of a batch prediction tensor *y* to a reference tensor *y_* in onehot representation. Both tensors *y,y_* are of shape *(n,d)* where *n* is the size of the current batch and *d* the dimension of the onehot representation. The accuracy tensor is also added to the summary.
+Returns the accuracy op of a batch prediction score tensor *y* to a reference tensor *y_* in onehot representation. Both tensors *y,y_* are of shape *(n,d)* where *n* is the size of the current batch and *d* the dimension of the score vector and onehot representation. The accuracy tensor is also added to the summary.
 
 :param y,y_: 2d tensorflow node
 :type y,y_: :class:`tensorflow.Tensor`
@@ -360,7 +360,7 @@ Returns the accuracy op of a batch prediction tensor *y* to a reference tensor *
 #==================================================================================================
 def tf_loss(y,y_,name='loss',sname='loss'):
   r"""
-Returns the cross-entropy loss op of a batch prediction tensor *y* to a reference tensor *y_* in onehot representation. Both tensors *y,y_* are of shape *(n,d)* where *n* is the size of the current batch and *d* the dimension of the onehot representation. The loss tensor is also added to the summary.
+Returns the cross-entropy loss op of a batch prediction score tensor *y* to a reference tensor *y_* in onehot representation. Both tensors *y,y_* are of shape *(n,d)* where *n* is the size of the current batch and *d* the dimension of the score vector and onehot representation. The loss tensor is also added to the summary.
 
 :param y,y_: 2d tensorflow node
 :type y,y_: :class:`tensorflow.Tensor`

@@ -175,7 +175,7 @@ Clears all the blocks which are obsolete.
     return deleted
 
 #--------------------------------------------------------------------------------------------------
-# CacheDB as Mapping
+# Methods defining the Mapping behaviour
 #--------------------------------------------------------------------------------------------------
 
   def __getitem__(self,block):
@@ -210,7 +210,7 @@ Clears all the blocks which are obsolete.
       conn.execute('DELETE FROM Block')
 
 #--------------------------------------------------------------------------------------------------
-# Display
+# Representation methods
 #--------------------------------------------------------------------------------------------------
 
   def as_html(self,incontext):
@@ -365,7 +365,7 @@ Implements cacheing as follows:
     return cval
 
 #--------------------------------------------------------------------------------------------------
-# CacheBlock as Mapping
+# Methods defining the Mapping behaviour
 #--------------------------------------------------------------------------------------------------
 
   def __getitem__(self,cell):
@@ -400,7 +400,7 @@ Implements cacheing as follows:
       conn.execute('DELETE FROM Cell WHERE block=?',(self.block,))
 
 #--------------------------------------------------------------------------------------------------
-# Display
+# Representation methods
 #--------------------------------------------------------------------------------------------------
 
   def as_html(self,incontext,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz)),time_fmt_=(lambda t: '' if t is None else time_fmt(t))):
@@ -760,7 +760,7 @@ Note that this method may import modules which in turn may create cache entries 
     return ()
 
 #--------------------------------------------------------------------------------------------------
-def dbmanage(*paths,ivname='db'):
+def manage(*paths,ivname='db'):
   r"""
 A simple tool to manage a set of :class:`CacheDB` instances, specified by their paths.
   """

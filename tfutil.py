@@ -1,3 +1,10 @@
+# File:                 tfutil.py
+# Creation date:        2017-05-04
+# Contributors:         Jean-Marc Andreoli
+# Language:             python
+# Purpose:              Some utilities for tensorflow
+#
+
 import os, sys, subprocess
 from pathlib import Path
 from datetime import datetime
@@ -7,9 +14,8 @@ from shutil import rmtree
 from collections import OrderedDict
 from numpy import zeros, sqrt, square
 import tensorflow
-from myutil import basic_stats,html_stack,html_table,HtmlPlugin
-
-# Management of runs
+from . import basic_stats,html_stack,html_table,HtmlPlugin
+from .monitor import Monitor
 
 #==================================================================================================
 class TFTrace (HtmlPlugin):
@@ -81,6 +87,10 @@ Creates a new (empty) run and adds it to this TF trace.
     run = Run(d); self.runs.insert(0,run); self.runs_[d] = run
     return run
 
+#--------------------------------------------------------------------------------------------------
+# Methods defining the Mapping behaviour
+#--------------------------------------------------------------------------------------------------
+
   def __getitem__(self,k): return self.runs[k]
   def __delitem__(self,k):
     if isinstance(k,int): self.runs.pop(k).destroy()
@@ -90,6 +100,10 @@ Creates a new (empty) run and adds it to this TF trace.
     else: raise TypeError('List indices must be integers or slices, not {}'.format(type(k)))
   def __setitem__(self,k,v): raise Exception('Direct create/update not permitted on TFTrace')
   def __iter__(self): return iter(self.runs)
+
+#--------------------------------------------------------------------------------------------------
+# Representation methods
+#--------------------------------------------------------------------------------------------------
 
   def as_html(self,incontext): self.load(); return html_table(((i,run.as_html(incontext)) for i,run in enumerate(self.runs)),((lambda x:x),))
 
@@ -118,40 +132,47 @@ Instances of this class represent tensorflow runs.
     self.evfs = {}
     self.loaded = False
 
+  def __hash__(self): return hash(self.path)
+  def __eq__(self,other): return isinstance(other,Run) and self.path == other.path
+
 #--------------------------------------------------------------------------------------------------
-  def monitor(self,period=100,ckperiod=2000,setup={},summary_first_batch=True):
+  def monitor(self,period=100,ckperiod=2000,setup={},summary_first_batch=True,s=None):
     r"""
-Returns a loop monitor for this run. Typical invocation::
+Returns a loop monitor for this run. The monitor has a method :meth:`run`. When that method is invoked with an iterable object of type :class:`Iterable[Dict[tensorflow.Variable,object]]` (e.g. returned by function :func:`tf_main`), it iterates over that object, and performs various operations on the items. The monitor is of class :class:`..Monitor` and can thus be combined with other monitors.
+
+:param period: a tensorflow summary is dumped every *period* iterations
+:type period: :class:`int`
+:param ckperiod: a tensorflow checkpoint is created every *period* iterations
+:type ckperiod: :class:`int`
+:param setup: the feed dictionary for summaries is updated with *setup*
+:type setup: :class:`Dict[tensorflow.Variable,object]`
+:param summary_first_item: whether the item passed to the summary operation is the first one rather than the current one
+:type summary_first_item: :class:`bool`
+:param s: the session in which to execute the tensorflow operation (defaults to tensorflow default session at first iteration)
+:type s: :class:`tensorflow.Session`
+:rtype: :class:`..Monitor`
+
+Typical invocation::
 
    tf = TFTrace('/mypath')
    data = gatherdata()
    m = tf.monitor()
-   with tensorflow.Session() as s:
-     m.run(tf_main(s,data))
-
-:param period: a tensoflow summary is dumped every *period* steps
-:type period: :class:`int`
-:param ckperiod: a tensorflow checkpoint is created every *period* steps
-:type ckperiod: :class:`int`
-:param setup: the feed dictionary for summaries is updated with *setup*
-:type setup: :class:`Dict[str,object]`
-:param summary_first_batch: 
-:type summary_first_batch: :class:`bool`
+   with tensorflow.Session().as_default() as s: m.run(tf_main(s,data))
     """
 #--------------------------------------------------------------------------------------------------
-    from ..monitor import Monitor
     from itertools import cycle, count
     curbatch = not summary_first_batch
-    def coroutine(env):
-      s,fd = env.value
+    def coroutine(env,s=s):
+      if s is None: s = tensorflow.get_default_session()
+      fd = env.value
       if not curbatch: fds = fd.copy(); fds.update(setup)
       summary = s.graph.get_tensor_by_name('Merge/MergeSummary:0')
       summary_writer = self.summary_writer(graph=s.graph)
       model_builder = self.model_builder()
-      checkpoint_saver = self.checkpoint_saver()
+      checkpoint_saver = self.checkpoint_saver(allow_empty=True)
       for step,n_su,n_ck in zip(count(1),cycle(range(period-1,-1,-1)),cycle(range(ckperiod-1,-1,-1))):
         if n_su==0:
-          if curbatch: s,fd = env.value; fds = fd.copy(); fds.update(setup)
+          if curbatch: fd = env.value; fds = fd.copy(); fds.update(setup)
           v = s.run(summary,feed_dict=fds)
           summary_writer.add_summary(v,step)
           summary_writer.flush()
@@ -162,14 +183,23 @@ Returns a loop monitor for this run. Typical invocation::
         yield
     return Monitor(('tfrun',),(coroutine,))
 
+#--------------------------------------------------------------------------------------------------
   def clip(self,n):
+    r"""
+Truncates all the event files of thus run to *n* entries.
+    """
+#--------------------------------------------------------------------------------------------------
     for evf in self.evfs.values(): evf.clip = n
 
+#--------------------------------------------------------------------------------------------------
   def refresh(self):
+#--------------------------------------------------------------------------------------------------
     self.loaded = False
     for evf in self.evfs.values(): evf.refresh()
 
+#--------------------------------------------------------------------------------------------------
   def load(self):
+#--------------------------------------------------------------------------------------------------
     if self.loaded: return
     d_log = self.path/'log'
     if d_log.is_dir():
@@ -183,30 +213,55 @@ Returns a loop monitor for this run. Typical invocation::
     self.evfs = evfs
     self.loaded = True
 
+#--------------------------------------------------------------------------------------------------
   def tensorboard(self,hostname=None):
-    raise NotImplementedError()
+    r"""
+Returns a tensorboard url.
+    """
+#--------------------------------------------------------------------------------------------------
     import ipywidgets
     from socket import getfqdn
+    from threading import Thread
+    from random import randint
     from IPython.display import clear_output, display
+    def dump():
+      nonlocal sub
+      with wout:
+        print('Server launched')
+        try:
+          for x in sub.stdout:
+            if x: sys.stdout.write(x)
+            else: break
+        except Exception as e: status = e
+        else: status = 'OK'
+        print('Server terminated, status:',status)
+      sub = None
+      wtoggle.description = 'start'
+      wlink.value = ''
+      wout.layout.border = 'thin solid black'
+    def toggle(server_launchcmd=str(Path(sys.executable).parent/'Scripts'/'tensorboard.exe')):
+      nonlocal sub
+      if sub is None:
+        port = str(randint(10000,20000))
+        wout.clear_output()
+        sub = subprocess.Popen((server_launchcmd,'--host',hostname,'--port',port,'--logdir',str(self.path)),stdout=subprocess.PIPE,universal_newlines=True)
+        wtoggle.description = 'stop'
+        wlink.value = '<a href="http://{}:{}" target="_blank">view</a>'.format(hostname,port)
+        wout.layout.border = 'thin solid blue'
+        Thread(target=dump,daemon=True).start()
+      else: sub.terminate()
     if hostname is None: hostname = getfqdn()
-    
-    sub = subprocess.Popen((str(Path(sys.executable).parent/'tensorboard'),'--host',hostname,'--port',port,'--logdir',self.path),stdout=subprocess.PIPE,universal_newlines=True)
+    sub = None
+    wtoggle = ipywidgets.Button(description='start')
+    wlink = ipywidgets.HTML('')
+    wout = ipywidgets.Output(layout=dict(overflow_y='scroll',height='5cm',border='thin solid black'))
+    wtoggle.on_click(lambda b: toggle())
+    return ipywidgets.VBox(children=(ipywidgets.HBox(children=(wtoggle,wlink)),wout))
 
-    def showtrace(): clear_output(); display(self.trace)
-    def settrace(c): self.trace = c.new; showtrace()
-    def refresh():
-      if self.trace is not None: self.trace.refresh()
-      showtrace()
-    self.trace = None
-    wtrace = ipywidgets.Dropdown(options=OrderedDict(chain((('!',None),),((p,TFTrace(p)) for p in paths))))
-    wtrace.observe(settrace,'value')
-    wrefresh = ipywidgets.Button(icon='fa-refresh',tooltip='refresh',layout=ipywidgets.Layout(width='.4cm'))
-    wrefresh.on_click(lambda b: refresh())
-    self.widget = ipywidgets.HBox(children=(wtrace,wrefresh))
+#--------------------------------------------------------------------------------------------------
+# Representation methods
+#--------------------------------------------------------------------------------------------------
 
-
-  def __hash__(self): return hash(self.path)
-  def __eq__(self,other): return isinstance(other,Run) and self.path == other.path
   def as_html(self,incontext): self.load(); return html_stack(*(evf.as_html(incontext) for evf in self.evfs.values()))
 
 #==================================================================================================
@@ -214,19 +269,35 @@ class EVFile (HtmlPlugin):
 #==================================================================================================
   TYPE = dict((v,i) for i,v in enumerate('simple_value image histo audio tensor ?'.split()))
   style = 'table th,td {text-align:left; background-color: white; border: thin solid black}'
+#--------------------------------------------------------------------------------------------------
   def __init__(self,path,clip=1000,title=None):
+#--------------------------------------------------------------------------------------------------
     self.path = path; self.e_count = 0; self.clip_ = clip; self.timestamp = 0
     self.title = str(self.path) if title is None else title
+
+  def __hash__(self): return hash(self.path)
+  def __eq__(self,other): return isinstance(other,EVFile) and self.path == other.path
+
+#--------------------------------------------------------------------------------------------------
   @property
-  def clip(self): return self.clip_
+  def clip(self):
+#--------------------------------------------------------------------------------------------------
+    return self.clip_
+#--------------------------------------------------------------------------------------------------
   @clip.setter
   def clip(self,n):
+#--------------------------------------------------------------------------------------------------
     self.clip_ = n
     if n>self.e_count: self.timestamp = 0
 
-  def refresh(self): self.timestamp = 0
+#--------------------------------------------------------------------------------------------------
+  def refresh(self):
+#--------------------------------------------------------------------------------------------------
+    self.timestamp = 0
 
+#--------------------------------------------------------------------------------------------------
   def load(self):
+#--------------------------------------------------------------------------------------------------
     t = self.path.stat().st_mtime
     if t>self.timestamp:
       self.timestamp = t
@@ -250,28 +321,37 @@ class EVFile (HtmlPlugin):
         if e_count>=self.clip_: clipped = True; break
       self.s_bnd,self.s_count,self.sd_stats,self.sdt_stats,self.g_count,self.tags,self.e_count,self.clipped = s_bnd,s_count,sd_stats,sdt_stats,g_count,tags,e_count,clipped
 
-  def __hash__(self): return hash(self.path)
-  def __eq__(self,other): return isinstance(other,EVFile) and self.path == other.path
+#--------------------------------------------------------------------------------------------------
+# Representation methods
+#--------------------------------------------------------------------------------------------------
+
   def as_html(self,_):
-    from lxml.builder import E
+    from lxml.html.builder import E
     self.load()
-    thead = E.TR(E.TD(E.B(self.title),E.SPAN(' [{} events{}]'.format(self.e_count,'!' if self.clipped else '')),colspan='3',style='background-color:gray; color:white; text-align:center'))
+    thead = E.tr(E.td(E.b(self.title),E.span(' [{} events{}]'.format(self.e_count,'!' if self.clipped else '')),colspan='3',style='background-color:gray; color:white; text-align:center'))
     def tbody():
-      if self.g_count: yield E.TH('graph'),E.TD(E.B('count'),': {}'.format(self.g_count),colspan='2')
+      if self.g_count: yield E.th('graph'),E.td(E.b('count'),': {}'.format(self.g_count),colspan='2')
       if self.s_count:
-        yield E.TH('steps'),E.TD(E.B('count'),': {} '.format(self.s_count),E.B('first'),': {} '.format(self.s_bnd[0]),E.B('last'),': {} '.format(self.s_bnd[1]),colspan='2')
-        yield E.TH('inter-step'),E.TD(E.B('avg'),': {:.1f} '.format(self.sd_stats.avg),E.B('std'),': {:.1f} '.format(sqrt(self.sd_stats.var)),colspan='2')
-        yield E.TH('step-ms'),E.TD(E.B('avg'),': {:.3g} '.format(1000*self.sdt_stats.avg),E.B('std'),': {:.3g} '.format(1000*sqrt(self.sdt_stats.var)),colspan='2')
+        yield E.th('steps'),E.td(E.b('count'),': {} '.format(self.s_count),E.b('first'),': {} '.format(self.s_bnd[0]),E.b('last'),': {} '.format(self.s_bnd[1]),colspan='2')
+        yield E.th('inter-step'),E.td(E.b('avg'),': {:.1f} '.format(self.sd_stats.avg),E.b('std'),': {:.1f} '.format(sqrt(self.sd_stats.var)),colspan='2')
+        yield E.th('step-ms'),E.td(E.b('avg'),': {:.3g} '.format(1000*self.sdt_stats.avg),E.b('std'),': {:.3g} '.format(1000*sqrt(self.sdt_stats.var)),colspan='2')
         firstrow = True
         for tag,v in sorted(self.tags.items()):
-          c = [E.TD(tag),E.TD(*(e for typ,x in zip(self.TYPE,v/self.s_count) if x for e in (E.B(typ),(' ({:.1%}) '.format(x) if 1.-x>1e-10 else ''))))]
-          if firstrow: firstrow = False; c.insert(0,E.TH('tags',rowspan=str(len(self.tags))))
+          c = [E.td(tag),E.td(*(e for typ,x in zip(self.TYPE,v/self.s_count) if x for e in (E.b(typ),(' ({:.1%}) '.format(x) if 1.-x>1e-10 else ''))))]
+          if firstrow: firstrow = False; c.insert(0,E.th('tags',rowspan=str(len(self.tags))))
           yield c
-    return E.TABLE(E.STYLE(self.style,scoped="scoped"),E.THEAD(thead),E.TBODY(*(E.TR(*cells) for cells in tbody())))
-
+    return E.table(E.style(self.style,scoped="scoped"),E.thead(thead),E.tbody(*(E.tr(*cells) for cells in tbody())))
 
 #==================================================================================================
 def tf_accuracy(y,y_,name='accuracy',sname='train-accuracy'):
+  r"""
+Returns the accuracy op of a batch prediction tensor *y* to a reference tensor *y_* in onehot representation. Both tensors *y,y_* are of shape *(n,d)* where *n* is the size of the current batch and *d* the dimension of the onehot representation. The accuracy tensor is also added to the summary.
+
+:param y,y_: 2d tensorflow node
+:type y,y_: :class:`tensorflow.Tensor`
+:param name: name of the accuracy op
+:param sname: name of the summary item for the accuracy op
+  """
 #==================================================================================================
   x = tensorflow.reduce_mean(tensorflow.cast(tensorflow.equal(tensorflow.argmax(y,1),tensorflow.argmax(y_,1)),tensorflow.float32),name=name)
   tensorflow.summary.scalar(sname,x)
@@ -279,38 +359,59 @@ def tf_accuracy(y,y_,name='accuracy',sname='train-accuracy'):
 
 #==================================================================================================
 def tf_loss(y,y_,name='loss',sname='loss'):
+  r"""
+Returns the cross-entropy loss op of a batch prediction tensor *y* to a reference tensor *y_* in onehot representation. Both tensors *y,y_* are of shape *(n,d)* where *n* is the size of the current batch and *d* the dimension of the onehot representation. The loss tensor is also added to the summary.
+
+:param y,y_: 2d tensorflow node
+:type y,y_: :class:`tensorflow.Tensor`
+:param name: name of the loss op
+:param sname: name of the summary item for the loss op
+  """
 #==================================================================================================
   x = tensorflow.reduce_mean(tensorflow.nn.softmax_cross_entropy_with_logits(labels=y_,logits=y),name=name)
   tensorflow.summary.scalar(sname,x)
   return x
 
 #==================================================================================================
-# test computation
-def tf_test(s,data,setup={},op='accuracy',Lx=('x',),y='y_true'):
+def tf_run(data={},target='accuracy',s=None):
+  r"""
+Computes the result of a tensorflow tensor on some data.
+
+:param data: mapping from variables (or their names) to values
+:type data: :class:`Dict[tensorflow.Variable,object]`
+:param target: the tensor to compute or its name
+:type target: :class:`Union[str,tensorflow.Tensor]`
+:param s: the session to use for the computation (defaults to the tensorflow default session)
+:type s: :class:`tensorflow.Session`
+:rtype: :class:`object`
+  """
 #==================================================================================================
-  Lx = [s.graph.get_tensor_by_name(v+':0') for v in Lx]
-  y = s.graph.get_tensor_by_name(y+':0')
-  op = s.graph.get_tensor_by_name(op+':0')
-  fd = {y:data[1]}
-  fd.update(zip(Lx,data[0]))
-  fd.update(setup)
-  return s.run(op,feed_dict=fd)
+  if s is None: s = tensorflow.get_default_session()
+  if isinstance(target,str): target = s.graph.get_tensor_by_name(target+':0')
+  return s.run(target,feed_dict=data)
 
 #==================================================================================================
-# main loop computation
-def tf_main(s,data,setup={},Lx=('x',),y='y_true',init_step='init',train_step='train'):
+def tf_iter(batches,init_step='init',iter_step='train',s=None):
+  r"""
+Iterates over *batches* and yields the result of a tensorflow operation, paired with the current session.
+
+:param batches: an iterable of mappings from variables (or their names) to values
+:type batches: :class:`Iterable[Dict[Union[str,tensorflow.Variable],object]]`
+:param init_step: the operation to compute at initialisation or its name
+:type init_step: :class:`Union[str,tensorflow.Operation]`
+:param iter_step: the operation to compute at each iteration or its name
+:type iter_step: :class:`Union[str,tensorflow.Operation]`
+:param s: the session to use for the computation (defaults to the tensorflow default session)
+:type s: :class:`tensorflow.Session`
+:rtype: :class:`Iterable[Tuple[tensorflow.Session,Dict[tensorflow.Variable,object]]]`
+  """
 #==================================================================================================
-  init_step = s.graph.get_operation_by_name(init_step)
-  train_step = s.graph.get_operation_by_name(train_step)
-  Lx = [s.graph.get_tensor_by_name(v+':0') for v in Lx]
-  y = s.graph.get_tensor_by_name(y+':0')
+  if s is None: s = tensorflow.get_default_session()
+  init_step,iter_step = ((s.graph.get_operation_by_name(op) if isinstance(op,str) else op) for op in (init_step,iter_step))
   s.run(init_step)
-  for Lbatch_xs,batch_ys in data:
-    fd = {y:batch_ys}
-    fd.update(zip(Lx,Lbatch_xs))
-    fd.update(setup)
-    s.run(train_step,feed_dict=fd)
-    yield s,fd
+  for data in batches:
+    s.run(iter_step,feed_dict=data)
+    yield data
 
 #==================================================================================================
 def tf_config(**ka):
@@ -324,7 +425,7 @@ def tf_config(**ka):
   return tensorflow.ConfigProto(**ka)
 
 #==================================================================================================
-def trmanage(*paths,ivname='tr'):
+def manage(*paths,ivname='tr'):
 #==================================================================================================
   import ipywidgets
   from IPython.display import clear_output, display

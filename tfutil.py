@@ -136,10 +136,12 @@ Instances of this class represent tensorflow runs.
   def __eq__(self,other): return isinstance(other,Run) and self.path == other.path
 
 #--------------------------------------------------------------------------------------------------
-  def monitor(self,period=100,ckperiod=2000,setup={},summary_first_batch=True,s=None):
+  def monitor(self,g,period=100,ckperiod=2000,setup={},summary_first_batch=True):
     r"""
 Returns a loop monitor for this run. The monitor has a method :meth:`run`. When that method is invoked with an iterable object of type :class:`Iterable[Dict[tensorflow.Variable,object]]` (e.g. returned by function :func:`tf_main`), it iterates over that object, and performs various operations on the items. The monitor is of class :class:`..Monitor` and can thus be combined with other monitors.
 
+:param g: the tensorflow graph for this run
+:type g: :class:`tensorflow.Graph`
 :param period: a tensorflow summary is dumped every *period* iterations
 :type period: :class:`int`
 :param ckperiod: a tensorflow checkpoint is created every *period* iterations
@@ -148,28 +150,27 @@ Returns a loop monitor for this run. The monitor has a method :meth:`run`. When 
 :type setup: :class:`Dict[tensorflow.Variable,object]`
 :param summary_first_item: whether the item passed to the summary operation is the first one rather than the current one
 :type summary_first_item: :class:`bool`
-:param s: the session in which to execute the tensorflow operation (defaults to tensorflow default session at first iteration)
-:type s: :class:`tensorflow.Session`
 :rtype: :class:`..Monitor`
 
 Typical invocation::
 
    tf = TFTrace('/mypath')
-   data = gatherdata()
-   m = tf.monitor()
-   with tensorflow.Session().as_default() as s: m.run(tf_main(s,data))
+   g = buildgraph(); data = gatherdata()
+   m = tf.monitor(g)
+   with tensorflow.Session().as_default() as s: m.run(tf_iter(data,s=s))
     """
 #--------------------------------------------------------------------------------------------------
     from itertools import cycle, count
     curbatch = not summary_first_batch
-    def coroutine(env,s=s):
-      if s is None: s = tensorflow.get_default_session()
+    summary = g.get_tensor_by_name('Merge/MergeSummary:0')
+    with g.as_default():
+      summary_writer = self.summary_writer()
+      checkpoint_saver = self.checkpoint_saver()
+    model_builder = self.model_builder()
+    def coroutine(env):
       fd = env.value
+      s = tensorflow.get_default_session()
       if not curbatch: fds = fd.copy(); fds.update(setup)
-      summary = s.graph.get_tensor_by_name('Merge/MergeSummary:0')
-      summary_writer = self.summary_writer(graph=s.graph)
-      model_builder = self.model_builder()
-      checkpoint_saver = self.checkpoint_saver(allow_empty=True)
       for step,n_su,n_ck in zip(count(1),cycle(range(period-1,-1,-1)),cycle(range(ckperiod-1,-1,-1))):
         if n_su==0:
           if curbatch: fd = env.value; fds = fd.copy(); fds.update(setup)
@@ -409,9 +410,9 @@ Iterates over *batches* and yields the result of a tensorflow operation, paired 
   if s is None: s = tensorflow.get_default_session()
   init_step,iter_step = ((s.graph.get_operation_by_name(op) if isinstance(op,str) else op) for op in (init_step,iter_step))
   s.run(init_step)
-  for data in batches:
-    s.run(iter_step,feed_dict=data)
-    yield data
+  for fd in batches:
+    s.run(iter_step,feed_dict=fd)
+    yield fd
 
 #==================================================================================================
 def tf_config(**ka):

@@ -11,10 +11,10 @@ from datetime import datetime
 from functools import partial
 from itertools import chain
 from shutil import rmtree
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from numpy import zeros, sqrt, square
 import tensorflow
-from . import basic_stats,html_stack,html_table,HtmlPlugin
+from . import basic_stats,html_stack,html_table,HtmlPlugin,unid
 from .monitor import Monitor
 
 #==================================================================================================
@@ -123,11 +123,8 @@ Instances of this class represent tensorflow runs.
     self.model_builder = partial(tensorflow.saved_model.builder.SavedModelBuilder,export_dir=d_mod)
     self.model_load = partial(tensorflow.saved_model.loader.load,export_dir=d_mod,tags=['model'])
     self.summary_writer = partial(tensorflow.summary.FileWriter,logdir=d_log)
-    def checkpoint_saver(*a,**ka):
-      x = tensorflow.train.Saver(*a,**ka)
-      x.save = partial(x.save,save_path=d_ckp); x.restore = partial(x.restore,save_path=d_ckp)
-      return x
-    self.checkpoint_saver = checkpoint_saver
+    def ckptsave(ckpt,*a,**ka): ckpt.save(*a,save_path=d_ckp,**ka)
+    self.ckptsave = ckptsave
     self.destroy = partial(rmtree,str(path))
     self.evfs = {}
     self.loaded = False
@@ -136,7 +133,7 @@ Instances of this class represent tensorflow runs.
   def __eq__(self,other): return isinstance(other,Run) and self.path == other.path
 
 #--------------------------------------------------------------------------------------------------
-  def monitor(self,g,period=100,ckperiod=2000,summary_fd=None):
+  def monitor(self,g,period=100,ckperiod=2000,summary_fd=None,ckpt=None):
     r"""
 Returns a loop monitor for this run. The monitor has a method :meth:`run`. When that method is invoked with an iterable object of type :class:`Iterable[Dict[tensorflow.Variable,object]]` (e.g. returned by function :func:`tf_main`), it iterates over that object, and performs various operations on the items. The monitor is of class :class:`..Monitor` and can thus be combined with other monitors.
 
@@ -153,19 +150,18 @@ Returns a loop monitor for this run. The monitor has a method :meth:`run`. When 
 #--------------------------------------------------------------------------------------------------
     from itertools import cycle, count
     summary = g.get_tensor_by_name('Merge/MergeSummary:0')
-    with g.as_default():
-      summary_writer = self.summary_writer()
-      checkpoint_saver = self.checkpoint_saver()
+    summary_writer = self.summary_writer(graph=g)
     model_builder = self.model_builder()
     def coroutine(env):
       s = tensorflow.get_default_session()
       for step,n_su,n_ck in zip(count(1),cycle(range(period-1,-1,-1)),cycle(range(ckperiod-1,-1,-1))):
         if n_su==0:
           v = s.run(summary,feed_dict=summary_fd)
-          summary_writer.add_summary(v,step)
+          summary_writer.add_summary(v,global_step=step)
           summary_writer.flush()
-        if n_ck==0: env.lastcheckpoint = checkpoint_saver.save(s)
+        if n_ck==0 and ckpt is not None: self.ckptsave(ckpt,s,global_step=step)
         if env.stop:
+          summary_writer.close()
           model_builder.add_meta_graph_and_variables(s,['model'])
           model_builder.save()
         yield
@@ -255,8 +251,10 @@ Returns a tensorboard url.
 #==================================================================================================
 class EVFile (HtmlPlugin):
 #==================================================================================================
-  TYPE = dict((v,i) for i,v in enumerate('simple_value image histo audio tensor ?'.split()))
-  style = 'table th,td {text-align:left; background-color: white; border: thin solid black}'
+  style = '''
+#toplevel > tbody th, #toplevel > tbody td {text-align:left; background-color: white; border: thin solid black}
+#toplevel > thead > tr > td { background-color:gray; color:white; text-align:center }
+  '''
 #--------------------------------------------------------------------------------------------------
   def __init__(self,path,clip=1000,title=None):
 #--------------------------------------------------------------------------------------------------
@@ -289,25 +287,17 @@ class EVFile (HtmlPlugin):
     t = self.path.stat().st_mtime
     if t>self.timestamp:
       self.timestamp = t
-      clipped = False
-      e_count = g_count = s_count = 0; tags = {}; last = None
-      s_bnd = [0,0]; sd_stats = basic_stats(); sdt_stats = basic_stats()
-      for e in tensorflow.train.summary_iterator(str(self.path)):
-        # e is an Event protocol buffer object
-        what = e.WhichOneof('what')
-        if what == 'summary':
-          # e.summary is a Summary protocol buffer object
-          if last is None: s_bnd[0] = e.step
-          else: s_bnd[1] = e.step; d = e.step-last.step; sd_stats += d; sdt_stats += (e.wall_time-last.wall_time)/d
-          last = e; s_count += 1
-          for v in e.summary.value:
-            D = tags.get(v.tag)
-            if D is None: tags[v.tag] = D = zeros(len(self.TYPE))
-            D[self.TYPE.get(v.WhichOneof('value'),-1)] += 1
-        elif what == 'graph_def': g_count += 1
-        e_count += 1
-        if e_count>=self.clip_: clipped = True; break
-      self.s_bnd,self.s_count,self.sd_stats,self.sdt_stats,self.g_count,self.tags,self.e_count,self.clipped = s_bnd,s_count,sd_stats,sdt_stats,g_count,tags,e_count,clipped
+      clipped = False; e_count = 0; info = {}
+      cat = dict(summary=EVF_summary,log_message=EVF_log_message)
+      for n,evt in enumerate(tensorflow.train.summary_iterator(str(self.path))):
+        if n == self.clip_: clipped = True; break
+        # evt is an Event protobuf object
+        e_count += 1; what = evt.WhichOneof('what')
+        p = info.get(what)
+        if p is None: info[what] = p = cat.get(what,EVF_base)(what)
+        p.add(evt,getattr(evt,what))
+      info = sorted(info.values(),key=(lambda p: (p.weight,p.label)))
+      self.clipped,self.e_count,self.info = clipped,e_count,info
 
 #--------------------------------------------------------------------------------------------------
 # Representation methods
@@ -316,19 +306,75 @@ class EVFile (HtmlPlugin):
   def as_html(self,_):
     from lxml.html.builder import E
     self.load()
-    thead = E.tr(E.td(E.b(self.title),E.span(' [{} events{}]'.format(self.e_count,'!' if self.clipped else '')),colspan='3',style='background-color:gray; color:white; text-align:center'))
-    def tbody():
-      if self.g_count: yield E.th('graph'),E.td(E.b('count'),': {}'.format(self.g_count),colspan='2')
-      if self.s_count:
-        yield E.th('steps'),E.td(E.b('count'),': {} '.format(self.s_count),E.b('first'),': {} '.format(self.s_bnd[0]),E.b('last'),': {} '.format(self.s_bnd[1]),colspan='2')
-        yield E.th('inter-step'),E.td(E.b('avg'),': {:.1f} '.format(self.sd_stats.avg),E.b('std'),': {:.1f} '.format(sqrt(self.sd_stats.var)),colspan='2')
-        yield E.th('step-ms'),E.td(E.b('avg'),': {:.3g} '.format(1000*self.sdt_stats.avg),E.b('std'),': {:.3g} '.format(1000*sqrt(self.sdt_stats.var)),colspan='2')
-        firstrow = True
-        for tag,v in sorted(self.tags.items()):
-          c = [E.td(tag),E.td(*(e for typ,x in zip(self.TYPE,v/self.s_count) if x for e in (E.b(typ),(' ({:.1%}) '.format(x) if 1.-x>1e-10 else ''))))]
-          if firstrow: firstrow = False; c.insert(0,E.th('tags',rowspan=str(len(self.tags))))
-          yield c
-    return E.table(E.style(self.style,scoped="scoped"),E.thead(thead),E.tbody(*(E.tr(*cells) for cells in tbody())))
+    thead = E.tr(E.td(E.b(self.title),E.span(' [{}{} events]'.format(self.e_count,('+' if self.clipped else ''))),colspan='4'))
+    tbody = (e for p in self.info for e in html_table_prefix_rows(list(p.html()),E.th(p.label)))
+    idn = unid()
+    return E.div(E.style(self.style.replace('#toplevel','#'+idn),scoped="scoped"),E.table(E.thead(thead),E.tbody(*tbody),id=idn))
+
+#==================================================================================================
+# Parsing/representation classes for EVFile
+#==================================================================================================
+
+#--------------------------------------------------------------------------------------------------
+class EVF_base:
+#--------------------------------------------------------------------------------------------------
+  weight = 0
+  def __init__(self,label):
+    self.count,self.label = 0,label
+  def add(self,evt,x): self.count += 1
+  def html(self):
+    from lxml.html.builder import E
+    yield E.tr(E.td(E.b('count'),': {}'.format(self.count),colspan='3'))
+#--------------------------------------------------------------------------------------------------
+class EVF_summary (EVF_base):
+#--------------------------------------------------------------------------------------------------
+  weight = -1
+  TYPE = 'simple_value image histo audio tensor ?'.split()
+  def __init__(self,label):
+    super().__init__(label)
+    # initialise step statistics (only for summary steps)
+    self.last,self.bnd = None,[0,0]
+    self.d_stats,self.t_stats = basic_stats(),basic_stats()
+    # initialise tag type counts, one per tag
+    self.tagcount = defaultdict(lambda n=len(self.TYPE): zeros(n))
+  def add(self,evt,x):
+    super().add(evt,x)
+    # compute step statistics
+    if self.last is None: self.bnd[0] = evt.step
+    else: self.bnd[1] = evt.step; d = evt.step-self.last.step; self.d_stats += d; self.t_stats += (evt.wall_time-self.last.wall_time)/d
+    self.last = evt
+    # x is a Summary protobuf object
+    for v in x.value:
+      try: i = self.TYPE.index(v.WhichOneof('value'))
+      except ValueError: i = -1
+      self.tagcount[v.tag][i] += 1.
+  def html(self):
+    from lxml.html.builder import E
+    # display step statistics
+    yield E.tr(E.th('steps'),E.td(E.b('count'),': {} '.format(self.count),E.b('first'),': {} '.format(self.bnd[0]),E.b('last'),': {} '.format(self.bnd[1]),colspan='2'))
+    yield E.tr(E.th('inter-step'),E.td(E.b('avg'),': {:.1f} '.format(self.d_stats.avg),E.b('std'),': {:.1f} '.format(sqrt(self.d_stats.var)),colspan='2'))
+    yield E.tr(E.th('step-ms'),E.td(E.b('avg'),': {:.3g} '.format(1000*self.t_stats.avg),E.b('std'),': {:.3g} '.format(1000*sqrt(self.t_stats.var)),colspan='2'))
+    # display Summary details
+    yield from html_table_prefix_rows([E.tr(E.td(tag),E.td(*(e for typ,x in zip(self.TYPE,v/self.count) if x for e in (E.b(typ),(' ({:.1%}) '.format(x) if 1.-x>1e-10 else ''))))) for tag,v in sorted(self.tagcount.items())],E.th('tags'))
+
+#--------------------------------------------------------------------------------------------------
+class EVF_log_message (EVF_base):
+#--------------------------------------------------------------------------------------------------
+  weight = -2
+  TYPE = [10,20,30,40,50,0]
+  NAME = 'DEBUGGING INFO WARN ERROR FATAL UNKNOWN'.split()
+  def __init__(self,label):
+    super().__init__(label); self.perlevel = zeros(len(self.TYPE),dtype=int)
+  def add(self,evt,x):
+    super().add(evt,x)
+    # x in a LogMessage protobuf object
+    try: i = self.TYPE.index(x.log_message.value.level)
+    except ValueError: i = -1
+    self.perlevel[i] += 1
+  def html(self):
+    from lxml.html.builder import E
+    # display LogMessage details
+    yield from (E.tr(E.td(lvl),E.td(E.b('count'),': {} '.format(n),colspan='2')) for lvl,n in zip(self.NAME,self.perlevel) if n != 0)
 
 #==================================================================================================
 def tf_accuracy(y,y_,name='accuracy',sname='train-accuracy'):
@@ -446,3 +492,10 @@ def gpus(n=0):
     return L[:n]
   else:
     return [(int(index),int(memory_free)/int(memory_total),D.get(gpu_uuid)) for index,memory_total,memory_free,gpu_uuid in L]
+
+#==================================================================================================
+def html_table_prefix_rows(L,e):
+#==================================================================================================
+  e.set('rowspan',str(len(L)))
+  L[0].insert(0,e)
+  return L

@@ -1366,6 +1366,10 @@ Instances of this class maintain basic statistics about a group of values.
     self.avg += r*d; self.var += r*(v-self.var+(1-r)*d*d)
     return self
   def __repr__(self): return 'basic_stats<weight:{},avg:{},var:{}>'.format(repr(self.weight),repr(self.avg),repr(self.var))
+  @property
+  def std(self):
+    from math import sqrt
+    return sqrt(self.var)
 
 #==================================================================================================
 def iso2date(iso):

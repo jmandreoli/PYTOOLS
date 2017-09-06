@@ -125,6 +125,8 @@ Instances of this class represent tensorflow runs.
     self.summary_writer = partial(tensorflow.summary.FileWriter,logdir=d_log)
     def ckptsave(ckpt,*a,**ka): ckpt.save(*a,save_path=d_ckp,**ka)
     self.ckptsave = ckptsave
+    def ckptrestore(ckpt,*a,**ka): ckpt.restore(*a,save_path=d_ckp,**ka)
+    self.ckptrestore = ckptrestore
     self.destroy = partial(rmtree,str(path))
     self.evfs = {}
     self.loaded = False
@@ -133,12 +135,16 @@ Instances of this class represent tensorflow runs.
   def __eq__(self,other): return isinstance(other,Run) and self.path == other.path
 
 #--------------------------------------------------------------------------------------------------
-  def monitor(self,g,period=100,ckperiod=2000,summary_fd=None,ckpt=None):
+  def monitor(self,period=100,ckperiod=2000,summary_fd=None,ckpt=None):
     r"""
-Returns a loop monitor for this run. The monitor has a method :meth:`run`. When that method is invoked with an iterable object of type :class:`Iterable[Dict[tensorflow.Variable,object]]` (e.g. returned by function :func:`tf_main`), it iterates over that object, and performs various operations on the items. The monitor is of class :class:`..Monitor` and can thus be combined with other monitors.
+Returns a loop monitor for this run. The monitor has a method :meth:`run`. When that method is invoked with an iterable of feed dictionaries (type: :class:`Iterable[Dict[tensorflow.Variable,object]]`), it performs various operations on its items. The operations (executed in the current default session) are:
 
-:param g: the tensorflow graph for this run
-:type g: :class:`tensorflow.Graph`
+* at specified intervals, dump a summary based on the current state of the graph
+* at specified intervals, save a checkpoint of the current state of the graph
+* at the end, save the graph and its current state
+
+The monitor is of class :class:`..Monitor` and can thus be combined with other monitors.
+
 :param period: a tensorflow summary is dumped every *period* iterations
 :type period: :class:`int`
 :param ckperiod: a tensorflow checkpoint is created every *period* iterations
@@ -149,11 +155,12 @@ Returns a loop monitor for this run. The monitor has a method :meth:`run`. When 
     """
 #--------------------------------------------------------------------------------------------------
     from itertools import cycle, count
-    summary = g.get_tensor_by_name('Merge/MergeSummary:0')
-    summary_writer = self.summary_writer(graph=g)
-    model_builder = self.model_builder()
     def coroutine(env):
+      model_builder = self.model_builder()
       s = tensorflow.get_default_session()
+      g = s.graph
+      summary = g.get_tensor_by_name('Merge/MergeSummary:0')
+      summary_writer = self.summary_writer(graph=g)
       for step,n_su,n_ck in zip(count(1),cycle(range(period-1,-1,-1)),cycle(range(ckperiod-1,-1,-1))):
         if n_su==0:
           v = s.run(summary,feed_dict=summary_fd)
@@ -407,45 +414,46 @@ Returns the cross-entropy loss op of a batch prediction score tensor *y* to a re
   return x
 
 #==================================================================================================
-def tf_run(data={},target='accuracy',s=None):
+def tf_run(op,data={},target=None,s=None):
   r"""
 Computes the result of a tensorflow tensor on some data.
 
-:param data: mapping from variables (or their names) to values
+:param data: a feed dictionary
 :type data: :class:`Dict[tensorflow.Variable,object]`
-:param target: the tensor to compute or its name
-:type target: :class:`Union[str,tensorflow.Tensor]`
+:param op: the operation to compute or its name
+:type op: :class:`Union[str,tensorflow.Operation]`
+:param target: the index of the output of *op* to return (if :const:`None` *op* itself is run and :const:`None` is returned)
+:type target: :class:`Union[int,slice]`
 :param s: the session to use for the computation (defaults to the tensorflow default session)
 :type s: :class:`tensorflow.Session`
 :rtype: :class:`object`
   """
 #==================================================================================================
   if s is None: s = tensorflow.get_default_session()
-  if isinstance(target,str): target = s.graph.get_tensor_by_name(target+':0')
+  if isinstance(op,str): op = s.graph.get_operation_by_name(op)
+  target = op if target is None else op.outputs[target]
   return s.run(target,feed_dict=data)
 
 #==================================================================================================
-def tf_iter(batches,init_step='init',iter_step='train',s=None):
+def tf_iter(op,batches,target=None,s=None):
   r"""
-Iterates over *batches* and yields the result of a tensorflow operation, paired with the current session.
+Iterates over *batches*, performs a tensorflow op on each item and yields the items.
 
-:param batches: an iterable of mappings from variables (or their names) to values
+:param batches: an iterable of feed dictionaries
 :type batches: :class:`Iterable[Dict[Union[str,tensorflow.Variable],object]]`
-:param init_step: the operation to compute at initialisation or its name
-:type init_step: :class:`Union[str,tensorflow.Operation]`
-:param iter_step: the operation to compute at each iteration or its name
-:type iter_step: :class:`Union[str,tensorflow.Operation]`
+:param op: the operation to compute at each iteration or its name
+:type op: :class:`Union[str,tensorflow.Operation]`
+:param target: the index of the output of *op* to yield (if :const:`None` *op* itself is run and :const:`None` is returned)
+:type target: :class:`Union[int,slice]`
 :param s: the session to use for the computation (defaults to the tensorflow default session)
 :type s: :class:`tensorflow.Session`
 :rtype: :class:`Iterable[Tuple[tensorflow.Session,Dict[tensorflow.Variable,object]]]`
   """
 #==================================================================================================
   if s is None: s = tensorflow.get_default_session()
-  init_step,iter_step = ((s.graph.get_operation_by_name(op) if isinstance(op,str) else op) for op in (init_step,iter_step))
-  s.run(init_step)
-  for fd in batches:
-    s.run(iter_step,feed_dict=fd)
-    yield fd
+  if isinstance(op,str): op = s.graph.get_operation_by_name(op)
+  target = op if target is None else op.outputs[target]
+  for fd in batches: yield s.run(target,feed_dict=fd)
 
 #==================================================================================================
 def tf_config(**ka):

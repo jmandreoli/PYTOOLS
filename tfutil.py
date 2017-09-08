@@ -119,13 +119,26 @@ Instances of this class represent tensorflow runs.
 #--------------------------------------------------------------------------------------------------
     self.path = path
     self.title = str(datetime.fromtimestamp(path.stat().st_ctime)) if title is None else title
-    d_mod = str(path/'mod'); d_log = str(path/'log'); d_ckp = str(path/'ckp')
-    self.model_builder = partial(tensorflow.saved_model.builder.SavedModelBuilder,export_dir=d_mod)
-    self.model_load = partial(tensorflow.saved_model.loader.load,export_dir=d_mod,tags=['model'])
-    self.summary_writer = partial(tensorflow.summary.FileWriter,logdir=d_log)
-    def ckptsave(ckpt,*a,**ka): ckpt.save(*a,save_path=d_ckp,**ka)
-    self.ckptsave = ckptsave
-    def ckptrestore(ckpt,*a,**ka): ckpt.restore(*a,save_path=d_ckp,**ka)
+    d_mod = path/'mod'; d_log = path/'log'; d_ckp = path/'ckp'/'c'
+    def model_save(s,as_text=False,**ka):
+      d = path/'tmp'
+      if d.exists(): rmtree(str(d))
+      try:
+        b = tensorflow.saved_model.builder.SavedModelBuilder(str(d))
+        b.add_meta_graph_and_variables(s,['model'],**ka)
+        b.save(as_text)
+      except: rmtree(str(d)); raise
+      else:
+        if d_mod.exists(): rmtree(str(d_mod))
+        d.rename(d_mod)
+    self.model_save = model_save
+    self.model_load = partial(tensorflow.saved_model.loader.load,export_dir=str(d_mod),tags=['model'])
+    self.summary_writer = partial(tensorflow.summary.FileWriter,logdir=str(d_log))
+    self.ckptsave = partial((lambda ckpt,*a,**ka: ckpt.save(*a,**ka)),write_meta_graph=False,save_path=str(d_ckp))
+    def ckptrestore(ckpt,s):
+      p = sorted(d_ckp.parent.glob(d_ckp.stem+'*.index'),key=(lambda p: p.stat().st_mtime))[-1]
+      p = p.parent/p.stem
+      ckpt.restore(s,str(p))
     self.ckptrestore = ckptrestore
     self.destroy = partial(rmtree,str(path))
     self.evfs = {}
@@ -156,7 +169,6 @@ The monitor is of class :class:`..Monitor` and can thus be combined with other m
 #--------------------------------------------------------------------------------------------------
     from itertools import cycle, count
     def coroutine(env):
-      model_builder = self.model_builder()
       s = tensorflow.get_default_session()
       g = s.graph
       summary = g.get_tensor_by_name('Merge/MergeSummary:0')
@@ -169,8 +181,7 @@ The monitor is of class :class:`..Monitor` and can thus be combined with other m
         if n_ck==0 and ckpt is not None: self.ckptsave(ckpt,s,global_step=step)
         if env.stop:
           summary_writer.close()
-          model_builder.add_meta_graph_and_variables(s,['model'])
-          model_builder.save()
+          self.model_save(s)
         yield
     return Monitor(('tfrun',),(coroutine,))
 

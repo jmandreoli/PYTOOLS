@@ -351,7 +351,7 @@ class EVF_summary (EVF_base):
   def __init__(self,label):
     super().__init__(label)
     # initialise step statistics (only for summary steps)
-    self.last,self.bnd = None,[0,0]
+    self.last,self.bnd,self.rep = None,[0,0],0
     self.d_stats,self.t_stats = basic_stats(),basic_stats()
     # initialise tag type counts, one per tag
     self.tagcount = defaultdict(lambda n=len(self.TYPE): zeros(n))
@@ -359,6 +359,7 @@ class EVF_summary (EVF_base):
     super().add(evt,x)
     # compute step statistics
     if self.last is None: self.bnd[0] = evt.step
+    elif self.last.step == evt.step: self.rep += 1
     else: self.bnd[1] = evt.step; d = evt.step-self.last.step; self.d_stats += d; self.t_stats += (evt.wall_time-self.last.wall_time)/d
     self.last = evt
     # x is a Summary protobuf object
@@ -369,7 +370,7 @@ class EVF_summary (EVF_base):
   def html(self):
     from lxml.html.builder import E
     # display step statistics
-    yield E.tr(E.th('steps'),E.td(E.b('count'),': {} '.format(self.count),E.b('first'),': {} '.format(self.bnd[0]),E.b('last'),': {} '.format(self.bnd[1]),colspan='2'))
+    yield E.tr(E.th('steps'),E.td(E.b('count'),': {} '.format(self.count),E.b('first'),': {} '.format(self.bnd[0]),E.b('last'),': {} '.format(self.bnd[1]),E.b('rep'),': {} '.format(self.rep),colspan='2'))
     yield E.tr(E.th('inter-step'),E.td(E.b('avg'),': {:.1f} '.format(self.d_stats.avg),E.b('std'),': {:.1f} '.format(sqrt(self.d_stats.var)),colspan='2'))
     yield E.tr(E.th('step-ms'),E.td(E.b('avg'),': {:.3g} '.format(1000*self.t_stats.avg),E.b('std'),': {:.3g} '.format(1000*sqrt(self.t_stats.var)),colspan='2'))
     # display Summary details

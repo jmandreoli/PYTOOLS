@@ -14,7 +14,7 @@ from shutil import rmtree
 from collections import OrderedDict, defaultdict
 from numpy import zeros, sqrt, square
 import tensorflow
-from . import basic_stats,html_stack,html_table,HtmlPlugin,unid
+from . import basic_stats,html_parlist,HtmlPlugin,unid
 from .monitor import Monitor
 
 #==================================================================================================
@@ -37,7 +37,6 @@ Instances of this class represent Tensorfow traces. A TF trace is composed of ru
     self = cache.get(root)
     if self is None:
       self = super().__new__(cls)
-      root.mkdir(exist_ok=True)
       self.root = root; self.runs = []; self.runs_ = {}; self.loaded = False
       cache[root] = self
     return self
@@ -68,12 +67,12 @@ Loads this TF trace from its directory.
     """
 #--------------------------------------------------------------------------------------------------
     if self.loaded: return
+    self.root.mkdir(exist_ok=True)
     self.runs.clear(); runs_ = {}
-    for d in sorted(self.root.iterdir(),key=(lambda d: d.stat().st_ctime)):
-      if not d.name.startswith('run-'): continue
+    for d in sorted((d for d in self.root.iterdir() if d.name.startswith('run-')),reverse=True):
       run = self.runs_.get(d)
-      if run is None: run = Run(d)
-      self.runs.insert(0,run); runs_[d] = run
+      if run is None: run = Run(d,'Run[{}]'.format(datetime.fromtimestamp(int(d.name[4:],16))))
+      self.runs.append(run); runs_[d] = run
     self.runs_ = runs_
     self.loaded = True
 
@@ -83,7 +82,7 @@ Loads this TF trace from its directory.
 Creates a new (empty) run and adds it to this TF trace.
     """
 #--------------------------------------------------------------------------------------------------
-    d = self.root/'run-{:x}'.format(int(datetime.now().timestamp())); d.mkdir()
+    d = self.root/'run-{:x}'.format(int(datetime.now().timestamp()))
     run = Run(d); self.runs.insert(0,run); self.runs_[d] = run
     return run
 
@@ -93,19 +92,20 @@ Creates a new (empty) run and adds it to this TF trace.
 
   def __getitem__(self,k): return self.runs[k]
   def __delitem__(self,k):
-    if isinstance(k,int): self.runs.pop(k).destroy()
-    elif isinstance(k,slice):
-      for run in self.runs[k]: run.destroy()
-      del self.runs[k]
+    if isinstance(k,int): run = self.runs.pop(k); L = [run]
+    elif isinstance(k,slice): L = self.runs[k]; del self.runs[k]
     else: raise TypeError('List indices must be integers or slices, not {}'.format(type(k)))
-  def __setitem__(self,k,v): raise Exception('Direct create/update not permitted on TFTrace')
+    for run in L: del self.run_[run.path]; run.destroy()
+  def __setitem__(self,k,v): raise Exception('Direct create/update not permitted on {}'.format(type(self)))
   def __iter__(self): return iter(self.runs)
 
 #--------------------------------------------------------------------------------------------------
 # Representation methods
 #--------------------------------------------------------------------------------------------------
 
-  def as_html(self,incontext): self.load(); return html_table(((i,run.as_html(incontext)) for i,run in enumerate(self.runs)),((lambda x:x),))
+  def as_html(self,incontext):
+    self.load()
+    return html_parlist(self.runs,(),incontext,deco=('Trace [|','|',']'))
 
 #==================================================================================================
 class Run (HtmlPlugin):
@@ -115,11 +115,11 @@ Instances of this class represent tensorflow runs.
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,path,title=None):
+  def __init__(self,path,title=None,pre='c'):
 #--------------------------------------------------------------------------------------------------
     self.path = path
-    self.title = str(datetime.fromtimestamp(path.stat().st_ctime)) if title is None else title
-    d_mod = path/'mod'; d_log = path/'log'; d_ckp = path/'ckp'/'c'
+    self.title = str(path) if title is None else title
+    d_mod = path/'mod'; d_log = path/'log'; d_ckp = path/'ckp'
     def model_save(s,as_text=False,**ka):
       d = path/'tmp'
       if d.exists(): rmtree(str(d))
@@ -134,11 +134,13 @@ Instances of this class represent tensorflow runs.
     self.model_save = model_save
     self.model_load = partial(tensorflow.saved_model.loader.load,export_dir=str(d_mod),tags=['model'])
     self.summary_writer = partial(tensorflow.summary.FileWriter,logdir=str(d_log))
-    self.ckptsave = partial((lambda ckpt,*a,**ka: ckpt.save(*a,**ka)),write_meta_graph=False,save_path=str(d_ckp))
-    def ckptrestore(ckpt,s):
-      p = sorted(d_ckp.parent.glob(d_ckp.stem+'*.index'),key=(lambda p: p.stat().st_mtime))[-1]
-      p = p.parent/p.stem
-      ckpt.restore(s,str(p))
+    self.ckptsave = partial((lambda ckpt,*a,**ka: ckpt.save(*a,**ka)),write_meta_graph=False,save_path=str(d_ckp/pre))
+    def ckptrestore(ckpt):
+      L = sorted(d_ckp.glob(pre+'*.index'),key=(lambda p: p.stat().st_mtime))
+      if L:
+        s = tensorflow.get_default_session()
+        ckpt.restore(s,str(L[-1].with_suffix('')))
+        return True
     self.ckptrestore = ckptrestore
     self.destroy = partial(rmtree,str(path))
     self.evfs = {}
@@ -148,7 +150,7 @@ Instances of this class represent tensorflow runs.
   def __eq__(self,other): return isinstance(other,Run) and self.path == other.path
 
 #--------------------------------------------------------------------------------------------------
-  def monitor(self,period=100,ckperiod=2000,summary_fd=None,ckpt=None):
+  def monitor(self,period=100,ckperiod=2000,summary_fd=None,ckpt=None,global_step=None):
     r"""
 Returns a loop monitor for this run. The monitor has a method :meth:`run`. When that method is invoked with an iterable of feed dictionaries (type: :class:`Iterable[Dict[tensorflow.Variable,object]]`), it performs various operations on its items. The operations (executed in the current default session) are:
 
@@ -171,14 +173,19 @@ The monitor is of class :class:`..Monitor` and can thus be combined with other m
     def coroutine(env):
       s = tensorflow.get_default_session()
       g = s.graph
+      if global_step is None:
+        stepv = (lambda s,step: step)
+      else:
+        gstep = g.get_tensor_by_name(global_step) if isinstance(global_step,str) else global_step
+        stepv = (lambda s,step,gstep=gstep: s.run(gstep))
       summary = g.get_tensor_by_name('Merge/MergeSummary:0')
       summary_writer = self.summary_writer(graph=g)
       for step,n_su,n_ck in zip(count(1),cycle(range(period-1,-1,-1)),cycle(range(ckperiod-1,-1,-1))):
         if n_su==0:
           v = s.run(summary,feed_dict=summary_fd)
-          summary_writer.add_summary(v,global_step=step)
+          summary_writer.add_summary(v,global_step=stepv(s,step))
           summary_writer.flush()
-        if n_ck==0 and ckpt is not None: self.ckptsave(ckpt,s,global_step=step)
+        if n_ck==0 and ckpt is not None: self.ckptsave(ckpt,s,global_step=stepv(s,step))
         if env.stop:
           summary_writer.close()
           self.model_save(s)
@@ -186,9 +193,17 @@ The monitor is of class :class:`..Monitor` and can thus be combined with other m
     return Monitor(('tfrun',),(coroutine,))
 
 #--------------------------------------------------------------------------------------------------
+  def init(self,ckpt=None,init='init'):
+#--------------------------------------------------------------------------------------------------
+    if ckpt is None or not self.ckptrestore(ckpt):
+      s = tensorflow.get_default_session()
+      if isinstance(init,str): init = s.graph.get_operation_by_name(init)
+      s.run(init)
+
+#--------------------------------------------------------------------------------------------------
   def clip(self,n):
     r"""
-Truncates all the event files of thus run to *n* entries.
+Truncates all the event files of this run to *n* entries.
     """
 #--------------------------------------------------------------------------------------------------
     for evf in self.evfs.values(): evf.clip = n
@@ -203,6 +218,7 @@ Truncates all the event files of thus run to *n* entries.
   def load(self):
 #--------------------------------------------------------------------------------------------------
     if self.loaded: return
+    self.path.mkdir(exist_ok=True)
     d_log = self.path/'log'
     if d_log.is_dir():
       evfs = OrderedDict()
@@ -264,7 +280,9 @@ Returns a tensorboard url.
 # Representation methods
 #--------------------------------------------------------------------------------------------------
 
-  def as_html(self,incontext): self.load(); return html_stack(*(evf.as_html(incontext) for evf in self.evfs.values()))
+  def as_html(self,incontext):
+    self.load()
+    return html_parlist(self.evfs.values(),(),incontext,deco=('Run [|','|',']'))
 
 #==================================================================================================
 class EVFile (HtmlPlugin):
@@ -276,7 +294,8 @@ class EVFile (HtmlPlugin):
 #--------------------------------------------------------------------------------------------------
   def __init__(self,path,clip=1000,title=None):
 #--------------------------------------------------------------------------------------------------
-    self.path = path; self.e_count = 0; self.clip_ = clip; self.timestamp = 0
+    self.path,self.timestamp = path,0
+    self.clip_,self.clipped = clip,False
     self.title = str(self.path) if title is None else title
 
   def __hash__(self): return hash(self.path)
@@ -291,8 +310,8 @@ class EVFile (HtmlPlugin):
   @clip.setter
   def clip(self,n):
 #--------------------------------------------------------------------------------------------------
+    if n>self.clip_ and self.clipped: self.timestamp = 0
     self.clip_ = n
-    if n>self.e_count: self.timestamp = 0
 
 #--------------------------------------------------------------------------------------------------
   def refresh(self):
@@ -305,17 +324,11 @@ class EVFile (HtmlPlugin):
     t = self.path.stat().st_mtime
     if t>self.timestamp:
       self.timestamp = t
-      clipped = False; e_count = 0; info = {}
-      cat = dict(summary=EVF_summary,log_message=EVF_log_message)
+      clipped = False; s = EVF_summariser()
       for n,evt in enumerate(tensorflow.train.summary_iterator(str(self.path))):
         if n == self.clip_: clipped = True; break
-        # evt is an Event protobuf object
-        e_count += 1; what = evt.WhichOneof('what')
-        p = info.get(what)
-        if p is None: info[what] = p = cat.get(what,EVF_base)(what)
-        p.add(evt,getattr(evt,what))
-      info = sorted(info.values(),key=(lambda p: (p.weight,p.label)))
-      self.clipped,self.e_count,self.info = clipped,e_count,info
+        s.add(evt)
+      self.clipped,self.summariser = clipped,s
 
 #--------------------------------------------------------------------------------------------------
 # Representation methods
@@ -324,8 +337,8 @@ class EVFile (HtmlPlugin):
   def as_html(self,_):
     from lxml.html.builder import E
     self.load()
-    thead = E.tr(E.td(E.b(self.title),E.span(' [{}{} events]'.format(self.e_count,('+' if self.clipped else ''))),colspan='4'))
-    tbody = (e for p in self.info for e in html_table_prefix_rows(list(p.html()),E.th(p.label)))
+    thead = E.tr(E.td(E.b(self.title),(' (clipped at {})'.format(self.clip_) if self.clipped else ''),colspan='3'))
+    tbody = (tr for label,html in self.summariser.html() for tr in html_table_prefix_rows(html,E.th(label)))
     idn = unid()
     return E.div(E.style(self.style.replace('#toplevel','#'+idn),scoped="scoped"),E.table(E.thead(thead),E.tbody(*tbody),id=idn))
 
@@ -334,34 +347,43 @@ class EVFile (HtmlPlugin):
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
+class EVF_summariser:
+#--------------------------------------------------------------------------------------------------
+  def __init__(self):
+    self.hist = []
+    self.detail = defaultdict(EVF_base,summary=EVF_summary(),log_message=EVF_log_message())
+  def add(self,evt):
+    # evt is an Event protobuf object
+    what = evt.WhichOneof('what')
+    self.detail[what].add(getattr(evt,what))
+    self.hist.append((evt.step,evt.wall_time))
+  def html(self):
+    from lxml.html.builder import E
+    L.append(E.tr(E.th('t-line'),E.td(E.svg(*svg(),width='8cm',height='1cm'),colspan='2')))
+    L.append(E.tr(E.th('ms/step'),E.td('{:.3g}±{:.3g}'.format(1000*self.t_stats.avg,1000*self.t_stats.std),colspan='2')))
+    yield 'events', L
+    for label,p in self.detail.items():
+      if p.count==0: continue
+      yield label,list(p.html())
+
+#--------------------------------------------------------------------------------------------------
 class EVF_base:
 #--------------------------------------------------------------------------------------------------
-  weight = 0
-  def __init__(self,label):
-    self.count,self.label = 0,label
-  def add(self,evt,x): self.count += 1
+  def __init__(self): self.count = 0
+  def add(self,x): self.count += 1
   def html(self):
     from lxml.html.builder import E
     yield E.tr(E.td(E.b('count'),': {}'.format(self.count),colspan='3'))
 #--------------------------------------------------------------------------------------------------
 class EVF_summary (EVF_base):
 #--------------------------------------------------------------------------------------------------
-  weight = -1
   TYPE = 'simple_value image histo audio tensor ?'.split()
-  def __init__(self,label):
-    super().__init__(label)
-    # initialise step statistics (only for summary steps)
-    self.last,self.bnd,self.rep = None,[0,0],0
-    self.d_stats,self.t_stats = basic_stats(),basic_stats()
+  def __init__(self):
+    super().__init__()
     # initialise tag type counts, one per tag
     self.tagcount = defaultdict(lambda n=len(self.TYPE): zeros(n))
-  def add(self,evt,x):
-    super().add(evt,x)
-    # compute step statistics
-    if self.last is None: self.bnd[0] = evt.step
-    elif self.last.step == evt.step: self.rep += 1
-    else: self.bnd[1] = evt.step; d = evt.step-self.last.step; self.d_stats += d; self.t_stats += (evt.wall_time-self.last.wall_time)/d
-    self.last = evt
+  def add(self,x):
+    super().add(x)
     # x is a Summary protobuf object
     for v in x.value:
       try: i = self.TYPE.index(v.WhichOneof('value'))
@@ -369,30 +391,27 @@ class EVF_summary (EVF_base):
       self.tagcount[v.tag][i] += 1.
   def html(self):
     from lxml.html.builder import E
-    # display step statistics
-    yield E.tr(E.th('steps'),E.td(E.b('count'),': {} '.format(self.count),E.b('first'),': {} '.format(self.bnd[0]),E.b('last'),': {} '.format(self.bnd[1]),E.b('rep'),': {} '.format(self.rep),colspan='2'))
-    yield E.tr(E.th('inter-step'),E.td(E.b('avg'),': {:.1f} '.format(self.d_stats.avg),E.b('std'),': {:.1f} '.format(sqrt(self.d_stats.var)),colspan='2'))
-    yield E.tr(E.th('step-ms'),E.td(E.b('avg'),': {:.3g} '.format(1000*self.t_stats.avg),E.b('std'),': {:.3g} '.format(1000*sqrt(self.t_stats.var)),colspan='2'))
-    # display Summary details
+    yield from super().html()
     yield from html_table_prefix_rows([E.tr(E.td(tag),E.td(*(e for typ,x in zip(self.TYPE,v/self.count) if x for e in (E.b(typ),(' ({:.1%}) '.format(x) if 1.-x>1e-10 else ''))))) for tag,v in sorted(self.tagcount.items())],E.th('tags'))
 
 #--------------------------------------------------------------------------------------------------
 class EVF_log_message (EVF_base):
 #--------------------------------------------------------------------------------------------------
-  weight = -2
   TYPE = [10,20,30,40,50,0]
   NAME = 'DEBUGGING INFO WARN ERROR FATAL UNKNOWN'.split()
-  def __init__(self,label):
-    super().__init__(label); self.perlevel = zeros(len(self.TYPE),dtype=int)
-  def add(self,evt,x):
-    super().add(evt,x)
+  def __init__(self):
+    super().__init__()
+    # initialise loglevel counts
+    self.perlevel = zeros(len(self.TYPE),dtype=int)
+  def add(self,x):
+    super().add(x)
     # x in a LogMessage protobuf object
     try: i = self.TYPE.index(x.log_message.value.level)
     except ValueError: i = -1
     self.perlevel[i] += 1
   def html(self):
     from lxml.html.builder import E
-    # display LogMessage details
+    yield from super().html()
     yield from (E.tr(E.td(lvl),E.td(E.b('count'),': {} '.format(n),colspan='2')) for lvl,n in zip(self.NAME,self.perlevel) if n != 0)
 
 #==================================================================================================

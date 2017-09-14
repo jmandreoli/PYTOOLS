@@ -158,7 +158,7 @@ Instances of this class represent configurations which can be consistently setup
 :param conf: specification of the items of this configuration
 :param initv: an assignment of the items of this configuration, applied at initialisation
 
-Each element in *conf* specifies an item as a pair :class:`Tuple[Tuple[object,...],Dict[str,object]]`, specifying the positional and keyword arguments to be passed to method :meth:`add_argument`.
+Each element in *conf* specifies an item as a pair :class:`Tuple[Tuple[object,...],Dict[str,object]]`, specifying the positional and keyword arguments to be passed to method :meth:`add_entry`.
   """
 #==================================================================================================
   widget_layout = dict(width='15cm')
@@ -176,7 +176,7 @@ Each element in *conf* specifies an item as a pair :class:`Tuple[Tuple[object,..
     from collections import OrderedDict
     self.pconf = OrderedDict()
     self.initial = {}
-    for a,ka in conf: self.add_argument(*a,**ka)
+    for a,ka in conf: self.add_entry(*a,**ka)
     self.reset(**initv)
 
   def __getitem__(self,k): return self.pconf[k].value
@@ -213,7 +213,7 @@ Reinitialises the item values.
     return self
 
 #--------------------------------------------------------------------------------------------------
-  def add_argument(self,name,value,cat=None,helper='',widget=None,cparser=None):
+  def add_entry(self,name,value,cat=None,helper='',widget=None,cparser=None):
     r"""
 :param name: name of the item
 :type name: :class:`str`
@@ -828,9 +828,9 @@ Display an IPython widget for basic database exploration. If a metadata structur
   from IPython.display import display, clear_output
   # Content retrieval
   def schemag():
-    def fstr(x): return x
-    def fbool(x): return 'x' if x else ''
-    def fany(x): return str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else ''
+    fstr = (lambda x: x)
+    fbool = (lambda x: 'x' if x else '')
+    fany = (lambda x: str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else '')
     def row(c):
       def val(x):
         try: return x[1](getattr(c,x[0]))
@@ -849,8 +849,9 @@ Display an IPython widget for basic database exploration. If a metadata structur
     style = exploredb.style['schema']+'\n'.join('#toplevel td.field-{} {{ min-width:{}cm; max-width:{}cm; }}'.format(x[0],x[3],x[3]) for x in schema)
     thead = '<tr>{}</tr>'.format(''.join('<td title="{}" class="field-{}">{}</td>'.format(x[0],x[0],x[2]) for x in schema))
     tid = unid('exploredb')
-    fmt = '<div><style scoped="scoped">{}</style><table id="{}"><thead>{}</thead><tbody>'.format(style.replace('#toplevel','#'+tid),tid,thead),'</tbody></table></div>'
-    return lambda table,pre=fmt[0],suf=fmt[1]: pre+''.join(map(row,tables[table].columns))+suf
+    pre = '<div><style scoped="scoped">{}</style><table id="{}"><thead>{}</thead><tbody>'.format(style.replace('#toplevel','#'+tid),tid,thead)
+    suf = '</tbody></table></div>'
+    return lambda table: pre+''.join(map(row,tables[table].columns))+suf
   schema = lru_cache(None)(schemag())
   def size(table):
     return engine.execute(select([func.count()]).select_from(tables[table])).fetchone()[0]

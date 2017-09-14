@@ -11,10 +11,10 @@ from datetime import datetime
 from functools import partial
 from itertools import chain
 from shutil import rmtree
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict, defaultdict, namedtuple
 from numpy import zeros, sqrt, square
 import tensorflow
-from . import basic_stats,html_parlist,HtmlPlugin,unid
+from . import basic_stats,html_parlist,HtmlPlugin,time_fmt,unid
 from .monitor import Monitor
 
 #==================================================================================================
@@ -226,55 +226,11 @@ Truncates all the event files of this run to *n* entries.
         evf = self.evfs.get(f)
         if evf is None: evf = EVFile(f)
         evf.title = '{}{{{}}}'.format(self.title,n)
+        evf.walltime = datetime.fromtimestamp(f.stat().st_mtime)
         evfs[f] = evf
     else: evfs = {}
     self.evfs = evfs
     self.loaded = True
-
-#--------------------------------------------------------------------------------------------------
-  def tensorboard(self,hostname=None):
-    r"""
-Returns a tensorboard url.
-    """
-#--------------------------------------------------------------------------------------------------
-    import ipywidgets
-    from socket import getfqdn
-    from threading import Thread
-    from random import randint
-    from IPython.display import clear_output, display
-    def dump():
-      nonlocal sub
-      with wout:
-        print('Server launched')
-        try:
-          for x in sub.stdout:
-            if x: sys.stdout.write(x)
-            else: break
-        except Exception as e: status = e
-        else: status = 'OK'
-        print('Server terminated, status:',status)
-      sub = None
-      wtoggle.description = 'start'
-      wlink.value = ''
-      wout.layout.border = 'thin solid black'
-    def toggle(server_launchcmd=str(Path(sys.executable).parent/'tensorboard')):
-      nonlocal sub
-      if sub is None:
-        port = str(randint(10000,20000))
-        wout.clear_output()
-        sub = subprocess.Popen((server_launchcmd,'--host',hostname,'--port',port,'--logdir',str(self.path)),stdout=subprocess.PIPE,stderr=subprocess.STDOUT,universal_newlines=True)
-        wtoggle.description = 'stop'
-        wlink.value = '<a href="http://{}:{}" target="_blank">view</a>'.format(hostname,port)
-        wout.layout.border = 'thin solid blue'
-        Thread(target=dump,daemon=True).start()
-      else: sub.terminate()
-    if hostname is None: hostname = getfqdn()
-    sub = None
-    wtoggle = ipywidgets.Button(description='start')
-    wlink = ipywidgets.HTML('')
-    wout = ipywidgets.Output(layout=dict(overflow_y='scroll',height='5cm',border='thin solid black'))
-    wtoggle.on_click(lambda b: toggle())
-    return ipywidgets.VBox(children=(ipywidgets.HBox(children=(wtoggle,wlink)),wout))
 
 #--------------------------------------------------------------------------------------------------
 # Representation methods
@@ -288,8 +244,8 @@ Returns a tensorboard url.
 class EVFile (HtmlPlugin):
 #==================================================================================================
   style = '''
-#toplevel > tbody th, #toplevel > tbody td {text-align:left; background-color: white; border: thin solid black}
-#toplevel > thead > tr > td { background-color:gray; color:white; text-align:center }
+#toplevel > tbody > tr > th, #toplevel > tbody > tr > td { text-align:left; background-color: white; border: thin solid black }
+#toplevel > thead > tr > td { background-color:gray; color:white; text-align: center; }
   '''
 #--------------------------------------------------------------------------------------------------
   def __init__(self,path,clip=1000,title=None):
@@ -337,9 +293,9 @@ class EVFile (HtmlPlugin):
   def as_html(self,_):
     from lxml.html.builder import E
     self.load()
-    thead = E.tr(E.td(E.b(self.title),(' (clipped at {})'.format(self.clip_) if self.clipped else ''),colspan='3'))
+    thead = E.tr(E.td(E.b(self.title),(' (clipped at {})'.format(self.clip_) if self.clipped else ''),colspan='4'))
     tbody = (tr for label,html in self.summariser.html() for tr in html_table_prefix_rows(html,E.th(label)))
-    idn = unid()
+    idn = unid('tfutil')
     return E.div(E.style(self.style.replace('#toplevel','#'+idn),scoped="scoped"),E.table(E.thead(thead),E.tbody(*tbody),id=idn))
 
 #==================================================================================================
@@ -352,16 +308,42 @@ class EVF_summariser:
   def __init__(self):
     self.hist = []
     self.detail = defaultdict(EVF_base,summary=EVF_summary(),log_message=EVF_log_message())
-  def add(self,evt):
+  def add(self,evt,evtype=namedtuple('evtype',('time','step'))):
     # evt is an Event protobuf object
+    self.hist.append(evtype(evt.wall_time,evt.step))
     what = evt.WhichOneof('what')
     self.detail[what].add(getattr(evt,what))
-    self.hist.append((evt.step,evt.wall_time))
   def html(self):
     from lxml.html.builder import E
-    L.append(E.tr(E.th('t-line'),E.td(E.svg(*svg(),width='8cm',height='1cm'),colspan='2')))
-    L.append(E.tr(E.th('ms/step'),E.td('{:.3g}±{:.3g}'.format(1000*self.t_stats.avg,1000*self.t_stats.std),colspan='2')))
-    yield 'events', L
+    if not self.hist: return
+    L = sorted(self.hist,key=(lambda e: e.time))
+    tfirst,tspan = L[0].time, L[-1].time-L[0].time
+    x = ' over {}, first'.format(time_fmt(tspan)) if tspan else ''
+    eventdetail = [('count','{}{} on {}'.format(len(L),x,datetime.fromtimestamp(tfirst)))]
+    if tspan:
+      L = {}
+      for e in self.hist:
+        ee = L.get(e.step)
+        if ee is None or e.time<ee.time: L[e.step] = e
+      L = sorted(L.values(),key=(lambda e: e.step))
+      if len(L)>1:
+        sfirst,sspan = L[0].step,L[-1].step-L[0].step
+        x = '{} in {}-{}'.format(len(L),sfirst,L[-1].step)
+        L = sorted((e2.time-e1.time)/(e2.step-e1.step) for e1,e2 in zip(L[:-1],L[1:]) if e2.time>e1.time)
+        n = len(L)
+        if n: x += ' (ca. {}/step)'.format(time_fmt((L[n//2]+L[n//2-1])/2 if n%2==0 else L[n//2]))
+        eventdetail.append(('steps',x))
+        def svg():
+          smap = lambda e: '{:.1%}'.format((e.step-sfirst)/sspan)
+          tmap = lambda e: '{:.1%}'.format((e.time-tfirst)/tspan)
+          yield E.line(x1='0',y1='1mm',x2='100%',y2='1mm',style='stroke:black; stroke-width: 2')
+          yield E.line(x1='0',y1='5mm',x2='100%',y2='5mm',style='stroke:black; stroke-width: 2')
+          for e in self.hist:
+            yield E.line(x1=tmap(e),y1='1mm',x2=smap(e),y2='5mm',style='stroke:gray; stroke-width:1')
+        eventdetail.append(('t-line',E.div(E.svg(*svg(),width='80mm',height='6mm'))))
+      else:
+        eventdetail.append(('steps','singleton: {{{}}}'.format(L[0].step)))
+    yield 'events', [E.tr(E.th(n),E.td(x,colspan='2')) for n,x in eventdetail]
     for label,p in self.detail.items():
       if p.count==0: continue
       yield label,list(p.html())
@@ -538,3 +520,49 @@ def html_table_prefix_rows(L,e):
   e.set('rowspan',str(len(L)))
   L[0].insert(0,e)
   return L
+
+def forsave():
+#--------------------------------------------------------------------------------------------------
+  def tensorboard(self,hostname=None):
+    r"""
+Returns a tensorboard url.
+    """
+#--------------------------------------------------------------------------------------------------
+    import ipywidgets
+    from socket import getfqdn
+    from threading import Thread
+    from random import randint
+    from IPython.display import clear_output, display
+    def dump():
+      nonlocal sub
+      with wout:
+        print('Server launched')
+        try:
+          for x in sub.stdout:
+            if x: sys.stdout.write(x)
+            else: break
+        except Exception as e: status = e
+        else: status = 'OK'
+        print('Server terminated, status:',status)
+      sub = None
+      wtoggle.description = 'start'
+      wlink.value = ''
+      wout.layout.border = 'thin solid black'
+    def toggle(server_launchcmd=str(Path(sys.executable).parent/'tensorboard')):
+      nonlocal sub
+      if sub is None:
+        port = str(randint(10000,20000))
+        wout.clear_output()
+        sub = subprocess.Popen((server_launchcmd,'--host',hostname,'--port',port,'--logdir',str(self.path)),stdout=subprocess.PIPE,stderr=subprocess.STDOUT,universal_newlines=True)
+        wtoggle.description = 'stop'
+        wlink.value = '<a href="http://{}:{}" target="_blank">view</a>'.format(hostname,port)
+        wout.layout.border = 'thin solid blue'
+        Thread(target=dump,daemon=True).start()
+      else: sub.terminate()
+    if hostname is None: hostname = getfqdn()
+    sub = None
+    wtoggle = ipywidgets.Button(description='start')
+    wlink = ipywidgets.HTML('')
+    wout = ipywidgets.Output(layout=dict(overflow_y='scroll',height='5cm',border='thin solid black'))
+    wtoggle.on_click(lambda b: toggle())
+    return ipywidgets.VBox(children=(ipywidgets.HBox(children=(wtoggle,wlink)),wout))

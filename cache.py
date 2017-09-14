@@ -16,7 +16,7 @@ from collections import namedtuple, OrderedDict
 from collections.abc import MutableMapping
 from weakref import WeakValueDictionary
 from time import process_time, perf_counter
-from . import SQliteNew, size_fmt, time_fmt, html_stack, html_table, html_parlist, HtmlPlugin, pickleclass
+from . import SQliteNew, size_fmt, time_fmt, html_table, html_parlist, HtmlPlugin, pickleclass
 
 SCHEMA = '''
 CREATE TABLE Block (
@@ -214,7 +214,7 @@ Clears all the blocks which are obsolete.
 #--------------------------------------------------------------------------------------------------
 
   def as_html(self,incontext):
-    return html_stack(*(v.as_html(incontext) for k,v in sorted(self.items())))
+    return html_parlist((v for k,v in sorted(self.items())),(),incontext,deco=('Cache [|','|',']'))
   def __repr__(self): return 'Cache<{}>'.format(self.path)
 
 #==================================================================================================

@@ -481,9 +481,9 @@ which displays roughly as:
   _html_style = '''
 #toplevel { border-collapse: collapse; }
 #toplevel > thead > tr > td, #toplevel > tbody > tr > td { border: thin solid black; background-color:white; text-align:left; }
-#toplevel > thead > tr > td { padding:0; border-bottom-width: thick; }
+#toplevel > thead > tr { border-bottom: thick solid black; }
+#toplevel > thead > tr > td > div, #toplevel > tbody > tr > td > div { padding:0; max-height: 5cm; overflow-y: auto; }
 #toplevel span.pointer { color: blue; background-color: #e0e0e0; font-weight:bold; }
-#toplevel div.main { padding:0; max-height: 5cm; overflow-y: auto; }
 '''
   _html_limit = 50
   def _repr_html_(self):
@@ -492,8 +492,8 @@ which displays roughly as:
     from collections import OrderedDict
     def hformat(p,*L,style=self._html_style):
       if L:
-        x = E.table(E.thead(E.tr(E.td(E.div(p.html,**{'class':'main'}),colspan='2'))),E.tbody(*(E.tr(E.td(p.element(**{'class':'pointer'})),E.td(p.html)) for p in L)),id=tid)
-        return E.div(E.style(style.replace('#toplevel','#'+tid),scoped='scoped'),x)
+        table = E.table(E.thead(E.tr(E.td(p.html,colspan='2'))),E.tbody(*(E.tr(E.td(p.element()),E.td(p.html)) for p in L)),id=tid)
+        return E.div(E.style(style.replace('#toplevel','#'+tid),scoped='scoped'),table)
       else: return p.html
     def as_html(v):
       try: p = ctx.get(v)
@@ -503,34 +503,28 @@ which displays roughly as:
           ctx[v] = p = HtmlPluginPointer(tid,len(ctx))
           try: x = v.as_html(as_html)
           except: x = E.span(repr(v)) # should not fail, but just in case
-          p.sethtml(x)
+          p.html = E.div(x)
         else: return E.span(str(v))
-      return p.element(asref=True,**{'class':'pointer'})
+      return p.element(asref=True)
     tid = unid('htmlplugin')
     ctx = OrderedDict()
     e = as_html(self)
     return tostring(hformat(*ctx.values()) if ctx else e,encoding=str)
 class HtmlPluginPointer:
-  __slots__ = 'k','name','short','js','html','refs'
+  __slots__ = 'name','attrs','html'
   def __init__(self,tid,k):
-    self.k = k; self.name = '?'+str(k); self.refs = []
-    self.js = tuple('document.getElementById(\'{}\').rows[{}].style.outline=\'{}\''.format(tid,k,v) for v in ('thick solid red','inherit'))
+    self.name = '?'+str(k)
+    tref = 'document.getElementById(\'{}\').rows[{}]'.format(tid,k)
+    self.attrs = dict(
+      onmouseenter=tref+'.style.outline=\'thick solid red\'',
+      onmouseleave=tref+'.style.outline=\'inherit\'',
+      onclick=tref+'.scrollIntoView()',
+      )
   def element(self,asref=False,**ka):
     from lxml.html.builder import E
-    x = E.span(self.name)
-    for k,v in ka.items(): x.set(k,v)
-    if asref:
-      for k,v in zip(('onmouseenter','onmouseleave'),self.js): x.set(k,v)
-      if self.refs is None: x.set('title',self.short)
-      else: self.refs.append(x)
-    return x
-  def sethtml(self,x):
-    from lxml.etree import ElementTextIterator
-    from lxml.html.builder import E
-    self.html,self.short = E.div(x,**{'class':'main'}), ' '.join(ElementTextIterator(x))
-    for x in self.refs: x.set('title',self.short)
-    self.refs = None
-
+    if asref: ka.update(self.attrs)
+    ka['class'] = 'pointer'
+    return E.span(self.name,**ka)
 #==================================================================================================
 class ARG (tuple):
   r"""
@@ -868,7 +862,7 @@ Display an IPython widget for basic database exploration. If a metadata structur
   if isinstance(spec,MetaData):
     meta = spec
     if not meta.is_bound(): raise ValueError('Argument of type {} must be bound to an existing engine'.format(MetaData))
-    no_table_msg = '{} object has no table (perhaps it was not reflected)'.format(MetaData) 
+    no_table_msg = '{} object has no table (perhaps it was not reflected)'.format(MetaData)
   else:
     if isinstance(spec,str): spec = create_engine(spec)
     elif not isinstance(spec,Engine):
@@ -1399,7 +1393,7 @@ def size_fmt(size,binary=True,precision=4,suffix='B'):
 :param precision: number of digits displayed (at least 4)
 :type precision: :class:`int`
 
-Returns the representation of *size* with IEC prefix. Each prefix is *K* times the previous one for some constant *K* which depends on the convention: *K*\ =1024 with the binary convention (marked with an ``i`` after the prefix); *K*\ =1000 with the decimal convention. Example::
+Returns the representation of *size* with IEC prefix. Each prefix is *K* times the previous one for some constant *K* which depends on the convention: *K* =1024 with the binary convention (marked with an ``i`` after the prefix); *K* =1000 with the decimal convention. Example::
 
    print(size_fmt(2**30), size_fmt(5300), size_fmt(5300,binary=False), size_fmt(42897.3,binary=False,suffix='m')
    #> 1GiB 5.176KiB 5.3KB 42.9Km
@@ -1422,13 +1416,14 @@ def time_fmt(time,precision=2):
 :param precision: number of digits displayed
 :type precision: :class:`int`
 
-Returns the representation of *time* in one of days,hours,minutes,seconds (depending on magnitude). Example::
+Returns the representation of *time* in one of days,hours,minutes,seconds,milli-seconds (depending on magnitude). Example::
 
-   print(time_fmt(100000,4),time_fmt(4238.45),time_fmt(5.35,0))
+   print(time_fmt(100000,4),time_fmt(4238.45),time_fmt(5.35,0)),time_fmt(.932)
    #> 1.1574day 1.18hr 5sec
   """
 #==================================================================================================
   fmt = '{{:.{}f}}'.format(precision).format
+  if time < 1.: return '{:3.3g}msec'.format(1000*time)
   if time < 60.: return '{}sec'.format(fmt(time))
   time /= 60.
   if time < 60.: return '{}min'.format(fmt(time))

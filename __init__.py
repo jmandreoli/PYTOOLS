@@ -421,15 +421,15 @@ class HtmlPlugin:
   r"""
 Instances of this class have an ipython HTML representation. The representation is by default simply the string representation of the instance (enclosed in a ``span`` element), but can be customised if it supports method :meth:`as_html`.
 
-Method :meth:`as_html` should only be defined for hashable objects. It takes as input a function *as_html_p* and returns the base HTML representation of the object (as understood by module :mod:`lxml.html`). If invoked on a compound object, it should not recursively invoke method :meth:`as_html` on its components to obtain their HTML representations, because that would be liable to unmanageable repetitions (if two components share a common sub-component) or infinite recursions. Instead, the representation of a component object should be obtained by calling function *as_html_p* with that object as argument. It returns a "pointer" in the form of a string ``?``\ *n* (within a ``span`` element) where *n* is a unique reference number. The scope of such pointers is the toplevel call of method :meth:`_repr_html_`, which guarantees that two occurrences of equal objects will have the same pointer.
+Method :meth:`as_html` should only be defined for hashable objects. It takes as input a function *_* and returns the base HTML representation of the object (as understood by module :mod:`lxml.html`). If invoked on a compound object, it should not recursively invoke method :meth:`as_html` on its components to obtain their HTML representations, because that would be liable to unmanageable repetitions (if two components share a common sub-component) or infinite recursions. Instead, the representation of a component object should be obtained by calling function *_* with that object as argument. It returns a "pointer" in the form of a string ``?``\ *n* (within a ``span`` element) where *n* is a unique reference number. The scope of such pointers is the toplevel call of method :meth:`_repr_html_`, which guarantees that two occurrences of equal objects will have the same pointer.
 
 The :class:`HtmlPlugin` representation of an object is a ``table`` element whose head row is the base HTML representation of that object (including its pointers), and whose body rows align each pointer reference to the base HTML representation of its referenced object (possibly containing pointers itself, recursively). In the following example, the base HTML representation of a node in a graph is given by its label followed by the sequence of pointers to its successor nodes::
 
    class N (HtmlPlugin): # class of nodes in a (possibly cyclic) directed graph
      def __init__(self,tag,*succ): self.tag,self.succ = tag,list(succ)
-     def as_html(self,incontext):
+     def as_html(self,_):
        from lxml.html.builder import E
-       return E.div(E.b(self.tag),'[|',*(y for x in self.succ for y in (incontext(x),'|')),']')
+       return E.div(E.b(self.tag),'[|',*(y for x in self.succ for y in (_(x),'|')),']')
    # Let's build a trellis DAG
    n = N('')
    na,nb,nc = N('a',n),N('b',n),N('c',n)
@@ -495,20 +495,20 @@ which displays roughly as:
         table = E.table(E.thead(E.tr(E.td(p.html,colspan='2'))),E.tbody(*(E.tr(E.td(p.element()),E.td(p.html)) for p in L)),id=tid)
         return E.div(E.style(style.replace('#toplevel','#'+tid),scoped='scoped'),table)
       else: return p.html
-    def as_html(v):
+    def _(v):
       try: p = ctx.get(v)
-      except: return E.span(str(v)) # for unhashable objects
+      except: return E.span(repr(v)) # for unhashable objects
       if p is None:
         if isinstance(v,HtmlPlugin):
           ctx[v] = p = HtmlPluginPointer(tid,len(ctx))
-          try: x = v.as_html(as_html)
+          try: x = v.as_html(_)
           except: x = E.span(repr(v)) # should not fail, but just in case
           p.html = E.div(x)
-        else: return E.span(str(v))
+        else: return E.span(repr(v))
       return p.element(asref=True)
     tid = unid('htmlplugin')
     ctx = OrderedDict()
-    e = as_html(self)
+    e = _(self)
     return tostring(hformat(*ctx.values()) if ctx else e,encoding=str)
 class HtmlPluginPointer:
   __slots__ = 'name','attrs','html'
@@ -634,13 +634,11 @@ Set *f* as the config function of this instance. Raises an error if the instance
       self.key = k = func,a,tuple(sorted(ka.items()))
     return k
 
-  def as_html(self,incontext):
+  def as_html(self,_):
     from lxml.html.builder import E
     func,a,ka = self.config
-    x = html_parlist(a,sorted(ka.items()),incontext,deco=('[|','|',']'))
-    x.insert(0,E.b('::'))
-    x.insert(0,(E.span if self.incarnated else E.em)(str(func),style='padding:5px;'))
-    return x
+    opn,clo = ((E.span if self.incarnated else E.em)(str(func),style='padding:5px;'),E.b('['),), (E.b(']'),)
+    return html_parlist(_,a,sorted(ka.items()),opening=opn,closing=clo)
 
   def __getstate__(self): return self.freeze()
   def __setstate__(self,key):
@@ -942,17 +940,24 @@ exploredb.style = dict(
 )
 
 #==================================================================================================
-def html_parlist(La,Lka,incontext,deco=('','',''),padding='5px'):
+def html_parlist(html,La,Lka,opening=(),closing=(),style='padding: 5px'):
+  r"""
+:param html: callable to use on components to get their HTML represenatation
+:param La: anonymous components
+:type La: :class:`Iterable[object]`
+:param Lka: named components
+:type Lka: :class:`Iterable[Tuple[str,object]]`
+:param opening,closing: lists of HTML elements
+:type opening,closing: :class:`Iterable[lxml.html.Element]`
+
+Returns a default HTML representation of a compound object, where *La,Lka* are the lists of unnamed and named components.The representation consists of the HTML elements in *opening* followed by the representation of the components in *La* and *Lka* (the latter are prefixed with their names in bold), followed by the HTML elements in *closing*.
+  """
 #==================================================================================================
   from lxml.html.builder import E
-  def h():
-    opn,sep,cls = deco
-    stl = 'padding: {}'.format(padding)
-    yield opn
-    for v in La: yield E.span(incontext(v),style=stl); yield sep
-    for k,v in Lka: yield E.span(E.b(k),'=',incontext(v),style=stl); yield sep
-    yield cls
-  return E.div(*h(),style='padding:0')
+  def content():
+    for v in La: yield E.span(html(v),style=style)
+    for k,v in Lka: yield E.span(E.b(k),'=',html(v),style=style)
+  return E.div(*opening,*content(),*closing,style='padding:0')
 
 #==================================================================================================
 def html_table(irows,fmts,hdrs=None,opening=None,closing=None,encoding=None):
@@ -1278,8 +1283,8 @@ Example of use (assuming :func:`sessionmaker` as above has been imported)::
 
   def __hash__(self): return hash((self.session,self.dclass))
 
-  def as_html(self,incontext):
-    return html_stack(*(v.as_html(incontext) for k,v in sorted(self.items())))
+  def as_html(self,_):
+    return html_parlist(_,(),sorted(self.items()),opening=('ormsroot {',),closing=('}',))
 
   cache = {}
   @classmethod

@@ -95,7 +95,7 @@ Creates a new (empty) run and adds it to this TF trace.
     if isinstance(k,int): run = self.runs.pop(k); L = [run]
     elif isinstance(k,slice): L = self.runs[k]; del self.runs[k]
     else: raise TypeError('List indices must be integers or slices, not {}'.format(type(k)))
-    for run in L: del self.run_[run.path]; run.destroy()
+    for run in L: del self.runs_[run.path]; run.destroy()
   def __setitem__(self,k,v): raise Exception('Direct create/update not permitted on {}'.format(type(self)))
   def __iter__(self): return iter(self.runs)
 
@@ -103,9 +103,9 @@ Creates a new (empty) run and adds it to this TF trace.
 # Representation methods
 #--------------------------------------------------------------------------------------------------
 
-  def as_html(self,incontext):
+  def as_html(self,_):
     self.load()
-    return html_parlist(self.runs,(),incontext,deco=('Trace [|','|',']'))
+    return html_parlist(_,self.runs,(),opening=('Trace {',),closing=('}',))
 
 #==================================================================================================
 class Run (HtmlPlugin):
@@ -193,6 +193,11 @@ The monitor is of class :class:`..Monitor` and can thus be combined with other m
     return Monitor(('tfrun',),(coroutine,))
 
 #--------------------------------------------------------------------------------------------------
+  def supervisor(self,**ka):
+#--------------------------------------------------------------------------------------------------
+    return tensorflow.train.Supervisor(logdir=str(self.path),summary_writer=None,checkpoint_basename='ckp/c',**ka)
+
+#--------------------------------------------------------------------------------------------------
   def init(self,ckpt=None,init='init'):
 #--------------------------------------------------------------------------------------------------
     if ckpt is None or not self.ckptrestore(ckpt):
@@ -236,14 +241,15 @@ Truncates all the event files of this run to *n* entries.
 # Representation methods
 #--------------------------------------------------------------------------------------------------
 
-  def as_html(self,incontext):
+  def as_html(self,_):
     self.load()
-    return html_parlist(self.evfs.values(),(),incontext,deco=('Run [|','|',']'))
+    return html_parlist(_,self.evfs.values(),(),opening=('Run {',),closing=('}',))
 
 #==================================================================================================
 class EVFile (HtmlPlugin):
 #==================================================================================================
   style = '''
+#toplevel { margin-left: .2mm; margin-right: 4mm; }
 #toplevel > tbody > tr > th, #toplevel > tbody > tr > td { text-align:left; background-color: white; border: thin solid black }
 #toplevel > thead > tr > td { background-color:gray; color:white; text-align: center; }
   '''
@@ -296,7 +302,7 @@ class EVFile (HtmlPlugin):
     thead = E.tr(E.td(E.b(self.title),(' (clipped at {})'.format(self.clip_) if self.clipped else ''),colspan='4'))
     tbody = (tr for label,html in self.summariser.html() for tr in html_table_prefix_rows(html,E.th(label)))
     idn = unid('tfutil')
-    return E.div(E.style(self.style.replace('#toplevel','#'+idn),scoped="scoped"),E.table(E.thead(thead),E.tbody(*tbody),id=idn))
+    return E.div(E.style(self.style.replace('#toplevel','#'+idn),scoped='scoped'),E.table(E.thead(thead),E.tbody(*tbody),id=idn))
 
 #==================================================================================================
 # Parsing/representation classes for EVFile
@@ -486,7 +492,7 @@ def manage(*paths,ivname='tr'):
   from IPython.display import clear_output, display
   from IPython.core.getipython import get_ipython
   def showtr():
-    if tr is not None: tr.refresh()
+    if tr: tr.refresh()
     with wout: clear_output(); display(tr)
   def settr(c): nonlocal tr; tr = c.new; interpreter.push({ivname:tr}); showtr()
   interpreter = get_ipython()

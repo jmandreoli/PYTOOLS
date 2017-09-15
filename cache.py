@@ -213,8 +213,8 @@ Clears all the blocks which are obsolete.
 # Representation methods
 #--------------------------------------------------------------------------------------------------
 
-  def as_html(self,incontext):
-    return html_parlist((v for k,v in sorted(self.items())),(),incontext,deco=('Cache [|','|',']'))
+  def as_html(self,_):
+    return html_parlist(_,(v for k,v in sorted(self.items())),(),opening=('Cache {',),closing=('}',))
   def __repr__(self): return 'Cache<{}>'.format(self.path)
 
 #==================================================================================================
@@ -403,11 +403,11 @@ Implements cacheing as follows:
 # Representation methods
 #--------------------------------------------------------------------------------------------------
 
-  def as_html(self,incontext,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz)),time_fmt_=(lambda t: '' if t is None else time_fmt(t))):
+  def as_html(self,_,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz)),time_fmt_=(lambda t: '' if t is None else time_fmt(t))):
     n = len(self)-self._html_limit
     L = self.items(); closing = None
     if n>0: L = islice(L,self._html_limit); closing = '{} more'.format(n)
-    return html_table(sorted(L),hdrs=('ckey','tstamp','hits','size','tprc','ttot'),fmts=((lambda ckey,h=self.functor.html: h(ckey,incontext)),str,str,size_fmt_,time_fmt_,time_fmt_),opening='{}: {}'.format(self.block,self.functor),closing=closing)
+    return html_table(sorted(L),hdrs=('ckey','tstamp','hits','size','tprc','ttot'),fmts=((lambda ckey,h=self.functor.html: h(ckey,_)),str,str,size_fmt_,time_fmt_,time_fmt_),opening='{}: {}'.format(self.block,self.functor),closing=closing)
   def __repr__(self): return 'Cache<{}:{}>'.format(self.db.path,self.functor)
 
 #==================================================================================================
@@ -436,7 +436,7 @@ Returns the result of calling this functor with argument *arg*.
     raise NotImplementedError()
 
   @abc.abstractmethod
-  def html(self,ckey,incontext):
+  def html(self,ckey,_):
     r"""
 :param ckey: a byte string as returned by invocation of method :meth:`getkey`
 
@@ -552,10 +552,10 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
     return self.func(*a,**ka)
 
 #--------------------------------------------------------------------------------------------------
-  def html(self,ckey,incontext):
+  def html(self,ckey,_):
 #--------------------------------------------------------------------------------------------------
     a,ka = self.fpickle.loads(ckey)
-    return html_parlist(a,ka,incontext)
+    return html_parlist(_,a,ka)
 
   def norm(self,arg):
     a,ka = arg

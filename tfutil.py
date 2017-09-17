@@ -14,7 +14,7 @@ from shutil import rmtree
 from collections import OrderedDict, defaultdict, namedtuple
 from numpy import zeros, sqrt, square
 import tensorflow
-from . import basic_stats,html_parlist,HtmlPlugin,time_fmt,unid
+from . import html_parlist,HtmlPlugin,time_fmt,unid,odict
 from .monitor import Monitor
 
 #==================================================================================================
@@ -69,7 +69,7 @@ Loads this TF trace from its directory.
     if self.loaded: return
     self.root.mkdir(exist_ok=True)
     self.runs.clear(); runs_ = {}
-    for d in sorted((d for d in self.root.iterdir() if d.name.startswith('run-')),reverse=True):
+    for d in sorted(self.root.glob('run-*'),reverse=True):
       run = self.runs_.get(d)
       if run is None: run = Run(d,'Run[{}]'.format(datetime.fromtimestamp(int(d.name[4:],16))))
       self.runs.append(run); runs_[d] = run
@@ -90,14 +90,15 @@ Creates a new (empty) run and adds it to this TF trace.
 # Methods defining the Mapping behaviour
 #--------------------------------------------------------------------------------------------------
 
-  def __getitem__(self,k): return self.runs[k]
+  def __getitem__(self,k): self.load(); return self.runs[k]
   def __delitem__(self,k):
+    self.load()
     if isinstance(k,int): run = self.runs.pop(k); L = [run]
     elif isinstance(k,slice): L = self.runs[k]; del self.runs[k]
     else: raise TypeError('List indices must be integers or slices, not {}'.format(type(k)))
     for run in L: del self.runs_[run.path]; run.destroy()
   def __setitem__(self,k,v): raise Exception('Direct create/update not permitted on {}'.format(type(self)))
-  def __iter__(self): return iter(self.runs)
+  def __iter__(self): self.load(); return iter(self.runs)
 
 #--------------------------------------------------------------------------------------------------
 # Representation methods
@@ -115,33 +116,24 @@ Instances of this class represent tensorflow runs.
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,path,title=None,pre='c'):
+  def __init__(self,path,title=None):
 #--------------------------------------------------------------------------------------------------
     self.path = path
     self.title = str(path) if title is None else title
-    d_mod = path/'mod'; d_log = path/'log'; d_ckp = path/'ckp'
-    def model_save(s,as_text=False,**ka):
-      d = path/'tmp'
-      if d.exists(): rmtree(str(d))
-      try:
-        b = tensorflow.saved_model.builder.SavedModelBuilder(str(d))
-        b.add_meta_graph_and_variables(s,['model'],**ka)
-        b.save(as_text)
-      except: rmtree(str(d)); raise
-      else:
-        if d_mod.exists(): rmtree(str(d_mod))
-        d.rename(d_mod)
-    self.model_save = model_save
-    self.model_load = partial(tensorflow.saved_model.loader.load,export_dir=str(d_mod),tags=['model'])
-    self.summary_writer = partial(tensorflow.summary.FileWriter,logdir=str(d_log))
-    self.ckptsave = partial((lambda ckpt,*a,**ka: ckpt.save(*a,**ka)),write_meta_graph=False,save_path=str(d_ckp/pre))
-    def ckptrestore(ckpt):
-      L = sorted(d_ckp.glob(pre+'*.index'),key=(lambda p: p.stat().st_mtime))
-      if L:
-        s = tensorflow.get_default_session()
-        ckpt.restore(s,str(L[-1].with_suffix('')))
-        return True
-    self.ckptrestore = ckptrestore
+    def checkpoint(s,saver,**ka):
+      if saver is None: return
+      return saver.save(s,save_path=str(path/'model.ckpt'),**ka)
+    self.checkpoint = checkpoint
+    def initialise(s,saver=None):
+      if saver is None:
+        saver = tensorflow.train.import_meta_graph(tensorflow.train.latest_checkpoint(str(path))+'.meta')
+        if saver is None: return
+      ckp = saver.last_checkpoints[-1] if saver.last_checkpoints else tensorflow.train.latest_checkpoint(str(path))
+      if ckp is None: s.run(s.graph.get_collection_ref(tensorflow.GraphKeys.INIT_OP))
+      else: saver.restore(s,ckp)
+      return saver
+    self.initialise = initialise
+    self.summary_writer = partial(tensorflow.summary.FileWriter,logdir=str(path))
     self.destroy = partial(rmtree,str(path))
     self.evfs = {}
     self.loaded = False
@@ -150,7 +142,7 @@ Instances of this class represent tensorflow runs.
   def __eq__(self,other): return isinstance(other,Run) and self.path == other.path
 
 #--------------------------------------------------------------------------------------------------
-  def monitor(self,period=100,ckperiod=2000,summary_fd=None,ckpt=None,global_step=None):
+  def monitor(self,period=100,ckperiod=2000,saver=None,global_step=None):
     r"""
 Returns a loop monitor for this run. The monitor has a method :meth:`run`. When that method is invoked with an iterable of feed dictionaries (type: :class:`Iterable[Dict[tensorflow.Variable,object]]`), it performs various operations on its items. The operations (executed in the current default session) are:
 
@@ -164,46 +156,35 @@ The monitor is of class :class:`..Monitor` and can thus be combined with other m
 :type period: :class:`int`
 :param ckperiod: a tensorflow checkpoint is created every *period* iterations
 :type ckperiod: :class:`int`
-:param summary_fd: the feed dictionary for summaries
-:type summary_fd: :class:`Dict[tensorflow.Variable,object]`
 :rtype: :class:`..Monitor`
     """
 #--------------------------------------------------------------------------------------------------
     from itertools import cycle, count
     def coroutine(env):
       s = tensorflow.get_default_session()
+      stepv = (lambda s,step: step) if global_step is None else (lambda s,step,gstep=global_step: s.run(gstep))
       g = s.graph
-      if global_step is None:
-        stepv = (lambda s,step: step)
-      else:
-        gstep = g.get_tensor_by_name(global_step) if isinstance(global_step,str) else global_step
-        stepv = (lambda s,step,gstep=gstep: s.run(gstep))
-      summary = g.get_tensor_by_name('Merge/MergeSummary:0')
+      summary_ops = g.get_collection_ref(tensorflow.GraphKeys.SUMMARY_OP)
       summary_writer = self.summary_writer(graph=g)
-      for step,n_su,n_ck in zip(count(1),cycle(range(period-1,-1,-1)),cycle(range(ckperiod-1,-1,-1))):
-        if n_su==0:
-          v = s.run(summary,feed_dict=summary_fd)
-          summary_writer.add_summary(v,global_step=stepv(s,step))
-          summary_writer.flush()
-        if n_ck==0 and ckpt is not None: self.ckptsave(ckpt,s,global_step=stepv(s,step))
-        if env.stop:
-          summary_writer.close()
-          self.model_save(s)
-        yield
+      try:
+        for step,n_su,n_ck in zip(count(1),cycle(range(period-1,-1,-1)),cycle(range(ckperiod-1,-1,-1))):
+          if n_su==0:
+            vstep = stepv(s,step)
+            for v in s.run(summary_ops):
+              summary_writer.add_summary(v,global_step=vstep)
+            summary_writer.flush()
+            if env.logger is not None: env.logger.info('[iterc=%s] summary dumped',step)
+          if n_ck==0 or env.stop:
+            self.checkpoint(s,env.saver,global_step=stepv(s,step),write_meta_graph=env.stop)
+            if env.logger is not None: env.logger.info('[iterc=%s] checkpoint created',step)
+          yield
+      finally: summary_writer.close()
     return Monitor(('tfrun',),(coroutine,))
 
 #--------------------------------------------------------------------------------------------------
   def supervisor(self,**ka):
 #--------------------------------------------------------------------------------------------------
-    return tensorflow.train.Supervisor(logdir=str(self.path),summary_writer=None,checkpoint_basename='ckp/c',**ka)
-
-#--------------------------------------------------------------------------------------------------
-  def init(self,ckpt=None,init='init'):
-#--------------------------------------------------------------------------------------------------
-    if ckpt is None or not self.ckptrestore(ckpt):
-      s = tensorflow.get_default_session()
-      if isinstance(init,str): init = s.graph.get_operation_by_name(init)
-      s.run(init)
+    return tensorflow.train.Supervisor(logdir=str(self.path),checkpoint_basename='model.ckpt',**ka)
 
 #--------------------------------------------------------------------------------------------------
   def clip(self,n):
@@ -224,16 +205,13 @@ Truncates all the event files of this run to *n* entries.
 #--------------------------------------------------------------------------------------------------
     if self.loaded: return
     self.path.mkdir(exist_ok=True)
-    d_log = self.path/'log'
-    if d_log.is_dir():
-      evfs = OrderedDict()
-      for n,f in enumerate(f for f in sorted(d_log.iterdir(),key=(lambda f: f.stat().st_mtime))  if f.name.startswith('events.out.tfevents')):
-        evf = self.evfs.get(f)
-        if evf is None: evf = EVFile(f)
-        evf.title = '{}{{{}}}'.format(self.title,n)
-        evf.walltime = datetime.fromtimestamp(f.stat().st_mtime)
-        evfs[f] = evf
-    else: evfs = {}
+    evfs = OrderedDict()
+    for n,f in enumerate(sorted(self.path.rglob('events.out.tfevents*'),key=(lambda f: f.stat().st_mtime))):
+      evf = self.evfs.get(f)
+      if evf is None: evf = EVFile(f)
+      evf.title = '{}{{{}}}'.format(self.title,n)
+      evf.walltime = datetime.fromtimestamp(f.stat().st_mtime)
+      evfs[f] = evf
     self.evfs = evfs
     self.loaded = True
 
@@ -369,7 +347,7 @@ class EVF_summary (EVF_base):
   def __init__(self):
     super().__init__()
     # initialise tag type counts, one per tag
-    self.tagcount = defaultdict(lambda n=len(self.TYPE): zeros(n))
+    self.tagcount = defaultdict(lambda n=len(self.TYPE): zeros(n,dtype=int))
   def add(self,x):
     super().add(x)
     # x is a Summary protobuf object
@@ -380,7 +358,7 @@ class EVF_summary (EVF_base):
   def html(self):
     from lxml.html.builder import E
     yield from super().html()
-    yield from html_table_prefix_rows([E.tr(E.td(tag),E.td(*(e for typ,x in zip(self.TYPE,v/self.count) if x for e in (E.b(typ),(' ({:.1%}) '.format(x) if 1.-x>1e-10 else ''))))) for tag,v in sorted(self.tagcount.items())],E.th('tags'))
+    yield from html_table_prefix_rows([E.tr(E.td(tag,' ({})'.format(vs)),E.td(*(e for typ,x in zip(self.TYPE,v/vs) if x for e in (E.b(typ),(' ({:.1%}) '.format(x) if 1.-x>1e-10 else ''))))) for tag,v,vs in ((tag,v,v.sum()) for tag,v in sorted(self.tagcount.items()))],E.th('tags'))
 
 #--------------------------------------------------------------------------------------------------
 class EVF_log_message (EVF_base):
@@ -403,76 +381,50 @@ class EVF_log_message (EVF_base):
     yield from (E.tr(E.td(lvl),E.td(E.b('count'),': {} '.format(n),colspan='2')) for lvl,n in zip(self.NAME,self.perlevel) if n != 0)
 
 #==================================================================================================
-def tf_accuracy(y,y_,name='accuracy',sname='train-accuracy'):
+def tf_accuracy(y,y_,name='accuracy'):
   r"""
-Returns the accuracy op of a batch prediction score tensor *y* to a reference tensor *y_* in onehot representation. Both tensors *y,y_* are of shape *(n,d)* where *n* is the size of the current batch and *d* the dimension of the score vector and onehot representation. The accuracy tensor is also added to the summary.
+Returns the accuracy op of a batch prediction score tensor *y* to a reference tensor *y_* in onehot representation. Both tensors *y,y_* are of shape *(n,d)* where *n* is the size of the current batch and *d* the dimension of the score vector and onehot representation.
 
 :param y,y_: 2d tensorflow node
 :type y,y_: :class:`tensorflow.Tensor`
-:param name: name of the accuracy op
-:param sname: name of the summary item for the accuracy op
+:param name: name of the result op
   """
 #==================================================================================================
-  x = tensorflow.reduce_mean(tensorflow.cast(tensorflow.equal(tensorflow.argmax(y,1),tensorflow.argmax(y_,1)),tensorflow.float32),name=name)
-  tensorflow.summary.scalar(sname,x)
-  return x
+  return tensorflow.reduce_mean(tensorflow.cast(tensorflow.equal(tensorflow.argmax(y,1),tensorflow.argmax(y_,1)),tensorflow.float32),name=name)
 
 #==================================================================================================
-def tf_loss(y,y_,name='loss',sname='loss'):
+def tf_loss(y,y_,name='loss'):
   r"""
-Returns the cross-entropy loss op of a batch prediction score tensor *y* to a reference tensor *y_* in onehot representation. Both tensors *y,y_* are of shape *(n,d)* where *n* is the size of the current batch and *d* the dimension of the score vector and onehot representation. The loss tensor is also added to the summary.
+Returns the cross-entropy loss op of a batch prediction score tensor *y* to a reference tensor *y_* in onehot representation. Both tensors *y,y_* are of shape *(n,d)* where *n* is the size of the current batch and *d* the dimension of the score vector and onehot representation.
 
 :param y,y_: 2d tensorflow node
 :type y,y_: :class:`tensorflow.Tensor`
-:param name: name of the loss op
-:param sname: name of the summary item for the loss op
+:param name: name of the result op
   """
 #==================================================================================================
-  x = tensorflow.reduce_mean(tensorflow.nn.softmax_cross_entropy_with_logits(labels=y_,logits=y),name=name)
-  tensorflow.summary.scalar(sname,x)
-  return x
+  return tensorflow.reduce_mean(tensorflow.nn.softmax_cross_entropy_with_logits(labels=y_,logits=y),name=name)
 
 #==================================================================================================
-def tf_run(op,data={},target=None,s=None):
+def tf_freeze(t,name=None,summary_cmd=tensorflow.summary.scalar,val=0,**ka):
   r"""
-Computes the result of a tensorflow tensor on some data.
+Returns a tensorflow variable initialised with constant *val* and meant to be updated by the value of operation or tensor *t*.
 
-:param data: a feed dictionary
-:type data: :class:`Dict[tensorflow.Variable,object]`
-:param op: the operation to compute or its name
-:type op: :class:`Union[str,tensorflow.Operation]`
-:param target: the index of the output of *op* to return (if :const:`None` *op* itself is run and :const:`None` is returned)
-:type target: :class:`Union[int,slice]`
-:param s: the session to use for the computation (defaults to the tensorflow default session)
-:type s: :class:`tensorflow.Session`
-:rtype: :class:`object`
+:param t: a tensorflow tensor or operation
+:type t: :class:`Union[tensorflow.Tensor,tensorflow.Operation]`
+:param name: name of the result variable
+:type name: :class:`str`
+:param summary_cmd: the summary command to include the result variable in the summary
+:type summary_cmd: :calss:`Callable[...,None]`
+:param val: the initial value of the result variable
+:param ka: passed to the summary command
   """
 #==================================================================================================
-  if s is None: s = tensorflow.get_default_session()
-  if isinstance(op,str): op = s.graph.get_operation_by_name(op)
-  target = op if target is None else op.outputs[target]
-  return s.run(target,feed_dict=data)
-
-#==================================================================================================
-def tf_iter(op,batches,target=None,s=None):
-  r"""
-Iterates over *batches*, performs a tensorflow op on each item and yields the items.
-
-:param batches: an iterable of feed dictionaries
-:type batches: :class:`Iterable[Dict[Union[str,tensorflow.Variable],object]]`
-:param op: the operation to compute at each iteration or its name
-:type op: :class:`Union[str,tensorflow.Operation]`
-:param target: the index of the output of *op* to yield (if :const:`None` *op* itself is run and :const:`None` is returned)
-:type target: :class:`Union[int,slice]`
-:param s: the session to use for the computation (defaults to the tensorflow default session)
-:type s: :class:`tensorflow.Session`
-:rtype: :class:`Iterable[Tuple[tensorflow.Session,Dict[tensorflow.Variable,object]]]`
-  """
-#==================================================================================================
-  if s is None: s = tensorflow.get_default_session()
-  if isinstance(op,str): op = s.graph.get_operation_by_name(op)
-  target = op if target is None else op.outputs[target]
-  for fd in batches: yield s.run(target,feed_dict=fd)
+  if isinstance(t,tensorflow.Operation): op = t; t = t.outputs[0]
+  else: assert isinstance(t,tensorflow.Tensor); op = t.op
+  if name is None: name = op.name+'_'
+  t_ = tensorflow.get_variable(name,initializer=tensorflow.constant(val,dtype=t.dtype))
+  if summary_cmd is not None: summary_cmd(name+'t',t_,**ka)
+  return t_
 
 #==================================================================================================
 def tf_config(**ka):

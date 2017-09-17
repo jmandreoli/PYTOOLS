@@ -5,8 +5,8 @@
 # Purpose:		Generic loop control
 #
 
-import logging
-from collections import namedtuple
+from functools import partial
+from . import basic_stats
 
 #==================================================================================================
 class Monitor:
@@ -47,48 +47,55 @@ Enumerates *loop* and monitors it.
 :param loop: an iterable yielding arbitrary objects
 :param env: an environment, i.e. an object which can be assigned arbitrary attributes
 :type env: typically :class:`State`
-:param detach: if not None, time (in sec) after which the loop is started on a separate thread
-:type detach: :class:`float`
-:param ka: passed to the thread in detach-mode, otherwise ignored (by default, key ``daemon`` in *ka* is set to :const:`True`)
+:param detach: if not None, arguments (e.g. `daemonic`) to create a thread on which to run the loop
+:type detach: :class:`dict`
+::param ka: initialisations of *env* (attribute :attr:`logger` is set as default to :const:`None` in *ka*)
 :return: the environment *env* at the end of the loop, or immediately if *detach* is not :const:`None`
 
-If *env* is :const:`None`, it is initialised to a new instance of :class:`State`. Its attribute :attr:`stop` is assigned :const:`None`. Its attribute :attr:`thread` is assigned :const:`None` if *detach* is :const:`None`, otherwise the thread object on which the loop is run. A list of coroutines is obtained by calling each element of :attr:`coroutines` with argument *env*, then *loop* is enumerated. At the end of each iteration, the following attributes are set in *env*.
+If *env* is :const:`None`, it is initialised to a new instance of :class:`State`. The items of *ka* are used to initialise *env*. Its attribute :attr:`stop` is assigned :const:`None`. Its attribute :attr:`thread` is assigned :const:`None` if *detach* is :const:`None`, otherwise a thread object on which the loop is run, initialised by *detach* (key ``daemon`` is by default set to :const:`True` and key ``delay`` is taken to be a time delay in sec before the computation on the thread is started). A list of coroutines is obtained by calling each element of :attr:`coroutines` with argument *env*, then *loop* is enumerated. At the end of each iteration, the following attributes are updated in *env*.
 
 - :attr:`icputime`: cpu time of the last iteration
 - :attr:`cputime`: cumulated cpu time of the loop iterations
+- :attr:`walltime`: cumulated wall time of the loop iterations
 - :attr:`value`: object yielded by the last iteration
 
 Then each coroutine is advanced (using function :func:`next`), possibly updating *env*. The enumeration continues while the attribute :attr:`stop` of *env* remains :const:`None`.
     """
 #--------------------------------------------------------------------------------------------------
     from threading import Thread
-    from time import process_time, sleep
-    from functools import partial
-    def run0(loop,env,delay=None):
-      coroutines = [coroutine(env) for coroutine in self.coroutines]
+    from time import time, process_time, sleep
+    def run_(loop,env,delay=None,**ka):
       env.stop = None
       env.cputime = 0.
+      env.walltime = 0.
+      for k,v in ka.items(): setattr(env,k,v)
+      coroutines = [coroutine(env) for coroutine in self.coroutines]
       if delay is not None: sleep(delay)
-      t0 = process_time()
+      t_ = process_time(),time()
       for x in loop:
-        t = process_time()
-        d = env.icputime = t-t0
+        t = process_time(),time()
+        d = env.icputime = t[0]-t_[0]
         env.cputime += d
+        env.walltime += t[1]-t_[1]
         env.value = x
         for c in coroutines: next(c)
         if env.stop is not None: break
-        t0 = t
+        t_ = t
+      for c in coroutines: c.close()
     if env is None: env = State()
     if detach is None:
       env.thread = None
-      run0(loop,env)
-    elif not isinstance(detach,(int,float)):
-      raise TypeError('Expected {}|{}, found {}'.format(int,float,type(detach)))
+      run_(loop,env,**ka)
+    elif isinstance(detach,dict):
+      detach = detach.copy()
+      detach.setdefault('daemon',True)
+      delay = detach.pop('delay',None)
+      if isinstance(delay,(int,float)):
+        env.thread = w = Thread(target=run_,args=(loop,env,delay),kwargs=ka,**detach)
+        w.start()
+      else: raise TypeError('detach[\`delay\`] must be {}|{}, not {}'.format(int,float,type(delay)))
     else:
-      ka.setdefault('daemon',True)
-      w = Thread(target=partial(run0,loop,env,detach),**ka)
-      env.thread = w
-      w.start()
+      raise TypeError('detach must be {}, not {}'.format(dict,type(detach)))
     return env
 
 #==================================================================================================
@@ -132,7 +139,7 @@ The returned factory, when invoked with some arguments, returns a monitor with *
 
 #--------------------------------------------------------------------------------------------------
 @monitor
-def iterc_monitor(env,maxiter=0,maxcpu=float('inf'),logger=None,show=None,fmt:callable=None):
+def iterc_monitor(env,maxiter=0,maxcpu=float('inf'),maxwall=float('inf'),show=None,fmt:callable=None):
   r"""
 Returns a monitor managing the number of iterations and enabling basic logging.
 
@@ -140,8 +147,8 @@ Returns a monitor managing the number of iterations and enabling basic logging.
 :type maxiter: :class:`int`
 :param maxcpu: stops the loop after that amount of cpu time (if reached)
 :type maxcpu: :class:`float`
-:param logger: the logger on which to report (optional)
-:type logger: :class:`logging.Logger`
+:param maxwall: stops the loop after that amount of wall time (if reached)
+:type maxwall: :class:`float`
 :param show: controls the logging rate (see below)
 :type show: :class:`int`
 :param fmt: invoked to produce the log string, passed the current iteration count and environment
@@ -149,16 +156,19 @@ Returns a monitor managing the number of iterations and enabling basic logging.
   """
 #--------------------------------------------------------------------------------------------------
   from itertools import count
+  logger = env.logger
   if logger is None:
     for x in count(1):
       if x == maxiter: env.stop = 'maxiter'
       elif env.cputime>maxcpu: env.stop = 'maxcpu'
+      elif env.walltime>maxwall: env.stop = 'maxwall'
       yield x
   elif show is None:
     s = ''
     for x in count(1):
-      if x == maxiter: env.stop = 'maxiter'; s=' !maxiter'
-      elif env.cputime>maxcpu: env.stop = 'maxcpu'; s=' !maxcpu'
+      if x == maxiter: env.stop = 'maxiter'; s = ' !maxiter'
+      elif env.cputime>maxcpu: env.stop = 'maxcpu'; s = ' !maxcpu'
+      elif env.walltime>maxwall: env.stop = 'maxwall'; s = ' !maxwall'
       logger.info('%s%s',fmt(x,env),s)
       yield x
   else:
@@ -168,6 +178,7 @@ Returns a monitor managing the number of iterations and enabling basic logging.
     for x in count(1):
       if x == maxiter: env.stop = 'maxiter'; s = ' !maxiter'
       elif env.cputime>maxcpu: env.stop = 'maxcpu'; s = ' !maxcpu'
+      elif env.walltime>maxwall: env.stop = 'maxwall'; s=' !maxwall'
       elif waitshow==0: waitshow = int(x*coeff)
       else: waitshow -= 1; yield x; continue
       logger.info('%s%s',fmt(x,env),s)
@@ -175,7 +186,45 @@ Returns a monitor managing the number of iterations and enabling basic logging.
 
 #--------------------------------------------------------------------------------------------------
 @monitor
-def averaging_monitor(env,targetf=None,rtype=namedtuple('stats',('count','mean','var'))):
+def accu_monitor(env,targetf=None,initf=None):
+  r"""
+Returns a monitor which accumulates values from the loop.
+
+:param targetf: extracts from the environment the variable to accumulate (by incremental addition)
+:type targetf: :class:`Callable[[object],T']`
+:param initf: returns the initial value of the accumulator
+:type initf: :class:`Callable[[],T]`
+
+Here, type `T` is assumed to support incremental addition of type `T'`
+  """
+#--------------------------------------------------------------------------------------------------
+  accu = initf()
+  while True:
+    accu += targetf(env)
+    yield accu
+
+#--------------------------------------------------------------------------------------------------
+def buffer_monitor(targetf,size=0,val=()):
+  r"""
+Returns a monitor which buffers information collected from the loop.
+
+:param targetf: extracts from the environment the variable to buffer
+:type targetf: :class:`Callable[[object],Iterable[object]]`
+:param size: size of the buffer (if null, the buffer is infinite, otherwise first in first out policy is applied)
+:type size: :class:`int`
+:param val: initial content of the buffer (truncated if greater than *size*)
+:type val: :class:`Iterable[object]`
+
+The buffer state consists of the last *size* results of applying callable *targetf* to the environment at each iteration.
+  """
+#--------------------------------------------------------------------------------------------------
+  class boundedlist (list):
+    def __init__(self,size=0,val=()): super().__init__(val); del self[:-size]; self.size = size
+    def __iadd__(self,x): L = super().__iadd__(x); del self[:-self.size]; return L
+  return accu_monitor(targetf,partial(boundedlist,size,val))
+
+#--------------------------------------------------------------------------------------------------
+def stats_monitor(targetf):
   r"""
 Returns a monitor which computes some basic statistics about the loop.
 
@@ -185,38 +234,9 @@ Returns a monitor which computes some basic statistics about the loop.
 The computed statistics consists of a named triple <count,mean,variance> of the list of results of applying callable *targetf* to the environment at each iteration.
   """
 #--------------------------------------------------------------------------------------------------
-  n,xmean,xvar = 0,0.,0.
-  while True:
-    x = targetf(env)
-    n += 1
-    d = x-xmean
-    xmean += d/n
-    xvar += ((1.-1./n)*d*d-xvar)/n
-    yield rtype(n,xmean,xvar)
+  return accu_monitor(targetf,basic_stats)
 
 #--------------------------------------------------------------------------------------------------
-@monitor
-def buffer_monitor(env,size=0,targetf=None):
-  r"""
-Returns a monitor which buffers information collected from the loop.
-
-:param targetf: extracts from the environment the variable to buffer
-:type targetf: :class:`Callable[[object],object]`
-:param size: size of the buffer (if null, the buffer is infinite, otherwise first in first out policy is applied)
-:type size: :class:`int`
-
-The buffer state consists of the last *size* results of applying callable *targetf* to the environment at each iteration.
-  """
+class State:
+  def __init__(self,**ka): self.__dict__.update(ka)
 #--------------------------------------------------------------------------------------------------
-  buf = []
-  while True:
-    x = targetf(env)
-    buf.append(x)
-    del buf[:-size]
-    yield buf
-
-#--------------------------------------------------------------------------------------------------
-class State: pass
-#--------------------------------------------------------------------------------------------------
-
-

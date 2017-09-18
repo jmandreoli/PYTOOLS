@@ -120,19 +120,6 @@ Instances of this class represent tensorflow runs.
 #--------------------------------------------------------------------------------------------------
     self.path = path
     self.title = str(path) if title is None else title
-    def checkpoint(s,saver,**ka):
-      if saver is None: return
-      return saver.save(s,save_path=str(path/'model.ckpt'),**ka)
-    self.checkpoint = checkpoint
-    def initialise(s,saver=None):
-      if saver is None:
-        saver = tensorflow.train.import_meta_graph(tensorflow.train.latest_checkpoint(str(path))+'.meta')
-        if saver is None: return
-      ckp = saver.last_checkpoints[-1] if saver.last_checkpoints else tensorflow.train.latest_checkpoint(str(path))
-      if ckp is None: s.run(s.graph.get_collection_ref(tensorflow.GraphKeys.INIT_OP))
-      else: saver.restore(s,ckp)
-      return saver
-    self.initialise = initialise
     self.summary_writer = partial(tensorflow.summary.FileWriter,logdir=str(path))
     self.destroy = partial(rmtree,str(path))
     self.evfs = {}
@@ -142,40 +129,69 @@ Instances of this class represent tensorflow runs.
   def __eq__(self,other): return isinstance(other,Run) and self.path == other.path
 
 #--------------------------------------------------------------------------------------------------
-  def monitor(self,period=100,ckperiod=2000,saver=None,global_step=None):
+  def initialise(self,s):
     r"""
-Returns a loop monitor for this run. The monitor has a method :meth:`run`. When that method is invoked with an iterable of feed dictionaries (type: :class:`Iterable[Dict[tensorflow.Variable,object]]`), it performs various operations on its items. The operations (executed in the current default session) are:
+Initialises the tensorflow session *s*.
 
-* at specified intervals, dump a summary based on the current state of the graph
-* at specified intervals, save a checkpoint of the current state of the graph
-* at the end, save the graph and its current state
-
-The monitor is of class :class:`..Monitor` and can thus be combined with other monitors.
-
-:param period: a tensorflow summary is dumped every *period* iterations
-:type period: :class:`int`
-:param ckperiod: a tensorflow checkpoint is created every *period* iterations
-:type ckperiod: :class:`int`
-:rtype: :class:`..Monitor`
+* If the graph of *s* has an attribute ``saver``, its value must be :const:`None` or a tensorflow saver attached to that graph. The saver is activated to restore the values of the graph variables from the last checkpoint of this run. If the saver is :const:`None` or there is no available checkpoint, the variables are initialised by activating the initialisation ops of the graph.
+* Otherwise, the last checkpoint of this run is used to both replace the session graph and initialise its variables. If there is no available checkpoint, an error is raised.
     """
 #--------------------------------------------------------------------------------------------------
-    from itertools import cycle, count
+    if hasattr(s.graph,'saver'):
+      saver = s.graph.saver
+      ckp = None if saver is None else saver.last_checkpoints[-1] if saver.last_checkpoints else tensorflow.train.latest_checkpoint(str(self.path))
+      if ckp is None: s.run(s.graph.get_collection_ref(tensorflow.GraphKeys.INIT_OP))
+      else: saver.restore(s,ckp)
+    else:
+      ckp = tensorflow.train.latest_checkpoint(str(self.path))
+      saver = tensorflow.train.import_meta_graph(ckp+'.meta')
+      saver.restore(s,ckp)
+      s.graph.saver = saver
+    return s
+
+#--------------------------------------------------------------------------------------------------
+  def monitor(self,su_period=100,ck_period=2000):
+    r"""
+Returns a loop monitor for this run. When method :meth:`run` of the monitor is invoked with an :class:`Iterable`, it iterates over its elements and performs various operations after each iteration. The operations (executed in the current default session and based on this run) are:
+
+* at specified intervals and at the end, dump a summary of the current state of the graph
+* at specified intervals and at the end, save a checkpoint of the current state of the graph
+
+The graph of the default session must have an attribute :attr:`saver` (possibly :const:`None`) used for checkpointing. The monitor is of class :class:`..Monitor` and can thus be combined with other monitors.
+
+:param su_period: a tensorflow summary is dumped every *su_period* iterations
+:type su_period: :class:`int`
+:param ck_period: a tensorflow checkpoint is created every *ck_period* iterations
+:type ck_period: :class:`int`
+    """
+#--------------------------------------------------------------------------------------------------
+    from itertools import count
+    assert isinstance(su_period,int) and isinstance(ck_period,int)
+    def cycler(n):
+      if n>0:
+        r = range(1,n)
+        while True: yield True; yield from (False for i in r)
+      else:
+        while True: yield False
     def coroutine(env):
       s = tensorflow.get_default_session()
-      stepv = (lambda s,step: step) if global_step is None else (lambda s,step,gstep=global_step: s.run(gstep))
       g = s.graph
       summary_ops = g.get_collection_ref(tensorflow.GraphKeys.SUMMARY_OP)
       summary_writer = self.summary_writer(graph=g)
+      gstep_ops = g.get_collection_ref(tensorflow.GraphKeys.GLOBAL_STEP)
+      assert len(gstep_ops)<=1
+      step_getter = (lambda s,step,gstep=gstep_ops[0]: s.run(gstep)) if gstep_ops else (lambda s,step: step)
       try:
-        for step,n_su,n_ck in zip(count(1),cycle(range(period-1,-1,-1)),cycle(range(ckperiod-1,-1,-1))):
-          if n_su==0:
-            vstep = stepv(s,step)
+        for step,do_su,do_ck in zip(count(1),cycler(su_period),cycler(ck_period)):
+          if do_su is True or env.stop is not None:
+            vstep = step_getter(s,step)
             for v in s.run(summary_ops):
               summary_writer.add_summary(v,global_step=vstep)
             summary_writer.flush()
             if env.logger is not None: env.logger.info('[iterc=%s] summary dumped',step)
-          if n_ck==0 or env.stop:
-            self.checkpoint(s,env.saver,global_step=stepv(s,step),write_meta_graph=env.stop)
+          if do_ck is True or env.stop is not None:
+            vstep = step_getter(s,step)
+            self.checkpoint(s,global_step=vstep,write_meta_graph=env.stop)
             if env.logger is not None: env.logger.info('[iterc=%s] checkpoint created',step)
           yield
       finally: summary_writer.close()
@@ -183,13 +199,32 @@ The monitor is of class :class:`..Monitor` and can thus be combined with other m
 
 #--------------------------------------------------------------------------------------------------
   def supervisor(self,**ka):
+    r"""
+Returns an instance of :class:`tensorflow.train.Supervisor` with logdir pointing to this run, and which terminates each managed session by a checkpoint.
+    """
 #--------------------------------------------------------------------------------------------------
-    return tensorflow.train.Supervisor(logdir=str(self.path),checkpoint_basename='model.ckpt',**ka)
+    from contextlib import contextmanager
+    class Supervisor (tensorflow.train.Supervisor):
+      @contextmanager
+      def managed_session(sv,*a,**ka):
+        from tensorflow.python.platform import tf_logging as logging
+        with super().managed_session(*a,**ka) as s:
+          yield s
+          logging.info('Saving checkpoint to path %s',sv.save_path)
+          sv.saver.save(s,sv.save_path,global_step=sv.global_step,write_meta_graph=True)
+    return Supervisor(logdir=str(self.path),checkpoint_basename='model.ckpt',**ka)
 
 #--------------------------------------------------------------------------------------------------
   def tensorboard(self,**ka):
 #--------------------------------------------------------------------------------------------------
     raise NotImplementedError()
+
+#--------------------------------------------------------------------------------------------------
+  def checkpoint(self,s,**ka):
+#--------------------------------------------------------------------------------------------------
+    saver = s.graph.saver
+    if saver is None: return
+    return saver.save(s,save_path=str(self.path/'model.ckpt'),**ka)
 
 #--------------------------------------------------------------------------------------------------
   def clip(self,n):
@@ -389,7 +424,7 @@ class EVF_log_message (EVF_base):
     yield from (E.tr(E.td(lvl),E.td(E.b('count'),': {} '.format(n),colspan='2')) for lvl,n in zip(self.NAME,self.perlevel) if n != 0)
 
 #==================================================================================================
-def tf_accuracy(y,y_,name='accuracy'):
+def tf_categorical_accuracy(y,y_,name='accuracy'):
   r"""
 Returns the accuracy op of a batch prediction score tensor *y* to a reference tensor *y_* in onehot representation. Both tensors *y,y_* are of shape *(n,d)* where *n* is the size of the current batch and *d* the dimension of the score vector and onehot representation.
 
@@ -401,7 +436,7 @@ Returns the accuracy op of a batch prediction score tensor *y* to a reference te
   return tensorflow.reduce_mean(tensorflow.cast(tensorflow.equal(tensorflow.argmax(y,1),tensorflow.argmax(y_,1)),tensorflow.float32),name=name)
 
 #==================================================================================================
-def tf_loss(y,y_,name='loss'):
+def tf_categorical_loss(y,y_,name='loss'):
   r"""
 Returns the cross-entropy loss op of a batch prediction score tensor *y* to a reference tensor *y_* in onehot representation. Both tensors *y,y_* are of shape *(n,d)* where *n* is the size of the current batch and *d* the dimension of the score vector and onehot representation.
 
@@ -413,26 +448,25 @@ Returns the cross-entropy loss op of a batch prediction score tensor *y* to a re
   return tensorflow.reduce_mean(tensorflow.nn.softmax_cross_entropy_with_logits(labels=y_,logits=y),name=name)
 
 #==================================================================================================
-def tf_freeze(t,name=None,summary_cmd=tensorflow.summary.scalar,val=0,**ka):
+def tf_freeze(t,name=None,summary_cmd=tensorflow.summary.scalar,**ka):
   r"""
-Returns a tensorflow variable initialised with constant *val* and meant to be updated by the value of operation or tensor *t*.
+Creates a tensorflow variable meant to hold a frozen value of op *t*, and returns the assignment op which updates the created variable with the current value of *t*. The name of the freeze variable, if not provided by *name*, is derived from that of *t* suffixed with an underscore. If *summary_cmd* is not :const:`None`, it is taken to be a summary creation command, invoked with the name of the freeze variable suffixed with 't' and the freeze variable as its first two arguments, and passed the remaining keyword arguments *ka*.
 
 :param t: a tensorflow tensor or operation
 :type t: :class:`Union[tensorflow.Tensor,tensorflow.Operation]`
-:param name: name of the result variable
+:param name: name of the freeze variable
 :type name: :class:`str`
-:param summary_cmd: the summary command to include the result variable in the summary
-:type summary_cmd: :calss:`Callable[...,None]`
-:param val: the initial value of the result variable
+:param summary_cmd: the summary command to include the freeze variable in the summary
+:type summary_cmd: :class:`Callable[[str,tensorflow.Tensor,...],None]`
 :param ka: passed to the summary command
   """
 #==================================================================================================
   if isinstance(t,tensorflow.Operation): op = t; t = t.outputs[0]
   else: assert isinstance(t,tensorflow.Tensor); op = t.op
   if name is None: name = op.name+'_'
-  t_ = tensorflow.get_variable(name,initializer=tensorflow.constant(val,dtype=t.dtype))
+  t_ = tensorflow.get_variable(name,shape=t.shape,dtype=t.dtype,trainable=False)
   if summary_cmd is not None: summary_cmd(name+'t',t_,**ka)
-  return t_
+  return tensorflow.assign(t_,t)
 
 #==================================================================================================
 def tf_config(**ka):

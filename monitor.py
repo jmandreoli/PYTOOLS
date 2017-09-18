@@ -49,7 +49,7 @@ Enumerates *loop* and monitors it.
 :type env: typically :class:`State`
 :param detach: if not None, arguments (e.g. `daemonic`) to create a thread on which to run the loop
 :type detach: :class:`dict`
-::param ka: initialisations of *env* (attribute :attr:`logger` is set as default to :const:`None` in *ka*)
+:param ka: initialisations of *env* (attribute :attr:`logger` is set as default to :const:`None` in *ka*)
 :return: the environment *env* at the end of the loop, or immediately if *detach* is not :const:`None`
 
 If *env* is :const:`None`, it is initialised to a new instance of :class:`State`. The items of *ka* are used to initialise *env*. Its attribute :attr:`stop` is assigned :const:`None`. Its attribute :attr:`thread` is assigned :const:`None` if *detach* is :const:`None`, otherwise a thread object on which the loop is run, initialised by *detach* (key ``daemon`` is by default set to :const:`True` and key ``delay`` is taken to be a time delay in sec before the computation on the thread is started). A list of coroutines is obtained by calling each element of :attr:`coroutines` with argument *env*, then *loop* is enumerated. At the end of each iteration, the following attributes are updated in *env*.

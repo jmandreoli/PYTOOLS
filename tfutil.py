@@ -187,6 +187,11 @@ The monitor is of class :class:`..Monitor` and can thus be combined with other m
     return tensorflow.train.Supervisor(logdir=str(self.path),checkpoint_basename='model.ckpt',**ka)
 
 #--------------------------------------------------------------------------------------------------
+  def tensorboard(self,**ka):
+#--------------------------------------------------------------------------------------------------
+    raise NotImplementedError()
+
+#--------------------------------------------------------------------------------------------------
   def clip(self,n):
     r"""
 Truncates all the event files of this run to *n* entries.
@@ -311,8 +316,8 @@ class EVF_summariser:
         if ee is None or e.time<ee.time: L[e.step] = e
       L = sorted(L.values(),key=(lambda e: e.step))
       if len(L)>1:
-        sfirst,sspan = L[0].step,L[-1].step-L[0].step
-        x = '{} in {}-{}'.format(len(L),sfirst,L[-1].step)
+        sfirst,slast = L[0].step,L[-1].step; sspan = slast-sfirst
+        x = '{} in {}-{}'.format(len(L),sfirst,slast)
         L = sorted((e2.time-e1.time)/(e2.step-e1.step) for e1,e2 in zip(L[:-1],L[1:]) if e2.time>e1.time)
         n = len(L)
         if n: x += ' (ca. {}/step)'.format(time_fmt((L[n//2]+L[n//2-1])/2 if n%2==0 else L[n//2]))
@@ -358,7 +363,10 @@ class EVF_summary (EVF_base):
   def html(self):
     from lxml.html.builder import E
     yield from super().html()
-    yield from html_table_prefix_rows([E.tr(E.td(tag,' ({})'.format(vs)),E.td(*(e for typ,x in zip(self.TYPE,v/vs) if x for e in (E.b(typ),(' ({:.1%}) '.format(x) if 1.-x>1e-10 else ''))))) for tag,v,vs in ((tag,v,v.sum()) for tag,v in sorted(self.tagcount.items()))],E.th('tags'))
+    L = ((tag,v,v.sum()) for tag,v in sorted(self.tagcount.items()))
+    # normally, each tag should have the same TYPE in all summaries, but, for safety, we show the distribution of TYPEs
+    dist = lambda v,vs: (e for typ,x in zip(self.TYPE,v/vs) if x for e in (E.b(typ),(' ({:.1%}) '.format(x) if 1.-x>1e-10 else '')))
+    yield from html_table_prefix_rows([E.tr(E.td(tag,' ({})'.format(vs)),E.td(*dist(v,vs))) for tag,v,vs in L],E.th('tags'))
 
 #--------------------------------------------------------------------------------------------------
 class EVF_log_message (EVF_base):

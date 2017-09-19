@@ -214,7 +214,10 @@ Clears all the blocks which are obsolete.
 #--------------------------------------------------------------------------------------------------
 
   def as_html(self,_):
-    return html_parlist(_,(v for k,v in sorted(self.items())),(),opening=('Cache {',),closing=('}',))
+    n = len(self)-self._html_limit
+    L = self.items(); closing = None
+    if n>0: L = islice(L,self._html_limit); closing = '{} more'.format(n)
+    return html_table(sorted((k,(v,)) for k,v in L),fmts=((lambda x: x.as_html(_)),),opening=repr(self),closing=closing)
   def __repr__(self): return 'Cache<{}>'.format(self.path)
 
 #==================================================================================================
@@ -407,8 +410,8 @@ Implements cacheing as follows:
     n = len(self)-self._html_limit
     L = self.items(); closing = None
     if n>0: L = islice(L,self._html_limit); closing = '{} more'.format(n)
-    return html_table(sorted(L),hdrs=('ckey','tstamp','hits','size','tprc','ttot'),fmts=((lambda ckey,h=self.functor.html: h(ckey,_)),str,str,size_fmt_,time_fmt_,time_fmt_),opening='{}: {}'.format(self.block,self.functor),closing=closing)
-  def __repr__(self): return 'Cache<{}:{}>'.format(self.db.path,self.functor)
+    return html_table(sorted(L),hdrs=('ckey','tstamp','hits','size','tprc','ttot'),fmts=((lambda ckey,h=self.functor.html: h(ckey,_)),str,str,size_fmt_,time_fmt_,time_fmt_),opening=repr(self),closing=closing)
+  def __repr__(self): return 'Cache<{}>'.format(repr(self.functor))
 
 #==================================================================================================
 class AbstractFunctor (metaclass=abc.ABCMeta):

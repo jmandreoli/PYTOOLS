@@ -12,13 +12,11 @@ from pytz import timezone, utc
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from smtplib import SMTP
-from lxml.etree import parse as xmlparse, tostring as xmltostring, tounicode as xmltounicode, iselement as isxmlelement
+from lxml.etree import parse as xmlparse, tostring as xml2str, iselement as isxmlelement, ElementTextIterator
+from lxml.html import tostring as html2str
 logger = logging.getLogger(__name__)
 
-#------------------------------------------------------------------------------
-# def mailprepare
-#------------------------------------------------------------------------------
-
+#==================================================================================================
 def mailprepare(msg=None,fromaddr=None,toaddr=None,ccaddr=None,bccaddr=None,dstarget=None):
   r"""
 :param msg: email message
@@ -36,6 +34,7 @@ def mailprepare(msg=None,fromaddr=None,toaddr=None,ccaddr=None,bccaddr=None,dsta
 
 Appends to,cc,bcc fields to the email message *msg*, and possibly extends subject for docushare agent interaction.
   """
+#==================================================================================================
   msg.add_header('from',fromaddr)
   sender = fromaddr
   recipient = []
@@ -47,17 +46,15 @@ Appends to,cc,bcc fields to the email message *msg*, and possibly extends subjec
     msg.replace_header('subject','{0} <upload: {1}>'.format(msg['subject'],dstarget))
   return dict(sender=sender,recipient=set(recipient),message=msg)
 
-#------------------------------------------------------------------------------
-# def maildisplay
-#------------------------------------------------------------------------------
-
+#==================================================================================================
 def maildisplay(message,textshow=None):
   r"""
-:param message: email message 
+:param message: email message
 :type message: :class:`email.message`
 
 Displays content of *message*.
   """
+#==================================================================================================
   def struct(msg,iz=''):
     for k,v in msg.items(): print(iz,'%s: %s'%(k.capitalize(),v))
     if msg.is_multipart():
@@ -78,10 +75,7 @@ Displays content of *message*.
       content = msg.get_payload(decode=True)
       print(content.decode(str(msg.get_charset())))
 
-#------------------------------------------------------------------------------
-# def mailsend
-#------------------------------------------------------------------------------
-
+#==================================================================================================
 def mailsend(sender=None,recipient=None,message=None,mailhost='smtphost'):
   r"""
 :param sender: specification of sender (unique email address)
@@ -93,23 +87,20 @@ def mailsend(sender=None,recipient=None,message=None,mailhost='smtphost'):
 
 Sends *message* as email on *mailhost* with specified *sender* and *recipient*.
   """
-  server = SMTP(mailhost)
-  try: err = server.sendmail(sender,recipient,message.as_string())
-  finally: server.quit()
+#==================================================================================================
+  with (SMTP(mailhost) if isinstance(mailhost,str) else mailhost) as s:
+    err = s.sendmail(sender,recipient,message.as_string())
   if err: raise Exception('At least one recipient did not receive the mail',err)
 
-#------------------------------------------------------------------------------
-# def announcement
-#------------------------------------------------------------------------------
-
-def announcement(shorttxt=None,plaintxt=None,xhtml=None,icscal=None,filename=None,charset='utf-8'):
+#==================================================================================================
+def announcement(shorttxt=None,plaintxt=None,html=None,icscal=None,filename=None,charset='utf-8'):
   r"""
 :param icscal: calendar version of the announcement
 :type icscal: :class:`icalendar.Calendar`
 :param plaintxt: plain text version of the announcement
 :type plaintxt: :class:`str`
-:param xhtml: xhtml version of the announcement
-:type xhtml: :class:`lxml.etree._Document`
+:param html: html version of the announcement
+:type html: :class:`lxml.etree._ElementTree`
 :param shorttxt: short (1 liner) text version of the announcement
 :type shorttxt: :class:`str`
 :param filename: file name associated to the ics calendar in the announcement
@@ -118,28 +109,26 @@ def announcement(shorttxt=None,plaintxt=None,xhtml=None,icscal=None,filename=Non
 :type charset: :class:`str`
 :rtype: :class:`email.message`
 
-Returns the announcement specified in different forms (*shorttxt*, *plaintxt*, *xhtml*, *icscal*) as an email message.
+Returns the announcement specified in different forms (*shorttxt*, *plaintxt*, *html*, *icscal*) as an email message.
   """
+#==================================================================================================
   assert isinstance(shorttxt,str)
   assert isinstance(plaintxt,str)
-  assert hasattr(xhtml,'docinfo') and hasattr(xhtml,'getroot')
-  assert isxmlelement(xhtml.getroot())
+  assert hasattr(html,'docinfo') and hasattr(html,'getroot')
+  assert isxmlelement(html.getroot())
   assert isinstance(icscal,icalendar.Calendar)
   msg = MIMEMultipart('alternative')
   msg.set_param('name','announce.eml')
   msg.add_header('subject',shorttxt)
   msg.attach(MIMEText(plaintxt,'plain',charset))
-  msg.attach(MIMEText(xmltounicode(xhtml),'html',charset))
+  msg.attach(MIMEText(html2str(html),'html',charset))
   m = MIMEText(icscal.to_ical().decode('utf-8'),'calendar',charset)
   m.set_param('method',icscal.get('method'))
   if filename is not None: m.add_header('content-disposition','attachment',filename=filename+'.ics')
   msg.attach(m)
   return msg
 
-#------------------------------------------------------------------------------
-# def calendar
-#------------------------------------------------------------------------------
-
+#==================================================================================================
 def calendar(content=None,method='PUBLISH',version='2.0',reminder=None):
   r"""
 :param content: list of events
@@ -154,6 +143,7 @@ def calendar(content=None,method='PUBLISH',version='2.0',reminder=None):
 
 Return a calendar object listing all the events in *content*, possibly augmented, for those confirmed, with a reminder specified by *reminder* (from start).
   """
+#==================================================================================================
   cal = icalendar.Calendar()
   cal.add('prodid','-//ChronoManager//0.1')
   cal.add('version',version)
@@ -172,10 +162,7 @@ Return a calendar object listing all the events in *content*, possibly augmented
     cal.add_component(evt)
   return cal
 
-#------------------------------------------------------------------------------
-# def event
-#------------------------------------------------------------------------------
-
+#==================================================================================================
 def event(start=None,duration=None,permalink=None,sequence=0,confirmed=True,priority=5,klass='PUBLIC',transp='OPAQUE'):
   r"""
 :param start: event start instant, in UTC
@@ -190,6 +177,7 @@ def event(start=None,duration=None,permalink=None,sequence=0,confirmed=True,prio
 
 Returns a calendar event, which can be further extended. The *permalink*, if not const:`None`, is used to generate a unique ID of the event.
   """
+#==================================================================================================
   assert isinstance(start,datetime)
   start = start.astimezone(utc)
   assert isinstance(duration,timedelta)
@@ -207,10 +195,7 @@ Returns a calendar event, which can be further extended. The *permalink*, if not
     evt.add('uid',uid)
   return evt
 
-#------------------------------------------------------------------------------
-# class Transaction
-#------------------------------------------------------------------------------
-
+#==================================================================================================
 class Transaction (object):
   r"""
 Instances of this class specify a (very simple) transaction, consisting of a prepare phase and a commit phase. A transaction can have subtransactions.
@@ -228,7 +213,7 @@ Attributes:
 
 Methods:
   """
-
+#==================================================================================================
   def __init__(self):
     self.subt = []
     self.executed = False
@@ -242,7 +227,7 @@ Methods:
       logger.info('Transaction[%s]: aborted',self)
       return
     plan = reversed(plan)
-    if dryrun: print('Plan', tuple(plan))
+    if dryrun: print('Plan',*plan)
     else:
       for t in plan: t.commit()
 
@@ -274,10 +259,7 @@ Adds transaction *t* as subtransaction to *self*.
     assert isinstance(t,Transaction)
     self.subt.append(t)
 
-#------------------------------------------------------------------------------
-# class MailingTransaction
-#------------------------------------------------------------------------------
-
+#==================================================================================================
 class MailingTransaction (Transaction):
   r"""
 A mailing transaction. On prepare: compute sender, recipient and ask for confirmation; on commit: perform the sending.
@@ -289,7 +271,7 @@ A mailing transaction. On prepare: compute sender, recipient and ask for confirm
 :param distrib: specification of 'from','to','cc','bcc' fields
 :type distrib: :class:`Dict[str,object]`
   """
-
+#==================================================================================================
   def __init__(self,mailhost=None,mailmsg=None,distrib=None):
     self.mailhost = mailhost
     self.mailmsg = mailmsg
@@ -311,11 +293,7 @@ A mailing transaction. On prepare: compute sender, recipient and ask for confirm
     maildisplay(self.mailmsg,textshow)
     print(LINE)
     confirm()
-
-#------------------------------------------------------------------------------
-# class XMLFileTransaction
-#------------------------------------------------------------------------------
-
+#==================================================================================================
 class XMLFileTransaction (Transaction):
   r"""
 An XML file transaction. On prepare: parse the xml file and select nodes in the document; on commit: save the document.
@@ -329,7 +307,7 @@ An XML file transaction. On prepare: parse the xml file and select nodes in the 
 :param targetnamer: xpath specification to name a selected node
 :type targetnamer: :class:`str`
   """
-
+#==================================================================================================
   def __init__(self,path=None,namespaces=None,target=None,targetnamer=None):
     self.path = path
     self.namespaces = namespaces
@@ -340,13 +318,14 @@ An XML file transaction. On prepare: parse the xml file and select nodes in the 
 
   def prepare(self):
     self.doc = xmlparse(self.path)
+    self.namespaces = dict((k,(self.doc.getroot().nsmap[None] if v is None else v)) for k,v in self.namespaces.items())
     self.select()
     super().prepare()
 
   def commit(self):
     super().commit()
     if self.unmodified: return
-    safedump(xmltostring(self.doc,encoding=self.doc.docinfo.encoding,xml_declaration=True),self.path,'wb')
+    safedump(xml2str(self.doc,encoding=self.doc.docinfo.encoding,xml_declaration=True),self.path,'wb')
 
   def select(self):
     self.target = self.doc.xpath(self.target,namespaces=self.namespaces)
@@ -354,10 +333,11 @@ An XML file transaction. On prepare: parse the xml file and select nodes in the 
   def select1(self):
     self.target = choose1(self.target,pname=lambda e: '|'.join(e.xpath(self.targetnamer,namespaces=self.namespaces)))
 
-#------------------------------------------------------------------------------
+#==================================================================================================
 # Utilities
-#------------------------------------------------------------------------------
+#==================================================================================================
 
+#--------------------------------------------------------------------------------------------------
 def xmlpuretext(e,pat=re.compile('(\n{2,})',re.UNICODE)):
   r"""
 Returns the text content of *e*.
@@ -365,8 +345,10 @@ Returns the text content of *e*.
 :param e: XML node
 :type e: :class:`lxml.etree._Element`
   """
-  return pat.sub('\n',''.join(e.xpath('descendant-or-self::text()')))
+#--------------------------------------------------------------------------------------------------
+  return pat.sub('\n',''.join(ElementTextIterator(e)))
 
+#--------------------------------------------------------------------------------------------------
 def xmlsubstitute(doc,d):
   r"""
 Replaces each node of the form <?parm xx?> in *doc* by *d* ['xx'], which must be an XML node.
@@ -376,6 +358,7 @@ Replaces each node of the form <?parm xx?> in *doc* by *d* ['xx'], which must be
 :param d: substitution table
 :type d: :class:`Dict[str,lxml.etree._Element]`
   """
+#--------------------------------------------------------------------------------------------------
   for parm in doc.xpath('//processing-instruction("parm")'):
     x = d.get(parm.text)
     if x is not None:
@@ -384,6 +367,7 @@ Replaces each node of the form <?parm xx?> in *doc* by *d* ['xx'], which must be
       parm.getparent().replace(parm,x)
   return doc
 
+#--------------------------------------------------------------------------------------------------
 def safedump(content,path,mode='w'):
   r"""
 Saves string *content* into filesystem member *path* with some safety.
@@ -393,6 +377,7 @@ Saves string *content* into filesystem member *path* with some safety.
 :param path: target path
 :type path: :class:`str`
   """
+#--------------------------------------------------------------------------------------------------
   if os.path.exists(path):
     dirn,fn = os.path.split(path)
     pathnew,pathsav = os.path.join(dirn,'new-'+fn),os.path.join(dirn,'bak-'+fn)
@@ -403,6 +388,7 @@ Saves string *content* into filesystem member *path* with some safety.
   else:
     with open(path,mode) as v: v.write(content)
 
+#--------------------------------------------------------------------------------------------------
 def choose1(L,pname,LINE=79*'-'):
   r"""
 Picks option from menu *L*.
@@ -412,6 +398,7 @@ Picks option from menu *L*.
 :param pname: print-name function for the options
 :type pname: :class:`Callable[[object],str]`
   """
+#--------------------------------------------------------------------------------------------------
   N = len(L)
   assert N>0, Exception('No entry to choose from')
   if N > 1:
@@ -432,6 +419,7 @@ Picks option from menu *L*.
     j = 0
   return L[j]
 
+#--------------------------------------------------------------------------------------------------
 def editparams(d,LINE=79*'-'):
   r"""
 Edits a dictionary *d*.
@@ -439,6 +427,7 @@ Edits a dictionary *d*.
 :param d: target dictionary
 :type d: :class:`Dict[str,str]`
   """
+#--------------------------------------------------------------------------------------------------
   p = {}
   L = list(d.keys())
   L.sort()
@@ -462,10 +451,12 @@ Edits a dictionary *d*.
         p[k] = v
   d.update(p)
 
+#--------------------------------------------------------------------------------------------------
 def confirm():
   r"""
 Requests a confirmation.
   """
+#--------------------------------------------------------------------------------------------------
   while True:
     try: choice = input('[Ret: confirm]>>> ')
     except KeyboardInterrupt: print(); raise

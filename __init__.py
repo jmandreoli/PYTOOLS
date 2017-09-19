@@ -517,7 +517,7 @@ class HtmlPluginPointer:
     tref = 'document.getElementById(\'{}\').rows[{}]'.format(tid,k)
     self.attrs = dict(
       onmouseenter=tref+'.style.outline=\'thick solid red\'',
-      onmouseleave=tref+'.style.outline=\'inherit\'',
+      onmouseleave=tref+'.style.outline=\'\'',
       onclick=tref+'.scrollIntoView()',
       )
   def element(self,asref=False,**ka):

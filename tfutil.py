@@ -14,7 +14,7 @@ from shutil import rmtree
 from collections import OrderedDict, defaultdict, namedtuple
 from numpy import zeros, sqrt, square
 import tensorflow
-from . import html_parlist,HtmlPlugin,time_fmt,unid,odict
+from . import html_parlist,HtmlPlugin,time_fmt,unid,odict,html_table
 from .monitor import Monitor
 
 #==================================================================================================
@@ -71,7 +71,7 @@ Loads this TF trace from its directory.
     self.runs.clear(); runs_ = {}
     for d in sorted(self.root.glob('run-*'),reverse=True):
       run = self.runs_.get(d)
-      if run is None: run = Run(d,'Run[{}]'.format(datetime.fromtimestamp(int(d.name[4:],16))))
+      if run is None: run = Run(d,'Run<{}>'.format(datetime.fromtimestamp(int(d.name[4:],16))))
       self.runs.append(run); runs_[d] = run
     self.runs_ = runs_
     self.loaded = True
@@ -106,7 +106,8 @@ Creates a new (empty) run and adds it to this TF trace.
 
   def as_html(self,_):
     self.load()
-    return html_parlist(_,self.runs,(),opening=('Trace {',),closing=('}',))
+    return html_table(((k,(v,)) for k,v in enumerate(self.runs)),fmts=((lambda x: x.as_html(_)),),opening=repr(self))
+  def __repr__(self): return 'TFTrace<{}>'.format(self.root)
 
 #==================================================================================================
 class Run (HtmlPlugin):
@@ -249,8 +250,6 @@ Truncates all the event files of this run to *n* entries.
     for n,f in enumerate(sorted(self.path.rglob('events.out.tfevents*'),key=(lambda f: f.stat().st_mtime))):
       evf = self.evfs.get(f)
       if evf is None: evf = EVFile(f)
-      evf.title = '{}{{{}}}'.format(self.title,n)
-      evf.walltime = datetime.fromtimestamp(f.stat().st_mtime)
       evfs[f] = evf
     self.evfs = evfs
     self.loaded = True
@@ -261,7 +260,8 @@ Truncates all the event files of this run to *n* entries.
 
   def as_html(self,_):
     self.load()
-    return html_parlist(_,self.evfs.values(),(),opening=('Run {',),closing=('}',))
+    return html_table(sorted((k,(v,)) for k,v in enumerate(self.evfs.values())),fmts=((lambda x: x.as_html(_)),),opening=repr(self))
+  def __repr__(self): return self.title
 
 #==================================================================================================
 class EVFile (HtmlPlugin):
@@ -272,11 +272,10 @@ class EVFile (HtmlPlugin):
 #toplevel > thead > tr > td { background-color:gray; color:white; text-align: center; }
   '''
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,path,clip=1000,title=None):
+  def __init__(self,path,clip=1000):
 #--------------------------------------------------------------------------------------------------
     self.path,self.timestamp = path,0
     self.clip_,self.clipped = clip,False
-    self.title = str(self.path) if title is None else title
 
   def __hash__(self): return hash(self.path)
   def __eq__(self,other): return isinstance(other,EVFile) and self.path == other.path
@@ -317,10 +316,11 @@ class EVFile (HtmlPlugin):
   def as_html(self,_):
     from lxml.html.builder import E
     self.load()
-    thead = E.tr(E.td(E.b(self.title),(' (clipped at {})'.format(self.clip_) if self.clipped else ''),colspan='4'))
+    thead = E.tr(E.td(repr(self),(' clipped @ {}'.format(self.clip_) if self.clipped else ''),colspan='4'))
     tbody = (tr for label,html in self.summariser.html() for tr in html_table_prefix_rows(html,E.th(label)))
     idn = unid('tfutil')
     return E.div(E.style(self.style.replace('#toplevel','#'+idn),scoped='scoped'),E.table(E.thead(thead),E.tbody(*tbody),id=idn))
+  def __repr__(self): return 'EventFile<{}>'.format(self.path.name[20:])
 
 #==================================================================================================
 # Parsing/representation classes for EVFile

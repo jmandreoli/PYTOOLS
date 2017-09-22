@@ -22,7 +22,7 @@ def mailsend(smtphost,*L,confirm=False,from_addr=None,to_addrs=None,cc_addrs=Non
 :param smtphost: a SMTP host
 :type smtphost: :class:`smtplib.SMTP`
 :param L: a list of email messages
-:type L: :class:`Iterable[email.Message]`
+:type L: :class:`Iterable[email.message.Message]`
 :param confirm: whether to ask the user for confirmation of each object
 :type confirm: :class:`bool`
 :param from_addr: email address for 'from' field
@@ -34,29 +34,36 @@ def mailsend(smtphost,*L,confirm=False,from_addr=None,to_addrs=None,cc_addrs=Non
 :param bcc_addrs: list of email addresses for 'bcc' field
 :type bcc_addrs: :class:`List[str]`
 
-Appends from,to,cc,bcc fields to each email message in *L* (filtered by user if *confirm* is :const:`True`), then invokes method :meth:`smtplib.SMTP.sendmail` of *smtphost* on each message. Returns the list of same length as *L* holding the status of each send operation. Status is ``filtered-out`` if the email was filtered out by the user (only when *confirm* is :const:`True`), ``failure`` if the operation resulted in an Exception, ``partial`` if the operation was partially successful (but some recipients were not reached) and ``success`` if the operation completed successfully.
+Appends from,to,cc,bcc fields to each email message in *L* (filtered by user if *confirm* is :const:`True`), then invokes method :meth:`sendmail` of *smtphost* on each message. The method is also passed keyword arguments *ka*. Returns a list of same length as *L* holding the status of each send operation. Status is:
+
+* ``filtered`` if the email was filtered out by the user (only when *confirm* is :const:`True`),
+* ``skipped`` if a previous operation raised an exception (so, after an exception, the status is either ``filtered`` or ``skipped``),
+* ``success`` if the operation completed successfully,
+* ``partial`` if the operation was partially successful (but some recipients were not reached),
+* ``failure`` if the operation raised an exception.
   """
 #==================================================================================================
-  def sethdrs(msg):
-    assert isinstance(from_addr,str)
-    msg.add_header('from',from_addr)
-    for hdr,addrs in recipients_:
-      assert all(isinstance(addr,str) for addr in addrs)
-      msg.add_header(hdr,', '.join(addrs))
-    return msg
   def base(addr,pat=re.compile('.*<(.*)>'),pat2=re.compile(r'(?:\w|[._-])+@(?:\w|[_-])+(?:[.](?:\w|[_-])+)+')):
     m = pat.fullmatch(addr)
     if m is not None: addr = m.group(1)
     m = pat2.fullmatch(addr)
     if m is None: raise Exception('Invalid email address')
     return addr
-  recipients_ = tuple(filter((lambda x: x[1] is not None),(('to',to_addrs),('cc',cc_addrs),('bcc',bcc_addrs))))
-  L = [sethdrs(msg) for msg in L]
+  assert isinstance(from_addr,str)
   sender = base(from_addr)
-  recipients = set(base(addr) for hdr,addrs in recipients_ for addr in addrs)
+  recipients = []
+  header_addrs = []
+  for hdr,addrs in (('to',to_addrs),('cc',cc_addrs),('bcc',bcc_addrs)):
+    if addrs is None: continue
+    assert all(isinstance(addr,str) for addr in addrs)
+    header_addrs.append((hdr,', '.join(addrs)))
+    recipients.extend(base(addr) for addr in addrs)
+  for msg in L:
+    msg.add_header('from',from_addr)
+    for hdr,addrs in header_addrs: msg.add_header(hdr,addrs)
   La = [dict(from_addr=sender,to_addrs=recipients,msg=msg.as_string(),**ka) for msg in L]
   if confirm:
-    L_ = []
+    L_ = []; empty = True
     try:
       for i,msg in enumerate(L,1):
         print('\x1BcCONFIRM MAIL {}/{}'.format(i,len(L)))
@@ -65,30 +72,30 @@ Appends from,to,cc,bcc fields to each email message in *L* (filtered by user if 
           try: r = input('Ret: OK; ^D: skip> ')
           except EOFError: L_.append(False); break
           if r.strip(): continue
-          else: L_.append(True); break
+          else: L_.append(True); empty = False; break
     finally: print('\x1Bc',end='',flush=True)
-    n = sum(L_)
-    if not n: raise Exception('All mails were filtered out by user')
-    nfilt = len(L)-n
-  else: L_ = len(L)*(True,); nfilt = 0
-  nsucc,R,exc,status = 0,[],None,'success'
-  Ls = []
+    if empty: raise Exception('All mails were filtered out by user')
+  else: L_ = len(L)*(True,)
+  nfilt = nsucc = nskip = 0
+  R = []; exc = None; Ls = []
   with smtphost as smtp:
     for confirmed,sendargs in zip(L_,La):
       if confirmed:
-        if status != 'failure':
+        if exc is None:
           try: err = smtp.sendmail(**sendargs)
           except Exception as exc_: status = 'failure'; exc = exc_
           else:
-            if err: status = 'partial-success'; R.append(err)
+            if err: status = 'partial'; R.append(err)
             else: status = 'success'; nsucc += 1
-      else: status='filtered'
+        else: status = 'skipped'; nskip += 1
+      else: status='filtered'; nfilt += 1
       Ls.append(status)
-  n0,nfail = len(R),(1 if status=='failure' else 0)
-  logger.info('Mail procedure report [submitted: %s | filtered: %s, success: %s, partial-success: %s, failure: %s, skipped: %s]',len(L),nfilt,nsucc,n0,nfail,len(L)-nfilt-nsucc-n0-nfail)
-  if R: logger.warn('Cause of partial success: %s',set(R))
-  if status=='failure': logger.warn('Cause of failure: %s',exc)
-  if nsucc==0: raise Exception('No mail was sent')
+  npart = len(R)
+  nfail = 0 if exc is None else 1
+  logger.info('Mail procedure report [submitted: %s | filtered: %s, success: %s, partial: %s, failure: %s, skipped: %s]',len(L),nfilt,nsucc,npart,nfail,nskip)
+  if R: logger.warn('Cause(s) of partial success: %s',set(R))
+  if exc is not None: logger.warn('Cause of failure: %s',exc)
+  if nsucc==0: raise Exception('No mail was successfully sent')
   return Ls
 
 #==================================================================================================
@@ -106,7 +113,7 @@ def announcement(shorttxt=None,plaintxt=None,html=None,icscal=None,filename=None
 :type filename: :class:`str`
 :param charset: charset encoding specification
 :type charset: :class:`str`
-:rtype: :class:`email.message`
+:rtype: :class:`email.message.Message`
 
 Returns the announcement specified in different forms (*shorttxt*, *plaintxt*, *html*, *icscal*) as an email message.
   """
@@ -140,7 +147,7 @@ def calendar(content=None,method='PUBLISH',version='2.0',reminder=None):
 :type version: :class:`str`
 :rtype: :class:`icalendar.Calendar`
 
-Return a calendar object listing all the events in *content*, possibly augmented, for those confirmed, with a reminder specified by *reminder* (from start).
+Return a calendar object listing all the events in *content*, possibly augmented, for those confirmed, with a reminder specified by *reminder* (delta from start, negative).
   """
 #==================================================================================================
   cal = icalendar.Calendar()
@@ -198,7 +205,7 @@ Returns a calendar event, which can be further extended. The *permalink*, if not
 @contextmanager
 def transaction():
   r"""
-Simply encloses some code in trasaction status messages.
+Simply encloses some code in transaction status messages.
   """
 #==================================================================================================
   logger.info('Transaction started [%s].',datetime.now())
@@ -211,8 +218,6 @@ Simply encloses some code in trasaction status messages.
 @contextmanager
 def xmlfile_transaction(path=None,updating=False,namespaces={},target=None):
   r"""
-Opens a transaction to perform operations on nodes of an XML file. The list of nodes is returned on entering this context.
-
 :param path: path of the file
 :type path: :class:`str`
 :param updating: whether the transaction is meant to perform changes on the xml content
@@ -221,6 +226,8 @@ Opens a transaction to perform operations on nodes of an XML file. The list of n
 :type namespace: :class:`Dict[str,str]`
 :param target: an Xpath expression for selecting the xml nodes
 :type target: :class:`str`
+
+Opens a transaction to perform operations on nodes of an XML file at *path*. The list of nodes selected  by *target* is returned on entering this context. On exit, if *updating* is :const:`True`, the document loaded on entering, and which should have been updated, is dumped again in *path* (a copy of the old file is preserved).
   """
 #==================================================================================================
   with transaction():
@@ -240,8 +247,10 @@ def maildisplay(message,textshow=None):
   r"""
 :param message: email message
 :type message: :class:`email.message`
+:param textshow: a list of subtypes of mimetype ``text`` to display (default: all subtypes)
+:type textshow: :class:`List[str]`
 
-Displays content of *message*.
+Displays the content of *message*. All headers are displayed. Only the content of attachments of mimetype ``text`` and subtype in *textshow* are displayed.
   """
 #--------------------------------------------------------------------------------------------------
   def struct(msg,iz=''):
@@ -266,10 +275,10 @@ Displays content of *message*.
 #--------------------------------------------------------------------------------------------------
 def xmlpuretext(e,pat=re.compile('(\n{2,})',re.UNICODE)):
   r"""
-Returns the text content of *e*.
-
 :param e: XML node
 :type e: :class:`lxml.etree._Element`
+
+Returns the text content of *e*, contracting multiple consecutive newlines into a single one.
   """
 #--------------------------------------------------------------------------------------------------
   return pat.sub('\n',''.join(ElementTextIterator(e)))
@@ -277,12 +286,12 @@ Returns the text content of *e*.
 #--------------------------------------------------------------------------------------------------
 def xmlsubstitute(doc,d):
   r"""
-Replaces each node of the form <?parm xx?> in *doc* by *d* ['xx'], which must be an XML node.
-
-:param doc: target xml document
+:param doc: target XML document
 :type doc: :class:`lxml.etree._Element`
 :param d: substitution table
 :type d: :class:`Dict[str,lxml.etree._Element]`
+
+Replaces each node of the form ``<?parm xx?>`` in *doc* by the value of *d* at key ``xx``, if it exists.
   """
 #--------------------------------------------------------------------------------------------------
   for parm in doc.xpath('//processing-instruction("parm")'):
@@ -296,12 +305,12 @@ Replaces each node of the form <?parm xx?> in *doc* by *d* ['xx'], which must be
 #--------------------------------------------------------------------------------------------------
 def safedump(content,path,mode='w'):
   r"""
-Saves string *content* into filesystem member *path* with some safety.
-
 :param content: target string
 :type content: :class:`str`
 :param path: target path
 :type path: :class:`str`
+
+Saves string *content* into file at *path* and creates a copy of the old file.
   """
 #--------------------------------------------------------------------------------------------------
   if os.path.exists(path):
@@ -317,10 +326,10 @@ Saves string *content* into filesystem member *path* with some safety.
 #--------------------------------------------------------------------------------------------------
 def select(L):
   r"""
-Prompts user for selection in a list *L*.
-
 :param L: list from which to select
-:type L: :class:`List[object]`
+:type L: :class:`Iterable[object]`
+
+Prompts user for selection in a list *L*.
   """
 #--------------------------------------------------------------------------------------------------
   L = list(L)
@@ -337,10 +346,10 @@ Prompts user for selection in a list *L*.
 #--------------------------------------------------------------------------------------------------
 def editparams(d,usermsg=None):
   r"""
-Edits a dictionary *d*.
-
 :param d: target dictionary
 :type d: :class:`Dict[str,str]`
+
+Edits a dictionary *d* and returns it. The editor can change the values but not the keys.
   """
 #--------------------------------------------------------------------------------------------------
   p = {}
@@ -349,7 +358,7 @@ Edits a dictionary *d*.
     while True:
       print('\x1Bc',end='')
       if usermsg is not None: print(usermsg)
-      for k in L: print(k,'=',p.get(k,d[k]))
+      for k,v in d.items(): print(k,'=',p.get(k,v))
       while True:
         choice = input('Ret: exit; -*: unset; *=*: set> ').strip()
         if choice=='': d.update(p); return d

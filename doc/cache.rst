@@ -58,17 +58,24 @@ In the example above, the first argument of the persistently cached function :fu
 
 Persistent cacheing with symbolic expressions for workflow task execution
 .........................................................................
-A typical workflow task executor (see e.g. function :func:`stepB` in the example above) looks like this::
+In a typical workflow task executor (see e.g. function :func:`stepB` in the example above), the first argument *E* is typically an instance of :class:`MapExpr` whose configuration describes all the previous tasks in the workflow. Its incarnation is the set of key-value pairs computed by the previous tasks. The new task typically seeks to enrich this set with some new key-value pairs, based on that of *E*. Since *E* is immutable, it is not possible to directly update it. There are two possibilities
+
+* Convert *E* into a proper dictionary::
 
    def task_exec(E,...):
-     ...
-     return ChainMap({...},E)
+     ... # compute some update dictionary D from E and the other arguments
+     DE = dict(E); DE.update(D); return DE
 
-Typically *E* is an instance of :class:`MapExpr` whose configuration describes all the previous tasks in the workflow. Its incarnation is the set of key-value pairs computed by the previous tasks. The new task enriches this set with some new key-value pairs. Since *E* is immutable, it is not possible to directly update it, but a functionally equivalent alternative to the last line could still be::
+* Use function :func:`chain` from module :mod:`itertools`::
 
-   E = dict(E); E.update({...}); return E
+   def task_exec(E,...):
+     ... # compute some update dictionary D from E and the other arguments
+     return chain(E,**D)
 
-In both cases, the same key-value pairs are returned. There is an important difference though. The cached value in the alternative is a regular dict containing all the keys already present in *E* (recursively incarnated by its conversion to a dict), typically assigned by the previous tasks, plus those computed by the new task. The advantage of that solution is that a single cache lookup gives access to the computed results of all the tasks up to the current one. On the other hand, the drawback is that this cached value might be large, and mostly redundant with the cached values of the previous tasks. With the :func:`ChainMap` solution, only the configuration of *E*, not its incarnation, is stored, and it is usually of negligible size compared to its incarnation. The price to pay is that access to the results of previous tasks now requires re-incarnating *E* hence re-accessing the cache, but that overhead is often small and worth the economy in overall cache redundancy.
+In both cases, the same key-value pairs are returned. There is an important difference though.
+
+* In the first solution, *E* is recursively incarnated by its conversion to a dict, so the cached value *DE* contains all the key-value pairs already typically assigned by the previous tasks. The new key-value pairs from *D* are appended. The advantage of that solution is that a single cache lookup gives access to the computed results of all the tasks up to the current one. On the other hand, the drawback is that this cached value might be large, and mostly redundant with the cached values of the previous tasks.
+* In the second solution, the cached value essentially holds the new key-value pairs of *D* together with the configuration of *E*, not its recursive incarnation, and the former is usually much smaller than the latter. The price to pay is that access to the results of previous tasks now requires re-incarnating *E* hence re-accessing the cache, but that overhead is often small and worth the economy in overall cache redundancy.
 
 Available types and functions
 -----------------------------

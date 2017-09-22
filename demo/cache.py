@@ -5,9 +5,8 @@
 
 if __name__=='__main__':
   import sys
-  from myutil.demo.cache import demo, demo_
-  if len(sys.argv) == 1: demo()
-  else: demo_(*sys.argv[1:])
+  from myutil.demo.cache import demo # properly import this module
+  demo(*sys.argv[1:])
   sys.exit(0)
 
 #--------------------------------------------------------------------------------------------------
@@ -50,33 +49,34 @@ def proc(rab=1,rbc=2,rabc=3,d=7):
 
 #--------------------------------------------------------------------------------------------------
 
-def demo_(*L):
-  import logging, gc
-  logging.basicConfig(level=logging.INFO,format='[proc %(process)d @ %(asctime)s] %(message)s',datefmt='%H:%M:%S')
-  logger = logging.getLogger()
-  for x in L:
-    gc.collect()
-    logger.info('Computing: %s',x)
-    try: v = eval(x)
-    except Exception as e: v = 'raised[{}]'.format(e)
-    logger.info('Result: %s = %s',x,v)
+DEMOS = (
+  ( 'simplefunc(1,2)', 'simplefunc(1,y=2)', ),
+  ( 'longfunc(42,6)', 'longfunc(None,4)', ),
+  ( 'vfunc(3)', ),
+  ( "proc()['abc']", "proc(rabc=4)['abc']", "proc(rbc=5)['abc']", ),
+)
 
-def demo():
-  import subprocess,os,time
-  from sys import executable as python
-  DEMOS = (
-    'simplefunc(1,2) ; simplefunc(1,y=2)',
-    'longfunc(42,6) ; longfunc(None,4)',
-    'vfunc(3)',
-    "proc()['abc'] ; proc(rabc=4)['abc'] ; proc(rbc=5)['abc']",
-  )
-  for f in simplefunc,longfunc,vfunc,stepA,stepB: f.cache.clear()
-  for tests in DEMOS:
-    print(80*'-')
-    L = [python,__file__]+tests.split(' ; ')
-    def sched():
-      for t in (0.,2.): time.sleep(t); yield subprocess.Popen(L)
-    for w in list(sched()): w.wait()
-    if not automatic:
-      try: input('RET: continue; ^-C: stop')
-      except: print(); break
+def demo(ind=None):
+  if ind is None:
+    # we are in the master process: for each entry in DEMOS, launch 2 slave processes at 2 sec interval and wait for them
+    import subprocess,os,time,sys
+    for f in simplefunc,longfunc,vfunc,stepA,stepB: f.cache.clear()
+    for ind in range(len(DEMOS)):
+      print(80*'-')
+      cmd = [sys.executable,__file__,str(ind)]
+      w1 = subprocess.Popen(cmd); time.sleep(2); w2 = subprocess.Popen(cmd)
+      w1.wait(); w2.wait()
+      if not automatic:
+        try: input('RET: continue; ^-C: stop')
+        except KeyboardInterrupt: print(); break
+  else:
+    # we are in a slave process: run the demo for entry *ind* in DEMOS
+    import logging, gc
+    logging.basicConfig(level=logging.INFO,format='[proc %(process)d @ %(asctime)s] %(message)s',datefmt='%H:%M:%S')
+    logger = logging.getLogger()
+    for expr in DEMOS[int(ind)]:
+      gc.collect()
+      logger.info('Computing: %s',expr)
+      try: val = eval(expr)
+      except Exception as exc: val = 'raised[{}]'.format(exc)
+      logger.info('Result: %s = %s',expr,val)

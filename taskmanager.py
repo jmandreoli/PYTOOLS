@@ -9,88 +9,87 @@ import logging, os, re, icalendar, uuid, sys
 from datetime import datetime, timedelta
 from copy import deepcopy
 from pytz import timezone, utc
+from contextlib import contextmanager
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from smtplib import SMTP
 from lxml.etree import parse as xmlparse, tostring as xml2str, iselement as isxmlelement, ElementTextIterator
 from lxml.html import tostring as html2str
 logger = logging.getLogger(__name__)
 
 #==================================================================================================
-def mailprepare(msg=None,fromaddr=None,toaddr=None,ccaddr=None,bccaddr=None,dstarget=None):
+def mailsend(smtphost,*L,confirm=False,from_addr=None,to_addrs=None,cc_addrs=None,bcc_addrs=None,**ka):
   r"""
-:param msg: email message
-:type msg: :class:`email.message`
-:param fromaddr: email address for 'from' field
-:type fromaddr: :class:`str`
-:param toaddr: list of email addresses for 'to' field
-:type toaddr: :class:`List[str]`
-:param ccaddr: list of email addresses for 'cc' field
-:type ccaddr: :class:`List[str]`
-:param bccaddr: list of email addresses for 'bcc' field
-:type bccaddr: :class:`List[str]`
-:param dstarget: docushare collection identifier for subject extension
-:type dstarget: :class:`str`
+:param smtphost: a SMTP host
+:type smtphost: :class:`smtplib.SMTP`
+:param L: a list of email messages
+:type L: :class:`Iterable[email.Message]`
+:param confirm: whether to ask the user for confirmation of each object
+:type confirm: :class:`bool`
+:param from_addr: email address for 'from' field
+:type from_addr: :class:`str`
+:param to_addrs: list of email addresses for 'to' field
+:type to_addrs: :class:`List[str]`
+:param cc_addrs: list of email addresses for 'cc' field
+:type cc_addrs: :class:`List[str]`
+:param bcc_addrs: list of email addresses for 'bcc' field
+:type bcc_addrs: :class:`List[str]`
 
-Appends to,cc,bcc fields to the email message *msg*, and possibly extends subject for docushare agent interaction.
+Appends from,to,cc,bcc fields to each email message in *L* (filtered by user if *confirm* is :const:`True`), then invokes method :meth:`smtplib.SMTP.sendmail` of *smtphost* on each message. Returns the list of same length as *L* holding the status of each send operation. Status is ``filtered-out`` if the email was filtered out by the user (only when *confirm* is :const:`True`), ``failure`` if the operation resulted in an Exception, ``partial`` if the operation was partially successful (but some recipients were not reached) and ``success`` if the operation completed successfully.
   """
 #==================================================================================================
-  msg.add_header('from',fromaddr)
-  sender = fromaddr
-  recipient = []
-  for hdr,addrs in (('to',toaddr),('cc',ccaddr),('bcc',bccaddr)):
-    if addrs is not None:
+  def sethdrs(msg):
+    assert isinstance(from_addr,str)
+    msg.add_header('from',from_addr)
+    for hdr,addrs in recipients_:
+      assert all(isinstance(addr,str) for addr in addrs)
       msg.add_header(hdr,', '.join(addrs))
-      recipient.extend(addrs)
-  if dstarget:
-    msg.replace_header('subject','{0} <upload: {1}>'.format(msg['subject'],dstarget))
-  return dict(sender=sender,recipient=set(recipient),message=msg)
-
-#==================================================================================================
-def maildisplay(message,textshow=None):
-  r"""
-:param message: email message
-:type message: :class:`email.message`
-
-Displays content of *message*.
-  """
-#==================================================================================================
-  def struct(msg,iz=''):
-    for k,v in msg.items(): print(iz,'%s: %s'%(k.capitalize(),v))
-    if msg.is_multipart():
-      iz += '  '
-      for msg1 in msg.get_payload():
-        for m in struct(msg1,iz): yield m
-    else:
-      if msg.get_content_maintype()=='text' and (textshow is None or msg.get_content_subtype() in textshow):
-        status = 'shown below'
-        yield msg
-      else: status = 'hidden'
-      print(iz,'<<<------------ Content',status,'------------>>>')
-  L = tuple(struct(message))
-  if L:
-    print()
-    for i,msg in enumerate(L,1):
-      print('<<<------------ Content of part ',i,'------------>>>')
-      content = msg.get_payload(decode=True)
-      print(content.decode(str(msg.get_charset())))
-
-#==================================================================================================
-def mailsend(sender=None,recipient=None,message=None,mailhost='smtphost'):
-  r"""
-:param sender: specification of sender (unique email address)
-:type sender: :class:`str`
-:param recipient: specification of recipients (comma separated email addresses)
-:type recipient: :class:`str`
-:param message: message content
-:type message: :class:`email.message`
-
-Sends *message* as email on *mailhost* with specified *sender* and *recipient*.
-  """
-#==================================================================================================
-  with (SMTP(mailhost) if isinstance(mailhost,str) else mailhost) as s:
-    err = s.sendmail(sender,recipient,message.as_string())
-  if err: raise Exception('At least one recipient did not receive the mail',err)
+    return msg
+  def base(addr,pat=re.compile('.*<(.*)>'),pat2=re.compile(r'(?:\w|[._-])+@(?:\w|[_-])+(?:[.](?:\w|[_-])+)+')):
+    m = pat.fullmatch(addr)
+    if m is not None: addr = m.group(1)
+    m = pat2.fullmatch(addr)
+    if m is None: raise Exception('Invalid email address')
+    return addr
+  recipients_ = tuple(filter((lambda x: x[1] is not None),(('to',to_addrs),('cc',cc_addrs),('bcc',bcc_addrs))))
+  L = [sethdrs(msg) for msg in L]
+  sender = base(from_addr)
+  recipients = set(base(addr) for hdr,addrs in recipients_ for addr in addrs)
+  La = [dict(from_addr=sender,to_addrs=recipients,msg=msg.as_string(),**ka) for msg in L]
+  if confirm:
+    L_ = []
+    try:
+      for i,msg in enumerate(L,1):
+        print('\x1BcCONFIRM MAIL {}/{}'.format(i,len(L)))
+        maildisplay(msg,('plain',))
+        while True:
+          try: r = input('Ret: OK; ^D: skip> ')
+          except EOFError: L_.append(False); break
+          if r.strip(): continue
+          else: L_.append(True); break
+    finally: print('\x1Bc',end='',flush=True)
+    n = sum(L_)
+    if not n: raise Exception('All mails were filtered out by user')
+    nfilt = len(L)-n
+  else: L_ = len(L)*(True,); nfilt = 0
+  nsucc,R,exc,status = 0,[],None,'success'
+  Ls = []
+  with smtphost as smtp:
+    for confirmed,sendargs in zip(L_,La):
+      if confirmed:
+        if status != 'failure':
+          try: err = smtp.sendmail(**sendargs)
+          except Exception as exc_: status = 'failure'; exc = exc_
+          else:
+            if err: status = 'partial-success'; R.append(err)
+            else: status = 'success'; nsucc += 1
+      else: status='filtered'
+      Ls.append(status)
+  n0,nfail = len(R),(1 if status=='failure' else 0)
+  logger.info('Mail procedure report [submitted: %s | filtered: %s, success: %s, partial-success: %s, failure: %s, skipped: %s]',len(L),nfilt,nsucc,n0,nfail,len(L)-nfilt-nsucc-n0-nfail)
+  if R: logger.warn('Cause of partial success: %s',set(R))
+  if status=='failure': logger.warn('Cause of failure: %s',exc)
+  if nsucc==0: raise Exception('No mail was sent')
+  return Ls
 
 #==================================================================================================
 def announcement(shorttxt=None,plaintxt=None,html=None,icscal=None,filename=None,charset='utf-8'):
@@ -196,146 +195,73 @@ Returns a calendar event, which can be further extended. The *permalink*, if not
   return evt
 
 #==================================================================================================
-class Transaction (object):
+@contextmanager
+def transaction():
   r"""
-Instances of this class specify a (very simple) transaction, consisting of a prepare phase and a commit phase. A transaction can have subtransactions.
-
-Attributes:
-
-.. attribute:: subt
-
-   list of subtransactions
-
-.. attribute:: executed
-
-   :class:`bool` flag indicating whether the trasaction has been executed.
-   A transaction can only be executed only once.
-
-Methods:
+Simply encloses some code in trasaction status messages.
   """
 #==================================================================================================
-  def __init__(self):
-    self.subt = []
-    self.executed = False
-
-  def __call__(self,dryrun=False):
-    assert not self.executed
-    self.executed = True
-    logger.info('Transaction[%s]: started%s',self,(' (dry run mode)' if dryrun else ''))
-    try: plan = tuple(self.prepareall())
-    except KeyboardInterrupt:
-      logger.info('Transaction[%s]: aborted',self)
-      return
-    plan = reversed(plan)
-    if dryrun: print('Plan',*plan)
-    else:
-      for t in plan: t.commit()
-
-  def prepareall(self):
-    self.prepare()
-    yield self
-    for t in self.subt:
-      for tt in t.prepareall(): yield tt
-
-  def prepare(self):
-    r"""
-Prepares step execution.
-    """
-    pass
-
-  def commit(self):
-    r"""
-Commits step execution.
-    """
-    logger.info('Transaction[%s]: committed',self)
-
-  def addtr(self,t):
-    r"""
-:param t: transaction object
-:type t: :class:`Transaction`
-
-Adds transaction *t* as subtransaction to *self*.
-    """
-    assert isinstance(t,Transaction)
-    self.subt.append(t)
+  logger.info('Transaction started [%s].',datetime.now())
+  try: yield
+  except KeyboardInterrupt: print(flush=True); logger.warn('Transaction aborted by user.')
+  except: print(flush=True); logger.warn('Transaction aborted.'); raise
+  else: logger.info('Transaction completed.')
 
 #==================================================================================================
-class MailingTransaction (Transaction):
+@contextmanager
+def xmlfile_transaction(path=None,updating=False,namespaces={},target=None):
   r"""
-A mailing transaction. On prepare: compute sender, recipient and ask for confirmation; on commit: perform the sending.
+Opens a transaction to perform operations on nodes of an XML file. The list of nodes is returned on entering this context.
 
-:param mailhost: specification of the mail host
-:type mailhost: :class:`str`
-:param mailmsg: message to send
-:type mailmsg: :class:`email.message`
-:param distrib: specification of 'from','to','cc','bcc' fields
-:type distrib: :class:`Dict[str,object]`
-  """
-#==================================================================================================
-  def __init__(self,mailhost=None,mailmsg=None,distrib=None):
-    self.mailhost = mailhost
-    self.mailmsg = mailmsg
-    self.distrib = distrib
-    super().__init__()
-
-  def prepare(self):
-    self.mail = mailprepare(self.mailmsg,**self.distrib)
-    self.getconfirm()
-    super().prepare()
-
-  def commit(self):
-    mailsend(mailhost=self.mailhost,**self.mail)
-    super().commit()
-
-  def getconfirm(self,LINE=79*'-',textshow=('plain',)):
-    print('Confirm sending the following mail:')
-    print(LINE)
-    maildisplay(self.mailmsg,textshow)
-    print(LINE)
-    confirm()
-#==================================================================================================
-class XMLFileTransaction (Transaction):
-  r"""
-An XML file transaction. On prepare: parse the xml file and select nodes in the document; on commit: save the document.
-
-:param path: specification of the xml file path
+:param path: path of the file
 :type path: :class:`str`
-:param namespaces: association of xml tag prefixes with names
-:type namespaces: :class:`Dict[str,str]`
-:param target: xpath specification of initial selection
+:param updating: whether the transaction is meant to perform changes on the xml content
+:type updating: :class:`bool`
+:param namespaces: a dictionary of prefix-namespace associations, for use in *target*
+:type namespace: :class:`Dict[str,str]`
+:param target: an Xpath expression for selecting the xml nodes
 :type target: :class:`str`
-:param targetnamer: xpath specification to name a selected node
-:type targetnamer: :class:`str`
   """
 #==================================================================================================
-  def __init__(self,path=None,namespaces=None,target=None,targetnamer=None):
-    self.path = path
-    self.namespaces = namespaces
-    self.target = target
-    self.targetnamer = targetnamer
-    self.unmodified = False
-    super().__init__()
-
-  def prepare(self):
-    self.doc = xmlparse(self.path)
-    self.namespaces = dict((k,(self.doc.getroot().nsmap[None] if v is None else v)) for k,v in self.namespaces.items())
-    self.select()
-    super().prepare()
-
-  def commit(self):
-    super().commit()
-    if self.unmodified: return
-    safedump(xml2str(self.doc,encoding=self.doc.docinfo.encoding,xml_declaration=True),self.path,'wb')
-
-  def select(self):
-    self.target = self.doc.xpath(self.target,namespaces=self.namespaces)
-
-  def select1(self):
-    self.target = choose1(self.target,pname=lambda e: '|'.join(e.xpath(self.targetnamer,namespaces=self.namespaces)))
+  with transaction():
+    doc = xmlparse(path)
+    namespaces = dict((k,(doc.getroot().nsmap[None] if v is None else v)) for k,v in namespaces.items())
+    L = doc.xpath(target,namespaces=namespaces)
+    if L: yield L
+    else: raise Exception('no matching entry found')
+    if updating: safedump(xml2str(doc,encoding=doc.docinfo.encoding,xml_declaration=True),path,'wb')
 
 #==================================================================================================
 # Utilities
 #==================================================================================================
+
+#--------------------------------------------------------------------------------------------------
+def maildisplay(message,textshow=None):
+  r"""
+:param message: email message
+:type message: :class:`email.message`
+
+Displays content of *message*.
+  """
+#--------------------------------------------------------------------------------------------------
+  def struct(msg,iz=''):
+    for k,v in msg.items(): print(iz,'%s: %s'%(k.capitalize(),v))
+    if msg.is_multipart():
+      iz += '  '
+      for msg1 in msg.get_payload():
+        for m in struct(msg1,iz): yield m
+    else:
+      if msg.get_content_maintype()=='text' and (textshow is None or msg.get_content_subtype() in textshow):
+        status = 'shown below'
+        yield msg
+      else: status = 'hidden'
+      print(iz,'<<<------------ Content',status,'------------>>>')
+  L = tuple(struct(message))
+  if L:
+    for i,msg in enumerate(L,1):
+      print('<<<------------ Content of part ',i,'------------>>>')
+      content = msg.get_payload(decode=True)
+      print(content.decode(str(msg.get_charset())))
 
 #--------------------------------------------------------------------------------------------------
 def xmlpuretext(e,pat=re.compile('(\n{2,})',re.UNICODE)):
@@ -389,38 +315,27 @@ Saves string *content* into filesystem member *path* with some safety.
     with open(path,mode) as v: v.write(content)
 
 #--------------------------------------------------------------------------------------------------
-def choose1(L,pname,LINE=79*'-'):
+def select(L):
   r"""
-Picks option from menu *L*.
+Prompts user for selection in a list *L*.
 
-:param L: list of options
+:param L: list from which to select
 :type L: :class:`List[object]`
-:param pname: print-name function for the options
-:type pname: :class:`Callable[[object],str]`
   """
 #--------------------------------------------------------------------------------------------------
-  N = len(L)
-  assert N>0, Exception('No entry to choose from')
-  if N > 1:
-    print(LINE)
-    for j,e in enumerate(L,1):
-      print('({0}) <|{1}|>'.format(j,pname(e)))
-    print(LINE)
-    while True:
-      try: choice = input('Select? [1-%d: selection]>>> '%N)
-      except KeyboardInterrupt: print(); raise
-      try:
-        j = int(choice,10)
-        if j < 1 or j > N: raise Exception('Out of bounds')
-        j -= 1
-        break
-      except: pass
-  else:
-    j = 0
-  return L[j]
+  L = list(L)
+  n = len(str(len(L)))
+  for k,v in enumerate(L,1): print('[{}] {}'.format(str(k).rjust(n),v))
+  while True:
+    r = input('Ret: all; *: select (space separated)> ').strip()
+    if r:
+      try: return [L[int(k.strip(),10)-1] for k in r.split()]
+      except KeyboardInterrupt: raise
+      except: print('Invalid choice'); continue
+    else: return L
 
 #--------------------------------------------------------------------------------------------------
-def editparams(d,LINE=79*'-'):
+def editparams(d,usermsg=None):
   r"""
 Edits a dictionary *d*.
 
@@ -430,35 +345,24 @@ Edits a dictionary *d*.
 #--------------------------------------------------------------------------------------------------
   p = {}
   L = list(d.keys())
-  L.sort()
-  while True:
-    try: choice = input('Select? [Ret: save; ?: display; -*: del; {%s}=*: set]>>> '%'|'.join(L))
-    except KeyboardInterrupt: print(); raise
-    if choice == '': break
-    elif choice == '?':
-      print(LINE)
-      for k in L:
-        print(k, '=', p.get(k,d[k]))
-    elif choice[0] == '-':
-      k = choice[1:]
-      if p.has_key(k): del p[k]
-      else: print('ignored')
-    else:
-      try: k,v = choice.split('=',1)
-      except: print('ignored')
-      else:
-        if k not in L: continue
-        p[k] = v
-  d.update(p)
-
-#--------------------------------------------------------------------------------------------------
-def confirm():
-  r"""
-Requests a confirmation.
-  """
-#--------------------------------------------------------------------------------------------------
-  while True:
-    try: choice = input('[Ret: confirm]>>> ')
-    except KeyboardInterrupt: print(); raise
-    if choice=='': return
-    else: print('ignored')
+  try:
+    while True:
+      print('\x1Bc',end='')
+      if usermsg is not None: print(usermsg)
+      for k in L: print(k,'=',p.get(k,d[k]))
+      while True:
+        choice = input('Ret: exit; -*: unset; *=*: set> ').strip()
+        if choice=='': d.update(p); return d
+        else:
+          if choice[0] == '-':
+            k = choice[1:]
+            try: del p[k]
+            except KeyError: print('invalid key'); continue
+          else:
+            try: k,v = choice.split('=',1)
+            except: print('invalid syntax'); continue
+            else:
+              if k in L: p[k] = v
+              else: print('invalid key'); continue
+          break
+  finally: print('\x1Bc',end='',flush=True)

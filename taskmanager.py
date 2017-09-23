@@ -10,9 +10,10 @@ from datetime import datetime, timedelta
 from copy import deepcopy
 from pytz import timezone, utc
 from contextlib import contextmanager
+from email.message import Message
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from lxml.etree import parse as xmlparse, tostring as xml2str, iselement as isxmlelement, ElementTextIterator
+from lxml.etree import parse as xmlparse, tostring as xml2str, ElementBase as xmlElementBase, ElementTextIterator as xmlElementTextIterator
 from lxml.html import tostring as html2str
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ def mailsend(smtphost,*L,confirm=False,from_addr=None,to_addrs=None,cc_addrs=Non
 :type smtphost: :class:`smtplib.SMTP`
 :param L: a list of email messages
 :type L: :class:`Iterable[email.message.Message]`
-:param confirm: whether to ask the user for confirmation of each object
+:param confirm: whether to ask the user for confirmation of each email
 :type confirm: :class:`bool`
 :param from_addr: email address for 'from' field
 :type from_addr: :class:`str`
@@ -34,13 +35,13 @@ def mailsend(smtphost,*L,confirm=False,from_addr=None,to_addrs=None,cc_addrs=Non
 :param bcc_addrs: list of email addresses for 'bcc' field
 :type bcc_addrs: :class:`List[str]`
 
-Appends from,to,cc,bcc fields to each email message in *L* (filtered by user if *confirm* is :const:`True`), then invokes method :meth:`sendmail` of *smtphost* on each message. The method is also passed keyword arguments *ka*. Returns a list of same length as *L* holding the status of each send operation. Status is:
+Appends from,to,cc,bcc fields to each email message in *L*, then invokes method :meth:`sendmail` of *smtphost* on each message with keyword arguments *ka*. If *confirm* is :const:`True`, the user is given the opportunity to confirm or cancel each sending. Returns a list of same length as *L* holding the status of each send operation. Status is:
 
-* ``filtered`` if the email was filtered out by the user (only when *confirm* is :const:`True`),
-* ``skipped`` if a previous operation raised an exception (so, after an exception, the status is either ``filtered`` or ``skipped``),
+* ``cancelled`` if the email was cancelled out by the user (only when *confirm* is :const:`True`),
+* ``skipped`` if a previous operation raised an exception (so, after an exception, the status is either ``cancelled`` or ``skipped``),
 * ``success`` if the operation completed successfully,
 * ``partial`` if the operation was partially successful (but some recipients were not reached),
-* ``failure`` if the operation raised an exception.
+* ``failure`` if the operation raised an exception (all non ``cancelled`` subsequent operations will be ``skipped``).
   """
 #==================================================================================================
   def base(addr,pat=re.compile('.*<(.*)>'),pat2=re.compile(r'(?:\w|[._-])+@(?:\w|[_-])+(?:[.](?:\w|[_-])+)+')):
@@ -49,13 +50,14 @@ Appends from,to,cc,bcc fields to each email message in *L* (filtered by user if 
     m = pat2.fullmatch(addr)
     if m is None: raise Exception('Invalid email address')
     return addr
-  assert isinstance(from_addr,str)
+  for msg in L: checktype('argument',msg,Message)
+  checktype('from_addr',from_addr,str)
   sender = base(from_addr)
   recipients = []
   header_addrs = []
   for hdr,addrs in (('to',to_addrs),('cc',cc_addrs),('bcc',bcc_addrs)):
     if addrs is None: continue
-    assert all(isinstance(addr,str) for addr in addrs)
+    for addr in addrs: checktype('{}_addrs elements'.format(hdr),addr,str)
     header_addrs.append((hdr,', '.join(addrs)))
     recipients.extend(base(addr) for addr in addrs)
   for msg in L:
@@ -74,9 +76,9 @@ Appends from,to,cc,bcc fields to each email message in *L* (filtered by user if 
           if r.strip(): continue
           else: L_.append(True); empty = False; break
     finally: print('\x1Bc',end='',flush=True)
-    if empty: raise Exception('All mails were filtered out by user')
+    if empty: raise Exception('All mails were cancelled out by user')
   else: L_ = len(L)*(True,)
-  nfilt = nsucc = nskip = 0
+  ncanc = nskip = nsucc = 0
   R = []; exc = None; Ls = []
   with smtphost as smtp:
     for confirmed,sendargs in zip(L_,La):
@@ -88,11 +90,11 @@ Appends from,to,cc,bcc fields to each email message in *L* (filtered by user if 
             if err: status = 'partial'; R.append(err)
             else: status = 'success'; nsucc += 1
         else: status = 'skipped'; nskip += 1
-      else: status='filtered'; nfilt += 1
+      else: status='cancelled'; ncanc += 1
       Ls.append(status)
   npart = len(R)
   nfail = 0 if exc is None else 1
-  logger.info('Mail procedure report [submitted: %s | filtered: %s, success: %s, partial: %s, failure: %s, skipped: %s]',len(L),nfilt,nsucc,npart,nfail,nskip)
+  logger.info('Mail procedure report [submitted: %s | cancelled: %s, success: %s, partial: %s, failure: %s, skipped: %s]',len(L),ncanc,nsucc,npart,nfail,nskip)
   if R: logger.warn('Cause(s) of partial success: %s',set(R))
   if exc is not None: logger.warn('Cause of failure: %s',exc)
   if nsucc==0: raise Exception('No mail was successfully sent')
@@ -106,7 +108,7 @@ def announcement(shorttxt=None,plaintxt=None,html=None,icscal=None,filename=None
 :param plaintxt: plain text version of the announcement
 :type plaintxt: :class:`str`
 :param html: html version of the announcement
-:type html: :class:`lxml.etree._ElementTree`
+:type html: :class:`lxml.etree.ElementBase`
 :param shorttxt: short (1 liner) text version of the announcement
 :type shorttxt: :class:`str`
 :param filename: file name associated to the ics calendar in the announcement
@@ -118,11 +120,10 @@ def announcement(shorttxt=None,plaintxt=None,html=None,icscal=None,filename=None
 Returns the announcement specified in different forms (*shorttxt*, *plaintxt*, *html*, *icscal*) as an email message.
   """
 #==================================================================================================
-  assert isinstance(shorttxt,str)
-  assert isinstance(plaintxt,str)
-  assert hasattr(html,'docinfo') and hasattr(html,'getroot')
-  assert isxmlelement(html.getroot())
-  assert isinstance(icscal,icalendar.Calendar)
+  checktype('shorttxt',shorttxt,str)
+  checktype('plaintxt',plaintxt,str)
+  checktype('html',html,xmlElementBase)
+  checktype('icscal',icscal,icalendar.Calendar)
   msg = MIMEMultipart('alternative')
   msg.set_param('name','announce.eml')
   msg.add_header('subject',shorttxt)
@@ -150,6 +151,10 @@ def calendar(content=None,method='PUBLISH',version='2.0',reminder=None):
 Return a calendar object listing all the events in *content*, possibly augmented, for those confirmed, with a reminder specified by *reminder* (delta from start, negative).
   """
 #==================================================================================================
+  for evt in content: checktype('content elements',evt,icalendar.Event)
+  checktype('method',method,str)
+  checktype('version',version,str)
+  checktype('reminder',reminder,timedelta,allow_none=True)
   cal = icalendar.Calendar()
   cal.add('prodid','-//ChronoManager//0.1')
   cal.add('version',version)
@@ -184,9 +189,15 @@ def event(start=None,duration=None,permalink=None,sequence=0,confirmed=True,prio
 Returns a calendar event, which can be further extended. The *permalink*, if not const:`None`, is used to generate a unique ID of the event.
   """
 #==================================================================================================
-  assert isinstance(start,datetime)
+  checktype('start',start,datetime)
+  checktype('duration',duration,timedelta)
+  checktype('permalink',permalink,str,allow_none=True)
+  checktype('sequence',sequence,int)
+  checktype('confirmed',confirmed,bool)
+  checktype('priority',priority,int)
+  checktype('klass',klass,str)
+  checktype('transp',transp,str)
   start = start.astimezone(utc)
-  assert isinstance(duration,timedelta)
   evt = icalendar.Event()
   evt.add('dtstamp',utc.localize(datetime.utcnow()))
   evt.add('dtstart',start)
@@ -227,7 +238,7 @@ def xmlfile_transaction(path=None,updating=False,namespaces={},target=None):
 :param target: an Xpath expression for selecting the xml nodes
 :type target: :class:`str`
 
-Opens a transaction to perform operations on nodes of an XML file at *path*. The list of nodes selected  by *target* is returned on entering this context. On exit, if *updating* is :const:`True`, the document loaded on entering, and which should have been updated, is dumped again in *path* (a copy of the old file is preserved).
+Opens a transaction to perform operations on nodes of an XML file at *path*. The list of nodes selected by *target* is returned on entering this context. On exit, if *updating* is :const:`True`, the document loaded on entering, and which should have been updated, is dumped again into *path* (a copy of the old file is preserved).
   """
 #==================================================================================================
   with transaction():
@@ -265,6 +276,7 @@ Displays the content of *message*. All headers are displayed. Only the content o
         yield msg
       else: status = 'hidden'
       print(iz,'<<<------------ Content',status,'------------>>>')
+  checktype('message',message,Message)
   L = tuple(struct(message))
   if L:
     for i,msg in enumerate(L,1):
@@ -276,20 +288,20 @@ Displays the content of *message*. All headers are displayed. Only the content o
 def xmlpuretext(e,pat=re.compile('(\n{2,})',re.UNICODE)):
   r"""
 :param e: XML node
-:type e: :class:`lxml.etree._Element`
+:type e: :class:`lxml.etree.ElementBase`
 
 Returns the text content of *e*, contracting multiple consecutive newlines into a single one.
   """
 #--------------------------------------------------------------------------------------------------
-  return pat.sub('\n',''.join(ElementTextIterator(e)))
+  return pat.sub('\n',''.join(xmlElementTextIterator(e)))
 
 #--------------------------------------------------------------------------------------------------
 def xmlsubstitute(doc,d):
   r"""
 :param doc: target XML document
-:type doc: :class:`lxml.etree._Element`
+:type doc: :class:`lxml.etree.ElementBase`
 :param d: substitution table
-:type d: :class:`Dict[str,lxml.etree._Element]`
+:type d: :class:`Dict[str,lxml.etree.ElementBase]`
 
 Replaces each node of the form ``<?parm xx?>`` in *doc* by the value of *d* at key ``xx``, if it exists.
   """
@@ -375,3 +387,9 @@ Edits a dictionary *d* and returns it. The editor can change the values but not 
               else: print('invalid key'); continue
           break
   finally: print('\x1Bc',end='',flush=True)
+
+#--------------------------------------------------------------------------------------------------
+def checktype(name,x,*typs,allow_none=False):
+#--------------------------------------------------------------------------------------------------
+  if not ((allow_none and x is None) or isinstance(x,typs)):
+    raise TypeError('{} must be of type {}, not {}'.format(name,'|'.join(typs),type(x)))

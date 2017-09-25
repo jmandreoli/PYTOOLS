@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from email.message import Message
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from lxml.etree import parse as xmlparse, tostring as xml2str, ElementBase as xmlElementBase, ElementTextIterator as xmlElementTextIterator
+from lxml.etree import parse as xmlparse, tostring as xml2str, _ElementTree as xmlElementTree, ElementTextIterator as xmlElementTextIterator
 from lxml.html import tostring as html2str
 logger = logging.getLogger(__name__)
 
@@ -29,11 +29,11 @@ def mailsend(smtphost,*L,confirm=False,from_addr=None,to_addrs=None,cc_addrs=Non
 :param from_addr: email address for 'from' field
 :type from_addr: :class:`str`
 :param to_addrs: list of email addresses for 'to' field
-:type to_addrs: :class:`List[str]`
+:type to_addrs: :class:`Iterable[str]`
 :param cc_addrs: list of email addresses for 'cc' field
-:type cc_addrs: :class:`List[str]`
+:type cc_addrs: :class:`Iterable[str]`
 :param bcc_addrs: list of email addresses for 'bcc' field
-:type bcc_addrs: :class:`List[str]`
+:type bcc_addrs: :class:`Iterable[str]`
 
 Appends from,to,cc,bcc fields to each email message in *L*, then invokes method :meth:`sendmail` of *smtphost* on each message with keyword arguments *ka*. If *confirm* is :const:`True`, the user is given the opportunity to confirm or cancel each sending. Returns a list of same length as *L* holding the status of each send operation. Status is:
 
@@ -57,31 +57,34 @@ Appends from,to,cc,bcc fields to each email message in *L*, then invokes method 
   header_addrs = []
   for hdr,addrs in (('to',to_addrs),('cc',cc_addrs),('bcc',bcc_addrs)):
     if addrs is None: continue
+    addrs = tuple(addrs)
     for addr in addrs: checktype('{}_addrs elements'.format(hdr),addr,str)
     header_addrs.append((hdr,', '.join(addrs)))
     recipients.extend(base(addr) for addr in addrs)
   for msg in L:
     msg.add_header('from',from_addr)
     for hdr,addrs in header_addrs: msg.add_header(hdr,addrs)
+  # La: list of sendmail arguments, one for each message in L
   La = [dict(from_addr=sender,to_addrs=recipients,msg=msg.as_string(),**ka) for msg in L]
+  # Lu: list of user decisions (confirm:True /cancel: False), one for each message in L
   if confirm:
-    L_ = []; empty = True
+    Lu = []; empty = True
     try:
       for i,msg in enumerate(L,1):
         print('\x1BcCONFIRM MAIL {}/{}'.format(i,len(L)))
         maildisplay(msg,('plain',))
         while True:
           try: r = input('Ret: OK; ^D: skip> ')
-          except EOFError: L_.append(False); break
+          except EOFError: Lu.append(False); break
           if r.strip(): continue
-          else: L_.append(True); empty = False; break
+          else: Lu.append(True); empty = False; break
     finally: print('\x1Bc',end='',flush=True)
     if empty: raise Exception('All mails were cancelled out by user')
-  else: L_ = len(L)*(True,)
+  else: Lu = len(L)*(True,)
   ncanc = nskip = nsucc = 0
   R = []; exc = None; Ls = []
   with smtphost as smtp:
-    for confirmed,sendargs in zip(L_,La):
+    for confirmed,sendargs in zip(Lu,La):
       if confirmed:
         if exc is None:
           try: err = smtp.sendmail(**sendargs)
@@ -108,7 +111,7 @@ def announcement(shorttxt=None,plaintxt=None,html=None,icscal=None,filename=None
 :param plaintxt: plain text version of the announcement
 :type plaintxt: :class:`str`
 :param html: html version of the announcement
-:type html: :class:`lxml.etree.ElementBase`
+:type html: :class:`lxml.etree._ElementTree`
 :param shorttxt: short (1 liner) text version of the announcement
 :type shorttxt: :class:`str`
 :param filename: file name associated to the ics calendar in the announcement
@@ -117,18 +120,18 @@ def announcement(shorttxt=None,plaintxt=None,html=None,icscal=None,filename=None
 :type charset: :class:`str`
 :rtype: :class:`email.message.Message`
 
-Returns the announcement specified in different forms (*shorttxt*, *plaintxt*, *html*, *icscal*) as an email message.
+Returns the announcement specified in different forms (*shorttxt*, *plaintxt*, *xhtml*, *icscal*) as an email message.
   """
 #==================================================================================================
   checktype('shorttxt',shorttxt,str)
   checktype('plaintxt',plaintxt,str)
-  checktype('html',html,xmlElementBase)
+  checktype('html',html,xmlElementTree)
   checktype('icscal',icscal,icalendar.Calendar)
   msg = MIMEMultipart('alternative')
   msg.set_param('name','announce.eml')
   msg.add_header('subject',shorttxt)
   msg.attach(MIMEText(plaintxt,'plain',charset))
-  msg.attach(MIMEText(html2str(html),'html',charset))
+  msg.attach(MIMEText(html2str(html,doctype='<!DOCTYPE html>'),'html',charset))
   m = MIMEText(icscal.to_ical().decode('utf-8'),'calendar',charset)
   m.set_param('method',icscal.get('method'))
   if filename is not None: m.add_header('content-disposition','attachment',filename=filename+'.ics')
@@ -257,32 +260,32 @@ Opens a transaction to perform operations on nodes of an XML file at *path*. The
 def maildisplay(message,textshow=None):
   r"""
 :param message: email message
-:type message: :class:`email.message`
+:type message: :class:`email.message.Message`
 :param textshow: a list of subtypes of mimetype ``text`` to display (default: all subtypes)
 :type textshow: :class:`List[str]`
 
 Displays the content of *message*. All headers are displayed. Only the content of attachments of mimetype ``text`` and subtype in *textshow* are displayed.
   """
 #--------------------------------------------------------------------------------------------------
-  def struct(msg,iz=''):
-    for k,v in msg.items(): print(iz,'%s: %s'%(k.capitalize(),v))
+  def disp(msg,idn='',iz=''):
+    if idn: print(iz,'Part[{}]'.format(idn)); iz += '  '
+    for k,v in msg.items(): print(iz,'{}: {}'.format(k.capitalize(),v))
     if msg.is_multipart():
-      iz += '  '
-      for msg1 in msg.get_payload():
-        for m in struct(msg1,iz): yield m
+      for n,msg1 in enumerate(msg.get_payload(),1):
+        disp(msg1,'{}{}.'.format(idn,n),iz)
     else:
-      if msg.get_content_maintype()=='text' and (textshow is None or msg.get_content_subtype() in textshow):
-        status = 'shown below'
-        yield msg
-      else: status = 'hidden'
-      print(iz,'<<<------------ Content',status,'------------>>>')
-  checktype('message',message,Message)
-  L = tuple(struct(message))
-  if L:
-    for i,msg in enumerate(L,1):
-      print('<<<------------ Content of part ',i,'------------>>>')
       content = msg.get_payload(decode=True)
-      print(content.decode(str(msg.get_charset())))
+      print(iz,'Content (size: {}): '.format(len(content)),end='')
+      if msg.get_content_maintype()=='text' and textshowf(msg.get_content_subtype()):
+        print()
+        d = 76-len(iz)
+        for line in content.decode(str(msg.get_charset())).split('\n'):
+          print(iz,'>>>',line[:d])
+          for k in range(d,len(line),d): print(iz,'...',line[k:k+d])
+      else: print('hidden')
+  textshowf = (lambda x: True) if textshow is None else (lambda x: x in textshow)
+  checktype('message',message,Message)
+  disp(message)
 
 #--------------------------------------------------------------------------------------------------
 def xmlpuretext(e,pat=re.compile('(\n{2,})',re.UNICODE)):
@@ -308,7 +311,9 @@ Replaces each node of the form ``<?parm xx?>`` in *doc* by the value of *d* at k
 #--------------------------------------------------------------------------------------------------
   for parm in doc.xpath('//processing-instruction("parm")'):
     x = d.get(parm.text)
-    if x is not None:
+    if x is None:
+      parm.getparent().remove(parm)
+    else:
       x = deepcopy(x)
       x.tail = parm.tail
       parm.getparent().replace(parm,x)
@@ -392,4 +397,4 @@ Edits a dictionary *d* and returns it. The editor can change the values but not 
 def checktype(name,x,*typs,allow_none=False):
 #--------------------------------------------------------------------------------------------------
   if not ((allow_none and x is None) or isinstance(x,typs)):
-    raise TypeError('{} must be of type {}, not {}'.format(name,'|'.join(typs),type(x)))
+    raise TypeError('{} must be of type {}, not {}'.format(name,'|'.join(map(str,typs)),type(x)))

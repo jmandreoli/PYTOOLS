@@ -14,6 +14,7 @@ from email.message import Message
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from lxml.etree import parse as xmlparse, tostring as xml2str, _ElementTree as xmlElementTree, ElementTextIterator as xmlElementTextIterator
+from lxml.builder import ElementMaker as xmlElementMaker
 from lxml.html import tostring as html2str
 logger = logging.getLogger(__name__)
 
@@ -392,6 +393,44 @@ Edits a dictionary *d* and returns it. The editor can change the values but not 
               else: print('invalid key'); continue
           break
   finally: print('\x1Bc',end='',flush=True)
+
+
+#--------------------------------------------------------------------------------------------------
+def odformfill(doc,**param):
+  r"""
+:param doc: xml document representing the content of a word document containing form fields
+:type doc: :class:`lxml.etree._ElementTree`
+:param param: an assignment of the form fields to values
+:type param: :class:`Dict[str,Union[str,List[str]]]`
+
+Updates *doc* so that it represents the same word document with the form fields present as keys in *param* assigned their values. If *param* has keys which are not form field labels, an error is raised. This function works only with simple fields having text or multiline text values.
+  """
+#--------------------------------------------------------------------------------------------------
+  root = doc.getroot()
+  wns = root.nsmap['w']
+  E = xmlElementMaker(namespace=wns,nsmap=dict(w=wns))
+  def xpath(e,path,single=False,nsmap=dict(w=wns)):
+    r = e.xpath(path,namespaces=nsmap)
+    if single:
+      if len(r) != 1:
+        raise Exception('More than one instance found of: {}'.format(repr(path)))
+      r = r[0]
+    return r
+  for sdt in xpath(root,'descendant::w:sdt'):
+    tag = xpath(sdt,'w:sdtPr/w:tag/@w:val',single=True)
+    content = xpath(sdt,'w:sdtContent',single=True)
+    val = param.pop(tag,None)
+    if val is not None:
+      if isinstance(val,(list,tuple)):
+        val = tuple(e for x in val for e in (E.t(x),E.br()))[:-1]
+      else:
+        val = E.t(val),
+      p = xpath(content,'w:tc/w:p')
+      if len(p)==1: content = p[0]
+      elif len(p)>1: raise Exception('Form field type not recognised: {}'.format(tag))
+      del content[:]
+      content.append(E.r(*val))
+  if param: raise Exception('Keys not found in form: {}'.format(','.join(param.keys())))
 
 #--------------------------------------------------------------------------------------------------
 def checktype(name,x,*typs,allow_none=False):

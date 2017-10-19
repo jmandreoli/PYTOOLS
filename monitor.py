@@ -47,7 +47,7 @@ Enumerates *loop* and monitors it.
 :param loop: an iterable yielding arbitrary objects
 :param env: an environment, i.e. an object which can be assigned arbitrary attributes
 :type env: typically :class:`State`
-:param detach: if not None, arguments (e.g. `daemonic`) to create a thread on which to run the loop
+:param detach: if not None, arguments (e.g. `daemon`) to create a thread on which to run the loop
 :type detach: :class:`dict`
 :param ka: initialisations of *env* (attribute :attr:`logger` is set as default to :const:`None` in *ka*)
 :return: the environment *env* at the end of the loop, or immediately if *detach* is not :const:`None`
@@ -82,6 +82,7 @@ Then each coroutine is advanced (using function :func:`next`), possibly updating
         if env.stop is not None: break
         t_ = t
       for c in coroutines: c.close()
+    ka.setdefault('logger',None)
     if env is None: env = State()
     if detach is None:
       env.thread = None
@@ -204,7 +205,7 @@ Here, type `T` is assumed to support incremental addition of type `T'`
     yield accu
 
 #--------------------------------------------------------------------------------------------------
-def buffer_monitor(targetf,size=0,val=()):
+def buffer_monitor(targetf,size=0,val=(),**ka):
   r"""
 Returns a monitor which buffers information collected from the loop.
 
@@ -221,10 +222,10 @@ The buffer state consists of the last *size* results of applying callable *targe
   class boundedlist (list):
     def __init__(self,size=0,val=()): super().__init__(val); del self[:-size]; self.size = size
     def __iadd__(self,x): L = super().__iadd__(x); del self[:-self.size]; return L
-  return accu_monitor(targetf,partial(boundedlist,size,val))
+  return accu_monitor(targetf,partial(boundedlist,size,val),**ka)
 
 #--------------------------------------------------------------------------------------------------
-def stats_monitor(targetf):
+def stats_monitor(targetf,**ka):
   r"""
 Returns a monitor which computes some basic statistics about the loop.
 
@@ -234,7 +235,7 @@ Returns a monitor which computes some basic statistics about the loop.
 The computed statistics consists of a named triple <count,mean,variance> of the list of results of applying callable *targetf* to the environment at each iteration.
   """
 #--------------------------------------------------------------------------------------------------
-  return accu_monitor(targetf,basic_stats)
+  return accu_monitor(targetf,basic_stats,**ka)
 
 #--------------------------------------------------------------------------------------------------
 class State:

@@ -62,9 +62,11 @@ Appends from,to,cc,bcc fields to each email message in *L*, then invokes method 
     for addr in addrs: checktype('{}_addrs elements'.format(hdr),addr,str)
     header_addrs.append((hdr,', '.join(addrs)))
     recipients.extend(base(addr) for addr in addrs)
+  dt = datetime.now().astimezone().strftime('%a, %d %b %Y %H:%M:%S %z')
   for msg in L:
     msg.add_header('from',from_addr)
     for hdr,addrs in header_addrs: msg.add_header(hdr,addrs)
+    msg.add_header('date',dt)
   # La: list of sendmail arguments, one for each message in L
   La = [dict(from_addr=sender,to_addrs=recipients,msg=msg.as_string(),**ka) for msg in L]
   # Lu: list of user decisions (confirm:True /cancel: False), one for each message in L

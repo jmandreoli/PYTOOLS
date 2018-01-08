@@ -20,7 +20,7 @@ from lxml.html import tostring as html2str
 logger = logging.getLogger(__name__)
 
 #==================================================================================================
-def mailsend(smtphost,*L,confirm=False,**ka):
+def mailsend(*L,smtphost=None,confirm=False,**ka):
   r"""
 :param smtphost: a SMTP host
 :type smtphost: :class:`smtplib.SMTP`

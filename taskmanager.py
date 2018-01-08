@@ -149,7 +149,7 @@ Return a calendar object listing all the events in *content*, possibly augmented
     alarm = icalendar.Alarm()
     alarm.add('action','DISPLAY')
     alarm.add('description','REMINDER')
-    alarm.add('trigger',rmdr,0)
+    alarm.add('trigger',rmdr,encode=False)
   for evt in content:
     if evt.get('status')=='CONFIRMED' and alarm is not None:
       evt.add_component(alarm)

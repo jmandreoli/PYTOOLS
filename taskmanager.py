@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from copy import deepcopy
 from pytz import timezone, utc
 from contextlib import contextmanager
+from email.utils import parseaddr, getaddresses
 from email.message import Message
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -19,7 +20,7 @@ from lxml.html import tostring as html2str
 logger = logging.getLogger(__name__)
 
 #==================================================================================================
-def mailsend(smtphost,*L,confirm=False,from_addr=None,to_addrs=None,cc_addrs=None,bcc_addrs=None,**ka):
+def mailsend(smtphost,*L,confirm=False,**ka):
   r"""
 :param smtphost: a SMTP host
 :type smtphost: :class:`smtplib.SMTP`
@@ -27,16 +28,8 @@ def mailsend(smtphost,*L,confirm=False,from_addr=None,to_addrs=None,cc_addrs=Non
 :type L: :class:`Iterable[email.message.Message]`
 :param confirm: whether to ask the user for confirmation of each email
 :type confirm: :class:`bool`
-:param from_addr: email address for 'from' field
-:type from_addr: :class:`str`
-:param to_addrs: list of email addresses for 'to' field
-:type to_addrs: :class:`Iterable[str]`
-:param cc_addrs: list of email addresses for 'cc' field
-:type cc_addrs: :class:`Iterable[str]`
-:param bcc_addrs: list of email addresses for 'bcc' field
-:type bcc_addrs: :class:`Iterable[str]`
 
-Appends from,to,cc,bcc fields to each email message in *L*, then invokes method :meth:`sendmail` of *smtphost* on each message with keyword arguments *ka*. If *confirm* is :const:`True`, the user is given the opportunity to confirm or cancel each sending. Returns a list of same length as *L* holding the status of each send operation. Status is:
+Invokes method :meth:`sendmail` of *smtphost* on each message in *L* with keyword arguments *ka*. If *confirm* is :const:`True`, the user is given the opportunity to confirm or cancel each sending. Returns a list of same length as *L* holding the status of each send operation. Status is:
 
 * ``cancelled`` if the email was cancelled out by the user (only when *confirm* is :const:`True`),
 * ``skipped`` if a previous operation raised an exception (so, after an exception, the status is either ``cancelled`` or ``skipped``),
@@ -45,30 +38,12 @@ Appends from,to,cc,bcc fields to each email message in *L*, then invokes method 
 * ``failure`` if the operation raised an exception (all non ``cancelled`` subsequent operations will be ``skipped``).
   """
 #==================================================================================================
-  def base(addr,pat=re.compile('.*<(.*)>'),pat2=re.compile(r'(?:\w|[._-])+@(?:\w|[_-])+(?:[.](?:\w|[_-])+)+')):
-    m = pat.fullmatch(addr)
-    if m is not None: addr = m.group(1)
-    m = pat2.fullmatch(addr)
-    if m is None: raise Exception('Invalid email address')
-    return addr
-  for msg in L: checktype('argument',msg,Message)
-  checktype('from_addr',from_addr,str)
-  sender = base(from_addr)
-  recipients = []
-  header_addrs = []
-  for hdr,addrs in (('to',to_addrs),('cc',cc_addrs),('bcc',bcc_addrs)):
-    if addrs is None: continue
-    addrs = tuple(addrs)
-    for addr in addrs: checktype('{}_addrs elements'.format(hdr),addr,str)
-    header_addrs.append((hdr,', '.join(addrs)))
-    recipients.extend(base(addr) for addr in addrs)
+  def recipients(msg): return ','.join(set(email for name,email in getaddresses([v for h in ('to','cc','bcc') for v in msg.get_all(h,())])))
+  def sender(msg): return parseaddr(msg['from'])[1]
   dt = datetime.now().astimezone().strftime('%a, %d %b %Y %H:%M:%S %z')
   for msg in L:
-    msg.add_header('from',from_addr)
-    for hdr,addrs in header_addrs: msg.add_header(hdr,addrs)
+    checktype('argument',msg,Message)
     msg.add_header('date',dt)
-  # La: list of sendmail arguments, one for each message in L
-  La = [dict(from_addr=sender,to_addrs=recipients,msg=msg.as_string(),**ka) for msg in L]
   # Lu: list of user decisions (confirm:True /cancel: False), one for each message in L
   if confirm:
     Lu = []; empty = True
@@ -84,6 +59,8 @@ Appends from,to,cc,bcc fields to each email message in *L*, then invokes method 
     finally: print('\x1Bc',end='',flush=True)
     if empty: raise Exception('All mails were cancelled out by user')
   else: Lu = len(L)*(True,)
+  # La: list of sendmail arguments, one for each message in L
+  La = [dict(from_addr=sender(msg),to_addrs=recipients(msg),msg=msg.as_string(),**ka) for msg in L]
   ncanc = nskip = nsucc = 0
   R = []; exc = None; Ls = []
   with smtphost as smtp:

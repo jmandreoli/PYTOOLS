@@ -14,74 +14,36 @@ from email.utils import parseaddr, getaddresses
 from email.message import Message
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from lxml.etree import parse as xmlparse, tostring as xml2str, _ElementTree as xmlElementTree, ElementTextIterator as xmlElementTextIterator
+from email.utils import parseaddr, getaddresses
+from lxml.etree import _ElementTree as xmlElementTree, ElementTextIterator as xmlElementTextIterator
 from lxml.builder import ElementMaker as xmlElementMaker
-from lxml.html import tostring as html2str
+from lxml.html import tostring as tohtml, fromstring as fromhtml
+from smtplib import SMTP
+from base64 import b64encode
+
 logger = logging.getLogger(__name__)
 
 #==================================================================================================
-def mailsend(*L,smtphost=None,confirm=False,**ka):
+def sendmail(message,login=None,pwd=None,smtpargs=None,**ka):
   r"""
-:param smtphost: a SMTP host
-:type smtphost: :class:`smtplib.SMTP`
-:param L: a list of email messages
-:type L: :class:`Iterable[email.message.Message]`
-:param confirm: whether to ask the user for confirmation of each email
-:type confirm: :class:`bool`
-
-Invokes method :meth:`sendmail` of *smtphost* on each message in *L* with keyword arguments *ka*. If *confirm* is :const:`True`, the user is given the opportunity to confirm or cancel each sending. Returns a list of same length as *L* holding the status of each send operation. Status is:
-
-* ``cancelled`` if the email was cancelled out by the user (only when *confirm* is :const:`True`),
-* ``skipped`` if a previous operation raised an exception (so, after an exception, the status is either ``cancelled`` or ``skipped``),
-* ``success`` if the operation completed successfully,
-* ``partial`` if the operation was partially successful (but some recipients were not reached),
-* ``failure`` if the operation raised an exception (all non ``cancelled`` subsequent operations will be ``skipped``).
+:param message: email message
+:type message: :class:`email.message.Message`
+:param login: user login on SMTP server
+:type login: :class:`str`
+:param pwd: password on SMTP server
+:type pwd: :class:`str`
+:param smtpargs: arguments passed to the :class:`smtplib.SMTP` to access the SMTP server (host, port...)
+:type smtpargs: :class:`Dict[str,any]`
   """
 #==================================================================================================
-  def recipients(msg): return ','.join(set(email for name,email in getaddresses([v for h in ('to','cc','bcc') for v in msg.get_all(h,())])))
-  def sender(msg): return parseaddr(msg['from'])[1]
-  dt = datetime.now().astimezone().strftime('%a, %d %b %Y %H:%M:%S %z')
-  for msg in L:
-    checktype('argument',msg,Message)
-    msg.add_header('date',dt)
-  # Lu: list of user decisions (confirm:True /cancel: False), one for each message in L
-  if confirm:
-    Lu = []; empty = True
-    try:
-      for i,msg in enumerate(L,1):
-        print('\x1BcCONFIRM MAIL {}/{}'.format(i,len(L)))
-        maildisplay(msg,('plain',))
-        while True:
-          try: r = input('Ret: OK; ^D: skip> ')
-          except EOFError: Lu.append(False); break
-          if r.strip(): continue
-          else: Lu.append(True); empty = False; break
-    finally: print('\x1Bc',end='',flush=True)
-    if empty: raise Exception('All mails were cancelled out by user')
-  else: Lu = len(L)*(True,)
-  # La: list of sendmail arguments, one for each message in L
-  La = [dict(from_addr=sender(msg),to_addrs=recipients(msg),msg=msg.as_string(),**ka) for msg in L]
-  ncanc = nskip = nsucc = 0
-  R = []; exc = None; Ls = []
-  with smtphost as smtp:
-    for confirmed,sendargs in zip(Lu,La):
-      if confirmed:
-        if exc is None:
-          try: err = smtp.sendmail(**sendargs)
-          except Exception as exc_: status = 'failure'; exc = exc_
-          else:
-            if err: status = 'partial'; R.append(err)
-            else: status = 'success'; nsucc += 1
-        else: status = 'skipped'; nskip += 1
-      else: status='cancelled'; ncanc += 1
-      Ls.append(status)
-  npart = len(R)
-  nfail = 0 if exc is None else 1
-  logger.info('Mail procedure report [submitted: %s | cancelled: %s, success: %s, partial: %s, failure: %s, skipped: %s]',len(L),ncanc,nsucc,npart,nfail,nskip)
-  if R: logger.warn('Cause(s) of partial success: %s',set(R))
-  if exc is not None: logger.warn('Cause of failure: %s',exc)
-  if nsucc==0: raise Exception('No mail was successfully sent')
-  return Ls
+  def recipients(msg): return set(email for name,email in getaddresses([v for h in ('to','cc','bcc') for v in msg.get_all(h,())]))
+  def sender(msg): return parseaddr(msg.get('from'))[1]
+  if not msg.get('date'): msg['date'] = datetime.now().astimezone().strftime('%a, %d %b %Y %H:%M:%S %z')
+  ka.update(from_addr=sender(message),to_addrs=recipients(message),msg=message.as_string())
+  with SMTP(**smtpargs) as s:
+    s.starttls()
+    s.login(login,pwd)
+    return s.sendmail(**ka)
 
 #==================================================================================================
 def announcement(shorttxt=None,plaintxt=None,html=None,icscal=None,filename=None,charset='utf-8'):
@@ -111,7 +73,7 @@ Returns the announcement specified in different forms (*shorttxt*, *plaintxt*, *
   msg.set_param('name','announce.eml')
   msg.add_header('subject',shorttxt)
   msg.attach(MIMEText(plaintxt,'plain',charset))
-  msg.attach(MIMEText(html2str(html,doctype='<!DOCTYPE html>'),'html',charset))
+  msg.attach(MIMEText(tohtml(html,doctype='<!DOCTYPE html>'),'html',charset))
   m = MIMEText(icscal.to_ical().decode('utf-8'),'calendar',charset)
   m.set_param('method',icscal.get('method'))
   if filename is not None: m.add_header('content-disposition','attachment',filename=filename+'.ics')
@@ -195,78 +157,6 @@ Returns a calendar event, which can be further extended. The *permalink*, if not
     evt.add('uid',uid)
   return evt
 
-#==================================================================================================
-@contextmanager
-def transaction():
-  r"""
-Simply encloses some code in transaction status messages.
-  """
-#==================================================================================================
-  logger.info('Transaction started [%s].',datetime.now())
-  try: yield
-  except KeyboardInterrupt: print(flush=True); logger.warn('Transaction aborted by user.')
-  except: print(flush=True); logger.warn('Transaction aborted.'); raise
-  else: logger.info('Transaction completed.')
-
-#==================================================================================================
-@contextmanager
-def xmlfile_transaction(path=None,updating=False,namespaces={},target=None):
-  r"""
-:param path: path of the file
-:type path: :class:`str`
-:param updating: whether the transaction is meant to perform changes on the xml content
-:type updating: :class:`bool`
-:param namespaces: a dictionary of prefix-namespace associations, for use in *target*
-:type namespace: :class:`Dict[str,str]`
-:param target: an Xpath expression for selecting the xml nodes
-:type target: :class:`str`
-
-Opens a transaction to perform operations on nodes of an XML file at *path*. The list of nodes selected by *target* is returned on entering this context. On exit, if *updating* is :const:`True`, the document loaded on entering, and which should have been updated, is dumped again into *path* (a copy of the old file is preserved).
-  """
-#==================================================================================================
-  with transaction():
-    doc = xmlparse(path)
-    namespaces = dict((k,(doc.getroot().nsmap[None] if v is None else v)) for k,v in namespaces.items())
-    L = doc.xpath(target,namespaces=namespaces)
-    if L: yield L
-    else: raise Exception('no matching entry found')
-    if updating: safedump(xml2str(doc,encoding=doc.docinfo.encoding,xml_declaration=True),path,'wb')
-
-#==================================================================================================
-# Utilities
-#==================================================================================================
-
-#--------------------------------------------------------------------------------------------------
-def maildisplay(message,textshow=None):
-  r"""
-:param message: email message
-:type message: :class:`email.message.Message`
-:param textshow: a list of subtypes of mimetype ``text`` to display (default: all subtypes)
-:type textshow: :class:`List[str]`
-
-Displays the content of *message*. All headers are displayed. Only the content of attachments of mimetype ``text`` and subtype in *textshow* are displayed.
-  """
-#--------------------------------------------------------------------------------------------------
-  def disp(msg,idn='',iz=''):
-    if idn: print(iz,'Part[{}]'.format(idn)); iz += '  '
-    for k,v in msg.items(): print(iz,'{}: {}'.format(k.capitalize(),v))
-    if msg.is_multipart():
-      for n,msg1 in enumerate(msg.get_payload(),1):
-        disp(msg1,'{}{}.'.format(idn,n),iz)
-    else:
-      content = msg.get_payload(decode=True)
-      print(iz,'Content (size: {}): '.format(len(content)),end='')
-      if msg.get_content_maintype()=='text' and textshowf(msg.get_content_subtype()):
-        print()
-        d = 76-len(iz)
-        for line in content.decode(str(msg.get_charset())).split('\n'):
-          print(iz,'>>>',line[:d])
-          for k in range(d,len(line),d): print(iz,'...',line[k:k+d])
-      else: print('hidden')
-  textshowf = (lambda x: True) if textshow is None else (lambda x: x in textshow)
-  checktype('message',message,Message)
-  disp(message)
-
 #--------------------------------------------------------------------------------------------------
 def xmlpuretext(e,pat=re.compile('(\n{2,})',re.UNICODE)):
   r"""
@@ -321,60 +211,6 @@ Saves string *content* into file at *path* and creates a copy of the old file.
     with open(path,mode) as v: v.write(content)
 
 #--------------------------------------------------------------------------------------------------
-def select(L):
-  r"""
-:param L: list from which to select
-:type L: :class:`Iterable[object]`
-
-Prompts user for selection in a list *L*.
-  """
-#--------------------------------------------------------------------------------------------------
-  L = list(L)
-  n = len(str(len(L)))
-  for k,v in enumerate(L,1): print('[{}] {}'.format(str(k).rjust(n),v))
-  while True:
-    r = input('Ret: all; *: select (space separated)> ').strip()
-    if r:
-      try: return [L[int(k.strip(),10)-1] for k in r.split()]
-      except KeyboardInterrupt: raise
-      except: print('Invalid choice'); continue
-    else: return L
-
-#--------------------------------------------------------------------------------------------------
-def editparams(d,usermsg=None):
-  r"""
-:param d: target dictionary
-:type d: :class:`Dict[str,str]`
-
-Edits a dictionary *d* and returns it. The editor can change the values but not the keys.
-  """
-#--------------------------------------------------------------------------------------------------
-  p = {}
-  L = list(d.keys())
-  try:
-    while True:
-      print('\x1Bc',end='')
-      if usermsg is not None: print(usermsg)
-      for k,v in d.items(): print(k,'=',p.get(k,v))
-      while True:
-        choice = input('Ret: exit; -*: unset; *=*: set> ').strip()
-        if choice=='': d.update(p); return d
-        else:
-          if choice[0] == '-':
-            k = choice[1:]
-            try: del p[k]
-            except KeyError: print('invalid key'); continue
-          else:
-            try: k,v = choice.split('=',1)
-            except: print('invalid syntax'); continue
-            else:
-              if k in L: p[k] = v
-              else: print('invalid key'); continue
-          break
-  finally: print('\x1Bc',end='',flush=True)
-
-
-#--------------------------------------------------------------------------------------------------
 def odformfill(doc,**param):
   r"""
 :param doc: xml document representing the content of a word document containing form fields
@@ -410,6 +246,72 @@ Updates *doc* so that it represents the same word document with the form fields 
       del content[:]
       content.append(E.r(*val))
   if param: raise Exception('Keys not found in form: {}'.format(','.join(param.keys())))
+
+#--------------------------------------------------------------------------------------------------
+def mail2str(message):
+  r"""
+:param message: email message
+:type message: :class:`email.message.Message`
+
+Returns the content of *message* as a pretty string. All headers are displayed. Only the content of attachments of mimetype ``text/plain``.
+  """
+#--------------------------------------------------------------------------------------------------
+  def disp(msg,idn='',iz=''):
+    if idn: yield '{} Part[{}]'.format(iz,idn); iz += '  '
+    for k,v in msg.items(): yield '{} {}: {}'.format(iz,k.capitalize(),v)
+    if msg.is_multipart():
+      for n,msg1 in enumerate(msg.get_payload(),1):
+        yield from disp(msg1,'{}{}.'.format(idn,n),iz)
+    else:
+      content = msg.get_payload(decode=True)
+      q = '{} Content (size: {}):'.format(iz,len(content))
+      mime = msg.get_content_type()
+      if mime=='text/plain':
+        yield q
+        d = 76-len(iz)
+        for line in content.decode(str(msg.get_charset())).split('\n'):
+          yield '{} >>> {}'.format(iz,line[:d])
+          for k in range(d,len(line),d): yield '{} ... {}'.format(iz,line[k:k+d])
+      else: yield q+' hidden'
+  checktype('message',message,Message)
+  return '\n'.join(disp(message))
+
+#--------------------------------------------------------------------------------------------------
+def mail2html(message):
+  r"""
+:param message: email message
+:type message: :class:`email.message.Message`
+
+Returns the content of *message* as a pretty html object (as understood by lxml). All headers are displayed. Only the content of attachments of mimetypes usually accepted by browsers are displayed.
+  """
+#--------------------------------------------------------------------------------------------------
+  from lxml.html.builder import E
+  def disp(msg):
+    if msg.is_multipart():
+      payload = E.table(E.tbody(*(E.tr(E.td('[{}]'.format(n)),E.td(disp(msg1)),style='border-bottom: thin solid black') for n,msg1 in enumerate(msg.get_payload(),1))),style='border-collapse: collapse;')
+      payload = E.tr(E.td(payload,colspan='2'))
+    else:
+      content = msg.get_payload(decode=True)
+      mime = msg.get_content_type()
+      t = '{} (size={})'.format(mime,len(content))
+      if mime == 'text/plain': content = E.div(content.decode(str(msg.get_charset())),style='white-space: pre-line;')
+      elif mime == 'text/html': content = E.div(*fromhtml(content.decode(str(msg.get_charset()))).xpath('//body/*'))
+      elif mime.startswith('image/'): content = E.div(E.img(src='data:{};base64,{}'.format(mime,b64encode(content)),style='max-width:5cm; max-height:5cm;'))
+      else: content = E.span('Hidden: {}'.format(t),style='background-color: gray; color: white;'); t = ''
+      payload = E.tr(E.td(E.span('content',title=t)),E.td(content))
+    return E.table(
+      E.thead(*(E.tr(E.td(k,style='white-space: nowrap; font-weight: bold; font-size: xx-small;'),E.td(v)) for k,v in msg.items()),style='border: thick solid gray;'),
+      E.tbody(E.tr(E.td(payload,colspan='2'))),
+      border='1',style='border-collapse: collapse;'
+    )
+  checktype('message',message,Message)
+  return disp(message)
+
+#--------------------------------------------------------------------------------------------------
+def htmlhidden(**ka):
+#--------------------------------------------------------------------------------------------------
+  from lxml.html.builder import E
+  for k,v in ka.items(): yield E.hidden(name=k,type='hidden',value=v)
 
 #--------------------------------------------------------------------------------------------------
 def checktype(name,x,*typs,allow_none=False):

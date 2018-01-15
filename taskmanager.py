@@ -38,7 +38,7 @@ def sendmail(message,login=None,pwd=None,smtpargs=None,**ka):
 #==================================================================================================
   def recipients(msg): return set(email for name,email in getaddresses([v for h in ('to','cc','bcc') for v in msg.get_all(h,())]))
   def sender(msg): return parseaddr(msg.get('from'))[1]
-  if not msg.get('date'): msg['date'] = datetime.now().astimezone().strftime('%a, %d %b %Y %H:%M:%S %z')
+  if not message.get('date'): message['date'] = datetime.now().astimezone().strftime('%a, %d %b %Y %H:%M:%S %z')
   ka.update(from_addr=sender(message),to_addrs=recipients(message),msg=message.as_string())
   with SMTP(**smtpargs) as s:
     s.starttls()
@@ -311,7 +311,7 @@ Returns the content of *message* as a pretty html object (as understood by lxml)
 def htmlhidden(**ka):
 #--------------------------------------------------------------------------------------------------
   from lxml.html.builder import E
-  for k,v in ka.items(): yield E.hidden(name=k,type='hidden',value=v)
+  for k,v in ka.items(): yield E.input(type='hidden',name=k,value=v)
 
 #--------------------------------------------------------------------------------------------------
 def checktype(name,x,*typs,allow_none=False):

@@ -75,7 +75,7 @@ class ManagerResource (ManagedResource):
   def initsources(self,L):
     assert all([isinstance(r,ManagedResource) for r in L])
     self.sources = (self,)+L
-    for r in L: r.sourcename = '{}{:02x}'.format(r.factory.__name__,len(self.sources))
+    for i,r in enumerate(L,1): r.sourcename = '{}{:02x}'.format(r.factory.__name__,i)
   def initapp(self,app):
     def redirect(req,resp,R={'/':'/manager//list','/favicon.ico':'/static/favicon.png'}):
       url = R.get(req.path)

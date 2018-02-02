@@ -193,7 +193,7 @@ Replaces each node of the form ``<?parm xx?>`` in *doc* by the value of *d* at k
 def safedump(content,path,mode='w'):
   r"""
 :param content: target string
-:type content: :class:`str`
+:type content: :class:`Union[str,bytes]`
 :param path: target path
 :type path: :class:`str`
 

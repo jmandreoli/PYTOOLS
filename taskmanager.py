@@ -24,14 +24,14 @@ from base64 import b64encode
 logger = logging.getLogger(__name__)
 
 #==================================================================================================
-def sendmail(message,login=None,pwd=None,smtpargs=None,**ka):
+def sendmail(message,login=None,password=None,smtpargs=None,**ka):
   r"""
 :param message: email message
 :type message: :class:`email.message.Message`
 :param login: user login on SMTP server
 :type login: :class:`str`
-:param pwd: password on SMTP server
-:type pwd: :class:`str`
+:param password: password on SMTP server
+:type password: :class:`str`
 :param smtpargs: arguments passed to the :class:`smtplib.SMTP` to access the SMTP server (host, port...)
 :type smtpargs: :class:`Dict[str,any]`
   """
@@ -42,7 +42,7 @@ def sendmail(message,login=None,pwd=None,smtpargs=None,**ka):
   ka.update(from_addr=sender(message),to_addrs=recipients(message),msg=message.as_string())
   with SMTP(**smtpargs) as s:
     s.starttls()
-    s.login(login,pwd)
+    s.login(login,password)
     return s.sendmail(**ka)
 
 #==================================================================================================

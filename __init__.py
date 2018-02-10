@@ -525,32 +525,6 @@ class HtmlPluginPointer:
     if asref: ka.update(self.attrs)
     ka['class'] = 'pointer'
     return E.span(self.name,**ka)
-#==================================================================================================
-class ARG (tuple):
-  r"""
-Instances of this (immutable) class are pairs of a tuple of positional arguments and a dict of keyword arguments. Useful to manipulate function invocation arguments without making the invocation.
-
-Methods:
-  """
-#==================================================================================================
-  def __new__(cls,*a,**ka):
-    return super().__new__(cls,(a,ka))
-  def __getnewargs_ex__(self): return tuple(self)
-
-  def variant(self,*a,**ka):
-    r"""
-Returns a variant of *self* where *a* is appended to the positional arguments and *ka* is updated into the keyword arguments.
-    """
-    a0,ka0 = self
-    a = a0+a
-    ka1 = ka0.copy(); ka1.update(ka); ka = ka1
-    return ARG(*a,**ka)
-
-  def __repr__(self):
-    a,ka = self
-    a = ','.join(repr(v) for v in a)
-    ka = ','.join('{}={}'.format(k,repr(v)) for k,v in ka.items())
-    return 'ARG({}{}{})'.format(a,(',' if a and ka else ''),ka)
 
 #==================================================================================================
 def zipaxes(L,fig,sharex=False,sharey=False,**ka):
@@ -698,7 +672,7 @@ A simple utility to browse sliceable objects page per page in IPython.
     return ipywidgets.VBox(children=(w,wout))
 
 #==================================================================================================
-def ipyfilebrowse(path,start=None,step=50,period=1.,context=(10,5),**ka):
+def ipyfilebrowse(path,start=None,step=50,track=True,context=(10,5),**ka):
   r"""
 :param path: a path to an existing file
 :type path: :class:`Union[str,pathlib.Path]`
@@ -706,60 +680,63 @@ def ipyfilebrowse(path,start=None,step=50,period=1.,context=(10,5),**ka):
 :type start: :class:`Union[int,float]`
 :param step: step size in bytes
 :type step: :class:`int`
-:param period: period in sec between refreshing attempts
-:type period: :class:`float`
+:param track: whether to track changes in the file
+:type track: :class:`bool`
 :param context: pair of number of lines before and after to display around current position
 :type context: :class:`Tuple[int,int]`
 
-A simple utility to browse a byte file object, possibly while it expands. If *period* is :const:`None`, no change tracking is performed. If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
+A simple utility to browse a file, possibly while it expands. If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
   """
 #==================================================================================================
   import ipywidgets
   from pathlib import Path
-  from threading import Thread
-  from time import sleep
-  def track():
-    nonlocal fsize
-    c = fsize
-    while period:
-      fsize = path.stat().st_size
-      if fsize != c:
-        n = wctrl.value
-        wctrl.max = fsize
-        if n==c: wctrl.value = fsize
-        else: setpos(n)
-        c = fsize
-      sleep(period)
   def setpos(n,nbefore=context[0]+1,nafter=context[1]+1):
+    def readlinesFwd(u,n,k):
+      u.seek(n)
+      for i in range(k):
+        x = u.readline()
+        if x: yield x[:-1]
+        else: return
+    def readlinesBwd(u,n,k,D=256):
+      c = n; t = b''
+      while True:
+        if c==0:
+          if t: yield t
+          return
+        d = D; c -= d
+        if c<0: c,d = 0,d+c
+        u.seek(c)
+        L = u.read(d).rsplit(b'\n',k)
+        L[-1] += t
+        for x in L[-1:0:-1]:
+          yield x
+          k -= 1
+          if k==0: return
+        t = L[0]
     lines = (nbefore+nafter-1)*[b'']
-    ncurrent = nbefore
-    d = 1000*nbefore
-    m = n-d
-    if m<0: m,d = 0,n
-    file.seek(m)
-    x = file.read(d).rsplit(b'\n',nbefore)
-    lines[ncurrent] += b'\n'.join(x[-1:])
-    x = x[-nbefore:-1]
-    lines[ncurrent-1-len(x):ncurrent-1] = x
-    d = 1000*nafter
-    file.seek(n)
-    x = file.read(d).split(b'\n',nafter)
-    lines[ncurrent] += b'\n'.join(x[:1])
-    x = x[1:nafter]
-    lines[ncurrent+1:ncurrent+1+len(x)] = x
-    xbefore,xcurrent,xafter = (b'\n'.join(lines[z]).decode().replace('<','&lt;').replace('>','&gt;') for z in (slice(None,ncurrent),slice(ncurrent,ncurrent+1),slice(ncurrent+1,None)))
-    wwin.value = '<div style="white-space: pre; font-family: monospace; line-height:130%">{}<span style="background-color: gray; color: white; border: thin solid gray;">{}</span>\n{}</div>'.format(xbefore,xcurrent,xafter)
-  def toend():
-    if wctrl.value != fsize: wctrl.value = fsize
-  def tobeg():
-    if wctrl.value != 0: wctrl.value = 0
+    c = nbefore
+    x = list(readlinesBwd(file,n,nbefore))
+    lines[c] += b'\n'.join(x[:1]); lines[c-1:c-len(x):-1] = x[1:]
+    x = list(readlinesFwd(file,n,nafter))
+    lines[c] += b'\n'.join(x[:1]); lines[c+1:c+len(x)] = x[1:]
+    lines = [x.decode().replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') for x in lines]
+    lines[c] = '<span style="background-color: gray; color: white; border: thin solid gray;">{}</span>'.format(lines[c])
+    w_win.value = '<div style="white-space: pre; font-family: monospace; line-height:130%">{}</div>'.format('\n'.join(lines))
+  def toend(): w_ctrl.value = fsize
+  def tobeg(): w_ctrl.value = 0
   def close():
-    nonlocal period
-    period = 0.
+    w_main.close()
     file.close()
-    w.close()
+    if observer is not None: observer.stop(); observer.join()
+  def resetsize():
+    nonlocal fsize
+    atend = w_ctrl.value == fsize
+    w_ctrl.max = fsize = path.stat().st_size
+    if atend: w_ctrl.value = fsize
+    else: setpos(w_ctrl.value)
   if isinstance(path,str): path = Path(path)
   else: assert isinstance(path,Path)
+  path = path.absolute()
   file = path.open('rb')
   fsize = path.stat().st_size or 1
   if start is None: start = fsize
@@ -773,19 +750,29 @@ A simple utility to browse a byte file object, possibly while it expands. If *pe
       if start<0: start = 0
   ka.setdefault('width','15cm')
   ka.setdefault('border','thin solid black')
-  wwin = ipywidgets.HTML(layout=dict(overflow_x='auto',overflow_y='hidden',**ka))
-  wctrl = ipywidgets.IntSlider(min=0,max=fsize,step=step,value=start,layout=dict(width=wwin.layout.width))
-  wtoend = ipywidgets.Button(icon='fa-angle-double-right',tooltip='Jump to end of file',layout=dict(width='.5cm',padding='0cm'))
-  wtobeg = ipywidgets.Button(icon='fa-angle-double-left',tooltip='Jump to beginning of file',layout=dict(width='.5cm',padding='0cm'))
-  wclose = ipywidgets.Button(icon='fa-close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
-  w = ipywidgets.VBox(children=(ipywidgets.HBox(children=(wctrl,wtobeg,wtoend,wclose)),wwin))
-  wctrl.observe((lambda c: setpos(c.new)),'value')
-  wclose.on_click(lambda b: close())
-  wtobeg.on_click(lambda b: tobeg())
-  wtoend.on_click(lambda b: toend())
+  # widget creation
+  w_win = ipywidgets.HTML(layout=dict(overflow_x='auto',overflow_y='hidden',**ka))
+  w_ctrl = ipywidgets.IntSlider(min=0,max=fsize,step=step,value=start,layout=dict(width=w_win.layout.width))
+  w_toend = ipywidgets.Button(icon='angle-double-right',tooltip='Jump to end of file',layout=dict(width='.5cm',padding='0cm'))
+  w_tobeg = ipywidgets.Button(icon='angle-double-left',tooltip='Jump to beginning of file',layout=dict(width='.5cm',padding='0cm'))
+  w_close = ipywidgets.Button(icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
+  w_main = ipywidgets.VBox(children=(ipywidgets.HBox(children=(w_ctrl,w_tobeg,w_toend,w_close)),w_win))
+  # widget updaters
+  w_ctrl.observe((lambda c: setpos(c.new)),'value')
+  w_close.on_click(lambda b: close())
+  w_tobeg.on_click(lambda b: tobeg())
+  w_toend.on_click(lambda b: toend())
   setpos(start)
-  if period: Thread(target=track,daemon=True).start()
-  return w
+  if track:
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
+    class MyHandler (FileSystemEventHandler):
+      def __init__(s,p,f): super().__init__(); s.on_modified = (lambda evt: (f() if evt.src_path==p else None))
+    observer = Observer()
+    observer.schedule(MyHandler(str(path),resetsize),str(path.parent))
+    observer.start()
+  else: observer=None
+  return w_main
 
 #==================================================================================================
 class ipytoolbar:
@@ -818,43 +805,38 @@ def exploredb(spec):
 Display an IPython widget for basic database exploration. If a metadata structure is specified, it must be bound to an existing engine and reflected.
   """
 #==================================================================================================
-  import ipywidgets
+  import ipywidgets,traitlets
   from functools import lru_cache
   from pandas import read_sql_query
   from sqlalchemy import select, func, MetaData, create_engine
   from sqlalchemy.engine import Engine
   from IPython.display import display, clear_output
-  # Content retrieval
-  def schemag():
-    fstr = (lambda x: x)
-    fbool = (lambda x: 'x' if x else '')
-    fany = (lambda x: str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else '')
-    def row(c):
-      def val(x):
-        try: return x[1](getattr(c,x[0]))
-        except: return '*'
-      return '<tr>{}</tr>'.format(''.join('<td class="field-{}"><span>{}</span></td>'.format(x[0],val(x)) for x in schema))
-    schema = (
-      ('name',fstr,'name',4),
-      ('type',fany,'type',4),
-      ('primary_key',fbool,'P',.5),
-      ('nullable',fbool,'N',.5),
-      ('unique',fbool,'U',.5),
-      ('default',fany,'default',4),
-      ('constraints',fany,'constraints',4),
-      ('foreign_keys',fany,'foreign',4),
-    )
-    style = exploredb.style['schema']+'\n'.join('#toplevel td.field-{} {{ min-width:{}cm; max-width:{}cm; }}'.format(x[0],x[3],x[3]) for x in schema)
-    thead = '<tr>{}</tr>'.format(''.join('<td title="{}" class="field-{}">{}</td>'.format(x[0],x[0],x[2]) for x in schema))
-    tid = unid('exploredb')
-    pre = '<div><style scoped="scoped">{}</style><table id="{}"><thead>{}</thead><tbody>'.format(style.replace('#toplevel','#'+tid),tid,thead)
-    suf = '</tbody></table></div>'
-    return lambda table: pre+''.join(map(row,tables[table].columns))+suf
-  schema = lru_cache(None)(schemag())
-  def size(table):
-    return engine.execute(select([func.count()]).select_from(tables[table])).fetchone()[0]
-  def sample(table,offset,nsample):
-    sql = select(wscol.value,limit=nsample,offset=offset,order_by=(list(tables[table].primary_key) or tables[table].columns.values()[:1]))
+  class SelectMultipleOrdered (ipywidgets.VBox):
+    # essentially like ipywidgets.SelectMultiple, but preserves order of selection
+    def __init__(self,value=(),**ka):
+      w_sel = self.selector = ipywidgets.SelectMultiple(**ka)
+      w_display = ipywidgets.Text(disabled=True)
+      w_display.layout.width = w_sel.layout.width
+      super().__init__(children=(w_sel,w_display))
+      self.add_traits(value=traitlets.Tuple())
+      def g(L):
+        L = set(L)
+        for x in self.value:
+          try: L.remove(x)
+          except KeyError: continue
+          else: yield x
+        yield from L
+      def update_sel(c): self.value = tuple(g(c.new))
+      w_sel.observe(update_sel,'value')
+      def update(c):
+        if set(c.new)!= set(w_sel.value): w_sel.value = c.new
+        w_display.value = ';'.join(map(str,c.new))
+      self.observe(update,'value')
+      self.value = tuple(value)
+  def size(table): # returns the size of .table.
+    return engine.execute(select([func.count()]).select_from(table)).fetchone()[0]
+  def sample(columns,nsample,offset,order=None): # returns .nsample. row samples of .columns. ordered by .order.
+    sql = select(columns,limit=nsample,offset=offset,order_by=(order or columns))
     r = read_sql_query(sql,engine)
     r.index = list(range(offset,offset+min(nsample,len(r))))
     return r
@@ -869,61 +851,67 @@ Display an IPython widget for basic database exploration. If a metadata structur
     meta = MetaData(bind=spec)
     meta.reflect(views=True)
     no_table_msg = 'Database is empty'
-  tables = meta.tables
-  if not tables: return no_table_msg
+  if not meta.tables: return no_table_msg
+  config = exploredb_scanconfig(meta.tables)
   engine = meta.bind
-  active = True
-  scol_ = dict((table,[(c.name,c) for c in t.columns]) for table,t in tables.items())
-  scol = dict((table,tuple(t.columns)) for table,t in tables.items())
   # widget creation
-  wtitle = ipywidgets.HTML('<div style="{}">{}</div>'.format(exploredb.style['title'],engine))
-  wtable = ipywidgets.Select(options=sorted(tables),layout=dict(width='10cm'))
-  wsize = ipywidgets.Text(value='',tooltip='Number of rows',disabled=True,layout=dict(width='2cm'))
-  wschema = ipywidgets.HTML()
-  wscol = ipywidgets.SelectMultiple(options=[],layout=dict(flex_flow='column'))
-  wdetail = ipywidgets.Tab(children=(wschema,wscol),layout=dict(display='none'))
-  wdetail.set_title(0,'Column definitions'); wdetail.set_title(1,'Column selection')
-  wdetailb = ipywidgets.Button(tooltip='toggle detail display (red border means some columns are hidden)',icon='fa-info-circle',layout=dict(width='.4cm',padding='0'))
-  wreloadb = ipywidgets.Button(tooltip='reload table',icon='fa-refresh',layout=dict(width='.4cm',padding='0'))
-  woffset = ipywidgets.IntSlider(description='offset',min=0,step=1,layout=dict(width='12cm'))
-  wnsample = ipywidgets.IntSlider(description='nsample',min=1,max=50,step=1,layout=dict(width='10cm'))
-  wout = ipywidgets.Output()
+  w_title = ipywidgets.HTML('<div style="{}">{}</div>'.format(exploredb.style['title'],engine))
+  w_table = ipywidgets.Select(options=sorted(meta.tables.items()),layout=dict(width='10cm'))
+  w_size = ipywidgets.Text(value='',tooltip='Number of rows',disabled=True,layout=dict(width='2cm'))
+  w_schema = ipywidgets.HTML()
+  w_scol = SelectMultipleOrdered(layout=dict(flex_flow='column'))
+  w_ordr = SelectMultipleOrdered(layout=dict(flex_flow='column'))
+  w_detail = ipywidgets.Tab(children=(w_schema,w_scol,w_ordr),layout=dict(display='none'))
+  for i,label in enumerate(('Column definitions','Column selection','Column ordering')): w_detail.set_title(i,label)
+  w_detailb = ipywidgets.Button(tooltip='toggle detail display (red border means some columns are hidden)',icon='info-circle',layout=dict(width='.4cm',padding='0'))
+  w_reloadb = ipywidgets.Button(tooltip='reload table',icon='refresh',layout=dict(width='.4cm',padding='0'))
+  w_offset = ipywidgets.IntSlider(description='offset',min=0,step=1,layout=dict(width='12cm'))
+  w_nsample = ipywidgets.IntSlider(description='nsample',min=1,max=50,step=1,layout=dict(width='10cm'))
+  w_out = ipywidgets.Output()
   # widget updaters
+  active = True
+  cfg = None
   def show():
-    nonlocal active
+    with w_out:
+      clear_output(wait=True)
+      display(sample(cfg.selected,cfg.nsample,cfg.offset,cfg.order))
+  def set_table(c=None):
+    nonlocal active,cfg
+    cfg = config[(w_table.value if c is None else c.new).name]
+    sz = size(w_table.value)
+    w_scol.selector.rows = w_ordr.selector.rows = min(len(cfg.options),20)
+    w_size.value = str(sz)
+    w_schema.value = cfg.schema
     active = False
-    woffset.value = 0
-    wnsample.value = 5
-    wscol.value = ()
-    wscol.options = opts = scol_[wtable.value]
-    wscol.value = scol[wtable.value]
-    active = True
-    wscol.rows = min(len(opts),20)
-    sz = size(wtable.value)
-    woffset.max = max(sz-1,0)
-    wsize.value = str(sz)
-    wschema.value = schema(wtable.value)
-    showc()
-  def showc():
-    if active:
-      with wout:
-        clear_output(wait=True)
-        display(sample(wtable.value,woffset.value,wnsample.value))
-  def setscol():
-    if active: scol[wtable.value] = wscol.value
-    wdetailb.layout.border = 'none' if len(scol[wtable.value]) == len(scol_[wtable.value]) else 'thin solid red'
-    showc()
-  def toggledetail(inv={'inline':'none','none':'inline'}): wdetail.layout.display = inv[wdetail.layout.display]
+    try:
+      w_scol.selector.options = w_ordr.selector.options = cfg.options
+      w_scol.value, w_ordr.value = cfg.selected, cfg.order
+      w_offset.max = max(sz-1,0)
+      w_offset.value = cfg.offset
+      w_nsample.value = cfg.nsample
+    finally: active = True
+    show()
+  def set_scol(c):
+    w_detailb.layout.border = 'none' if len(c.new) == len(cfg.options) else 'thin solid red'
+    if active: cfg.selected = c.new; show()
+  def set_ordr(c):
+    if active: cfg.order = c.new; show()
+  def set_offset(c):
+    if active: cfg.offset = c.new; show()
+  def set_nsample(c):
+    if active: cfg.nsample = c.new; show()
+  def toggledetail(inv={'inline':'none','none':'inline'}): w_detail.layout.display = inv[w_detail.layout.display]
   # callback attachments
-  wdetailb.on_click((lambda b: toggledetail()))
-  wtable.observe((lambda c: show()),'value')
-  wreloadb.on_click((lambda b: show()))
-  woffset.observe((lambda c: showc()),'value')
-  wnsample.observe((lambda c: showc()),'value')
-  wscol.observe((lambda c: setscol()),'value')
+  w_detailb.on_click((lambda b: toggledetail()))
+  w_reloadb.on_click((lambda b: show()))
+  w_table.observe(set_table,'value')
+  w_offset.observe(set_offset,'value')
+  w_nsample.observe(set_nsample,'value')
+  w_scol.observe(set_scol,'value')
+  w_ordr.observe(set_ordr,'value')
   # initialisation
-  show()
-  return ipywidgets.VBox(children=(wtitle,ipywidgets.HBox(children=(wtable,wsize,wdetailb,wreloadb)),wdetail,ipywidgets.HBox(children=(woffset,wnsample,)),wout))
+  set_table()
+  return ipywidgets.VBox(children=(w_title,ipywidgets.HBox(children=(w_table,w_size,w_detailb,w_reloadb)),w_detail,ipywidgets.HBox(children=(w_offset,w_nsample,)),w_out))
 
 exploredb.style = dict(
   schema='''
@@ -938,6 +926,43 @@ exploredb.style = dict(
   ''',
   title='background-color:gray; color:white; font-weight:bold; padding:.2cm',
 )
+
+#--------------------------------------------------------------------------------------------------
+def exploredb_scanconfig(tables):
+#--------------------------------------------------------------------------------------------------
+  class Tconf:
+    __slots__ = 'options','schema','selected','order','offset','nsample'
+    def __init__(s,table,schemag=None,offset=0,nsample=5):
+      s.options = [(c.name,c) for c in table.columns]
+      s.schema = schemag(table.columns)
+      s.selected = tuple(table.columns)
+      s.order = tuple(table.primary_key)
+      s.offset = offset
+      s.nsample = nsample
+  fstr = (lambda x: x)
+  fbool = (lambda x: 'x' if x else '')
+  fany = (lambda x: str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else '')
+  def row(c):
+    def val(x):
+      try: return x[1](getattr(c,x[0]))
+      except: return '*'
+    return '<tr>{}</tr>'.format(''.join('<td class="field-{}"><span>{}</span></td>'.format(x[0],val(x)) for x in schema))
+  schema = ( # this is the schema of schemas!
+    ('name',fstr,'name',4),
+    ('type',fany,'type',4),
+    ('primary_key',fbool,'P',.5),
+    ('nullable',fbool,'N',.5),
+    ('unique',fbool,'U',.5),
+    ('default',fany,'default',4),
+    ('constraints',fany,'constraints',4),
+    ('foreign_keys',fany,'foreign',4),
+  )
+  style = exploredb.style['schema']+'\n'.join('#toplevel td.field-{0} {{ min-width:{3}cm; max-width:{3}cm; }}'.format(*x) for x in schema)
+  thead = '<tr>{}</tr>'.format(''.join('<td title="{0}" class="field-{0}">{2}</td>'.format(*x) for x in schema))
+  tid = unid('exploredb')
+  pre = '<div><style scoped="scoped">{}</style><table id="{}"><thead>{}</thead><tbody>'.format(style.replace('#toplevel','#'+tid),tid,thead)
+  suf = '</tbody></table></div>'
+  return dict((name,Tconf(t,schemag=(lambda cols: pre+''.join(map(row,cols))+suf))) for name,t in tables.items())
 
 #==================================================================================================
 def html_parlist(html,La,Lka,opening=(),closing=(),style='padding: 5px'):
@@ -1123,7 +1148,7 @@ def SQLinit(engine,meta):
   if meta_.tables:
     try:
       metainfo_table = meta_.tables['Metainfo']
-      metainfo = dict(engine.execute(select((metainfo_table.c))).fetchone())
+      metainfo = dict(engine.execute(select(metainfo_table.c)).fetchone())
       del metainfo['created']
     except: raise SQLinitMetainfoException('Not found')
     for k,v in meta.info.items():
@@ -1176,7 +1201,9 @@ A logging handler class which writes the log messages into a database.
     self.format(rec)
     self.dbrecord(rec)
 
+#--------------------------------------------------------------------------------------------------
 def SQLHandlerMetadata(info=dict(origin=__name__+'.SQLHandler',version=1)):
+#--------------------------------------------------------------------------------------------------
   from sqlalchemy import Table, Column, ForeignKey, MetaData
   from sqlalchemy.types import DateTime, Text, Integer
   meta = MetaData(info=info)
@@ -1323,13 +1350,12 @@ Displays a link to the monitor of :class:`pyspark.SparkContext` *sc*. Recall tha
     display_html('<a target="_blank" href="{}">SparkMonitor[{}@{}]</a>'.format(sc.uiWebUrl,sc.appName,sc.master),raw=True)
 
   @classmethod
-  def SparkContext(cls,display=True,debug=False,**ka):
+  def SparkContext(cls,display=True,debug=False,conf={},**ka):
     r"""
-Returns an instance of :class:`pyspark.SparkContext` created with the predefined configuration held in attribute :attr:`conf` of this class, possibly partially overridden if key `conf` is in *ka* (its value must then be a :class:`dict` of :class:`str`). If *debug* is :const:`True`, prints the exact configuration used. If *display* is :const:`True`, displays a link to the monitor of the created context.
+Returns an instance of :class:`pyspark.SparkContext` created with the predefined configuration held in attribute :attr:`conf` of this class, updated by *conf* (its value must then be a :class:`dict` of :class:`str`). If *debug* is :const:`True`, prints the exact configuration used. If *display* is :const:`True`, displays a link to the monitor of the created context.
     """
     from pyspark import SparkContext, SparkConf
-    cfg = SparkConf().setAll(cls.conf.items())
-    for k,v in ka.pop('conf',{}).items(): cfg.set(k,v)
+    cfg = SparkConf().setAll(cls.conf.items()).setAll(conf.items())
     if debug: print(cfg.toDebugString())
     sc = SparkContext(conf=cfg,**ka)
     if display: cls.display_monitor_link(sc)
@@ -1355,13 +1381,11 @@ Instances of this class maintain basic statistics about a group of values.
 #==================================================================================================
   def __init__(self,weight=0.,avg=0.,var=0.): self.weight = weight; self.avg = avg; self.var = var
   def __add__(self,other):
-    if isinstance(other,basic_stats): w,a,v = other.weight,other.avg,other.var
-    else: w,a,v = 1.,other,0.
+    w,a,v = (other.weight,other.avg,other.var) if isinstance(other,basic_stats) else (1.,other,0.)
     W = self.weight+w; r_self = self.weight/W; r_other = w/W; d = a-self.avg
     return basic_stat(weight=W,avg=r_self*self.avg+r_other*a,var=r_self*self.var+r_other*v+(r_self*d)*(r_other*d))
   def __iadd__(self,other):
-    if isinstance(other,basic_stats): w,a,v = other.weight,other.avg,other.var
-    else: w,a,v = 1.,other,0.
+    w,a,v = (other.weight,other.avg,other.var) if isinstance(other,basic_stats) else (1.,other,0.)
     self.weight += w; r = w/self.weight; d = a-self.avg
     self.avg += r*d; self.var += r*(v-self.var+(1-r)*d*d)
     return self
@@ -1398,7 +1422,7 @@ def size_fmt(size,binary=True,precision=4,suffix='B'):
 :type binary: :class:`bool`
 :param precision: number of digits displayed (at least 4)
 :type precision: :class:`int`
-
+  """ """
 Returns the representation of *size* with IEC prefix. Each prefix is *K* times the previous one for some constant *K* which depends on the convention: *K* =1024 with the binary convention (marked with an ``i`` after the prefix); *K* =1000 with the decimal convention. Example::
 
    print(size_fmt(2**30), size_fmt(5300), size_fmt(5300,binary=False), size_fmt(42897.3,binary=False,suffix='m')

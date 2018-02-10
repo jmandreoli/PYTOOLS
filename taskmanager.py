@@ -269,7 +269,7 @@ Returns the content of *message* as a pretty string. All headers are displayed. 
       if mime=='text/plain':
         yield q
         d = 76-len(iz)
-        for line in content.decode(str(msg.get_charset())).split('\n'):
+        for line in content.decode(str(msg.get_charset() or 'utf-8')).split('\n'):
           yield '{} >>> {}'.format(iz,line[:d])
           for k in range(d,len(line),d): yield '{} ... {}'.format(iz,line[k:k+d])
       else: yield q+' hidden'

@@ -1,0 +1,330 @@
+import traitlets
+from ipywidgets import IntSlider, FloatSlider, Text, HTML, IntText, FloatText, Dropdown, Select, SelectMultiple, Button, Output, Tab, Accordion, VBox, HBox, Box, Layout
+from . import ondemand, unid
+
+#==================================================================================================
+def seq_browse(D,start=1,pgsize=10):
+  r"""
+:param D: a sequence object
+:type D: :class:`Sequence`
+:param start: the index of the initial page
+:type start: :class:`int`
+:param pgsize: the size of the pages
+:type pgsize: :class:`int`
+
+Returns an :class:`ipywidgets.Widget` instance to browse a sequence object *D* page per page in IPython.
+  """
+#==================================================================================================
+  from IPython.display import display, clear_output
+  P = (len(D)-1)//pgsize + 1
+  if P==1: return D
+  def show(n):
+    with w_out:
+      clear_output(wait=True)
+      display(D[(n-1)*pgsize:n*pgsize])
+  w_out = Output()
+  w_closeb = Button(icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
+  w_pager = IntSlider(description='page',value=start,min=1,max=P,layout=dict(width='20cm'))
+  w = VBox(children=(HBox(children=(w_closeb,w_pager)),w_out))
+  w_pager.observe((lambda c: show(c.new)),'value')
+  w_closeb.on_click(lambda b: w.close())
+  show(w_pager.value)
+  return w
+
+#==================================================================================================
+def file_browse(path,start=None,step=50,track=True,context=(10,5),**ka):
+  r"""
+:param path: a path to an existing file
+:type path: :class:`Union[str,pathlib.Path]`
+:param start: index of start pointed
+:type start: :class:`Union[int,float]`
+:param step: step size in bytes
+:type step: :class:`int`
+:param track: whether to track changes in the file
+:type track: :class:`bool`
+:param context: pair of number of lines before and after to display around current position
+:type context: :class:`Tuple[int,int]`
+
+Returns an :class:`ipywidgets.Widget` to browse the file at *path*, possibly while it expands. If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
+  """
+#==================================================================================================
+  from pathlib import Path
+  def setpos(n,nbefore=context[0]+1,nafter=context[1]+1):
+    def readlinesFwd(u,n,k):
+      u.seek(n)
+      for i in range(k):
+        x = u.readline()
+        if x: yield x[:-1]
+        else: return
+    def readlinesBwd(u,n,k,D=256):
+      c = n; t = b''
+      while True:
+        if c==0:
+          if t: yield t
+          return
+        d = D; c -= d
+        if c<0: c,d = 0,d+c
+        u.seek(c)
+        L = u.read(d).rsplit(b'\n',k)
+        L[-1] += t
+        for x in L[-1:0:-1]:
+          yield x
+          k -= 1
+          if k==0: return
+        t = L[0]
+    lines = (nbefore+nafter-1)*[b'']
+    c = nbefore
+    x = list(readlinesBwd(file,n,nbefore))
+    lines[c] += b'\n'.join(x[:1]); lines[c-1:c-len(x):-1] = x[1:]
+    x = list(readlinesFwd(file,n,nafter))
+    lines[c] += b'\n'.join(x[:1]); lines[c+1:c+len(x)] = x[1:]
+    lines = [x.decode().replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') for x in lines]
+    lines[c] = '<span style="background-color: gray; color: white; border: thin solid gray;">{}</span>'.format(lines[c])
+    w_win.value = '<div style="white-space: pre; font-family: monospace; line-height:130%">{}</div>'.format('\n'.join(lines))
+  def toend(): w_ctrl.value = fsize
+  def tobeg(): w_ctrl.value = 0
+  def close():
+    w_main.close()
+    file.close()
+    if observer is not None: observer.stop(); observer.join()
+  def resetsize():
+    nonlocal fsize
+    atend = w_ctrl.value == fsize
+    w_ctrl.max = fsize = path.stat().st_size
+    if atend: w_ctrl.value = fsize
+    else: setpos(w_ctrl.value)
+  if isinstance(path,str): path = Path(path)
+  else: assert isinstance(path,Path)
+  path = path.absolute()
+  file = path.open('rb')
+  fsize = path.stat().st_size or 1
+  if start is None: start = fsize
+  elif isinstance(start,float):
+    assert 0<=start and start<=1
+    start = int(start*fsize)
+  else:
+    assert isinstance(start,int)
+    if start<0:
+      start += fsize
+      if start<0: start = 0
+  ka.setdefault('width','15cm')
+  ka.setdefault('border','thin solid black')
+  # widget creation
+  w_win = HTML(layout=dict(overflow_x='auto',overflow_y='hidden',**ka))
+  w_ctrl = IntSlider(min=0,max=fsize,step=step,value=start,layout=dict(width=w_win.layout.width))
+  w_toend = Button(icon='angle-double-right',tooltip='Jump to end of file',layout=dict(width='.5cm',padding='0cm'))
+  w_tobeg = Button(icon='angle-double-left',tooltip='Jump to beginning of file',layout=dict(width='.5cm',padding='0cm'))
+  w_closeb = Button(icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
+  w_main = VBox(children=(HBox(children=(w_ctrl,w_tobeg,w_toend,w_closeb)),w_win))
+  # widget updaters
+  w_ctrl.observe((lambda c: setpos(c.new)),'value')
+  w_closeb.on_click(lambda b: close())
+  w_tobeg.on_click(lambda b: tobeg())
+  w_toend.on_click(lambda b: toend())
+  setpos(start)
+  if track:
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
+    class MyHandler (FileSystemEventHandler):
+      def __init__(s,p,f): super().__init__(); s.on_modified = (lambda evt: (f() if evt.src_path==p else None))
+    observer = Observer()
+    observer.schedule(MyHandler(str(path),resetsize),str(path.parent))
+    observer.start()
+  else: observer=None
+  return w_main
+
+#==================================================================================================
+def db_browse(spec):
+  r"""
+:param spec: an sqlalchemy url or engine or metadata structure, defining the database to explore
+:type spec: :class:`Union[str,sqlalchemy.engine.Engine,sqlalchemy.sql.schema.MetaData]`
+
+Returns an :class:`ipywidgets.Widget` to explore a database specified by *spec*. If a metadata structure is specified, it must be bound to an existing engine and reflected.
+  """
+#==================================================================================================
+  from functools import lru_cache
+  from pandas import read_sql_query
+  from sqlalchemy import select, func, MetaData, create_engine
+  from sqlalchemy.engine import Engine
+  from IPython.display import display, clear_output
+  def size(table): # returns the size of .table.
+    return engine.execute(select([func.count()]).select_from(table)).fetchone()[0]
+  def sample(columns,nsample,offset,order=None): # returns .nsample. row samples of .columns. ordered by .order.
+    sql = select(columns,limit=nsample,offset=offset,order_by=(order or columns))
+    r = read_sql_query(sql,engine)
+    r.index = list(range(offset,offset+min(nsample,len(r))))
+    return r
+  if isinstance(spec,MetaData):
+    meta = spec
+    if not meta.is_bound(): raise ValueError('Argument of type {} must be bound to an existing engine'.format(MetaData))
+    no_table_msg = '{} object has no table (perhaps it was not reflected)'.format(MetaData)
+  else:
+    if isinstance(spec,str): spec = create_engine(spec)
+    elif not isinstance(spec,Engine):
+      raise TypeError('Expected {}|{}|{}; Found {}'.format(str,Engine,MetaData,type(spec)))
+    meta = MetaData(bind=spec)
+    meta.reflect(views=True)
+    no_table_msg = 'Database is empty'
+  if not meta.tables: return no_table_msg
+  config = db_browse_initconfig(meta.tables)
+  engine = meta.bind
+  # widget creation
+  w_title = HTML('<div style="{}">{}</div>'.format(db_browse.style['title'],engine))
+  w_table = Select(options=sorted(meta.tables.items()),layout=dict(width='10cm'))
+  w_size = Text(value='',tooltip='Number of rows',disabled=True,layout=dict(width='2cm'))
+  w_closeb = Button(icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
+  w_schema = HTML()
+  w_scol = SelectMultipleOrdered(layout=dict(flex_flow='column'))
+  w_ordr = SelectMultipleOrdered(layout=dict(flex_flow='column'))
+  w_detail = Tab(children=(w_schema,w_scol,w_ordr),layout=dict(display='none'))
+  for i,label in enumerate(('Column definitions','Column selection','Column ordering')): w_detail.set_title(i,label)
+  w_detailb = Button(tooltip='toggle detail display (red border means some columns are hidden)',icon='info-circle',layout=dict(width='.4cm',padding='0'))
+  w_reloadb = Button(tooltip='reload table',icon='refresh',layout=dict(width='.4cm',padding='0'))
+  w_offset = IntSlider(description='offset',min=0,step=1,layout=dict(width='12cm'))
+  w_nsample = IntSlider(description='nsample',min=1,max=50,step=1,layout=dict(width='10cm'))
+  w_out = Output()
+  w_main = VBox(children=(w_title,HBox(children=(w_table,w_size,w_detailb,w_reloadb,w_closeb)),w_detail,HBox(children=(w_offset,w_nsample,)),w_out))
+  # widget updaters
+  active = True
+  cfg = None
+  def show():
+    with w_out:
+      clear_output(wait=True)
+      display(sample(cfg.selected,cfg.nsample,cfg.offset,cfg.order))
+  def set_table(c=None):
+    nonlocal active,cfg
+    cfg = config[(w_table.value if c is None else c.new).name]
+    sz = size(w_table.value)
+    w_scol.rows = w_ordr.rows = min(len(cfg.options),20)
+    w_size.value = str(sz)
+    w_schema.value = cfg.schema
+    active = False
+    try:
+      w_scol.options = w_ordr.options = cfg.options
+      w_scol.value, w_ordr.value = cfg.selected, cfg.order
+      w_offset.max = max(sz-1,0)
+      w_offset.value = cfg.offset
+      w_nsample.value = cfg.nsample
+    finally: active = True
+    show()
+  def set_scol(c):
+    w_detailb.layout.border = 'none' if len(c.new) == len(cfg.options) else 'thin solid red'
+    if active: cfg.selected = c.new; show()
+  def set_ordr(c):
+    if active: cfg.order = c.new; show()
+  def set_offset(c):
+    if active: cfg.offset = c.new; show()
+  def set_nsample(c):
+    if active: cfg.nsample = c.new; show()
+  def toggledetail(inv={'inline':'none','none':'inline'}): w_detail.layout.display = inv[w_detail.layout.display]
+  # callback attachments
+  w_detailb.on_click(lambda b: toggledetail())
+  w_reloadb.on_click(lambda b: show())
+  w_closeb.on_click(lambda b: w_main.close())
+  w_table.observe(set_table,'value')
+  w_offset.observe(set_offset,'value')
+  w_nsample.observe(set_nsample,'value')
+  w_scol.observe(set_scol,'value')
+  w_ordr.observe(set_ordr,'value')
+  # initialisation
+  set_table()
+  return w_main
+
+db_browse.style = dict(
+  schema='''
+#toplevel { border-collapse: collapse; }
+#toplevel > thead { display:block; }
+#toplevel > tbody { display: block; max-height: 10cm; overflow-y: auto; padding-right: 10cm; }
+#toplevel > thead > tr > td { padding: 1mm; text-align: center; font-weight: bold; color: white; background-color: navy; border: thin solid white; }
+#toplevel > tbody > tr > td { padding: 1mm; border: thin solid blue; overflow: hidden; }
+#toplevel > tbody > tr > td > span { position: relative; background-color: white; white-space: nowrap; color:black; z-index: 0; }
+#toplevel > tbody > tr > td:hover { overflow: visible; }
+#toplevel > tbody > tr > td:hover > span { color:purple; z-index: 1; }
+  ''',
+  title='background-color:gray; color:white; font-weight:bold; padding:.2cm',
+)
+
+#--------------------------------------------------------------------------------------------------
+def db_browse_initconfig(tables):
+#--------------------------------------------------------------------------------------------------
+  class Tconf:
+    __slots__ = 'options','schema','selected','order','offset','nsample'
+    def __init__(s,table,schemag=None,offset=0,nsample=5):
+      s.options = [(c.name,c) for c in table.columns]
+      s.schema = schemag(table.columns)
+      s.selected = tuple(table.columns)
+      s.order = tuple(table.primary_key)
+      s.offset = offset
+      s.nsample = nsample
+  fstr = (lambda x: x)
+  fbool = (lambda x: 'x' if x else '')
+  fany = (lambda x: str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else '')
+  def row(c):
+    def val(x):
+      try: return x[1](getattr(c,x[0]))
+      except: return '*'
+    return '<tr>{}</tr>'.format(''.join('<td class="field-{}"><span>{}</span></td>'.format(x[0],val(x)) for x in schema))
+  schema = ( # this is the schema of schemas!
+    ('name',fstr,'name',4),
+    ('type',fany,'type',4),
+    ('primary_key',fbool,'P',.5),
+    ('nullable',fbool,'N',.5),
+    ('unique',fbool,'U',.5),
+    ('default',fany,'default',4),
+    ('constraints',fany,'constraints',4),
+    ('foreign_keys',fany,'foreign',4),
+  )
+  style = db_browse.style['schema']+'\n'.join('#toplevel td.field-{0} {{ min-width:{3}cm; max-width:{3}cm; }}'.format(*x) for x in schema)
+  thead = '<tr>{}</tr>'.format(''.join('<td title="{0}" class="field-{0}">{2}</td>'.format(*x) for x in schema))
+  tid = unid('db_browse')
+  pre = '<div><style scoped="scoped">{}</style><table id="{}"><thead>{}</thead><tbody>'.format(style.replace('#toplevel','#'+tid),tid,thead)
+  suf = '</tbody></table></div>'
+  return dict((name,Tconf(t,schemag=(lambda cols: pre+''.join(map(row,cols))+suf))) for name,t in tables.items())
+
+#==================================================================================================
+class SelectMultipleOrdered (VBox):
+  r"""
+Essentially like :class:`ipywidgets.SelectMultiple` but preserves order of selection.
+  """
+#==================================================================================================
+  options = traitlets.Any()
+  rows = traitlets.Integer(min=0)
+  def __init__(self,value=(),**ka):
+    w_sel = SelectMultiple(**ka)
+    w_display = Text(disabled=True)
+    w_display.layout.width = w_sel.layout.width
+    super().__init__(children=(w_sel,w_display))
+    self.add_traits(value=traitlets.Tuple())
+    def g(L):
+      L = set(L)
+      for x in self.value:
+        try: L.remove(x)
+        except KeyError: continue
+        else: yield x
+      yield from L
+    def update_sel(c): self.value = tuple(g(c.new))
+    w_sel.observe(update_sel,'value')
+    def update(c):
+      if set(c.new)!= set(w_sel.value): w_sel.value = c.new
+      w_display.value = ';'.join(map(str,c.new))
+    self.observe(update,'value')
+    for name in 'options','rows':
+      self.observe((lambda c,name=name: setattr(w_sel,name,c.new)),name)
+    self.value = tuple(value)
+
+#==================================================================================================
+class Toolbar(HBox):
+  r"""
+An :class:`ipywidgets.Widget` instance representing a toolbar of buttons. Keyword arguments in the toolbar constructor are used as default values for all the buttons created. To create a new button, use method :meth:`add` with one positional argument: *callback* (a callable with no argument to invoke when the action is activated). If keyword arguments are present, they are passed to the button constructor. The button widget is returned.
+  """
+#==================================================================================================
+  button_layout = dict(padding='0cm')
+  def __init__(self,**ka):
+    from collections import ChainMap
+    self.b_layout = ChainMap(ka,self.button_layout)
+  def add(self,callback,**ka):
+    layout = ChainMap(ka.pop('layout',{}),self.b_layout)
+    b = Button(layout=Layout(**layout),**ka)
+    b.on_click(lambda b: callback())
+    self.children += (b,)
+    return b

@@ -151,270 +151,85 @@ Returns an object obtained from an environment variable whose name is derived fr
   else: return dflt
 
 #==================================================================================================
-class Config (collections.abc.Mapping):
+class HasTraitsWidgetPlugin:
   r"""
-Instances of this class represent configurations which can be consistently setup either from ipython widgets or from command line arguments.
+Instances of this class must normally also be instances of :class:`traitlets.HasTraits`. The mixin adds an attribute :attr:`widget` which is an :class:`ipywidgets.Widget` that displays a configurator of the traits. The construction of the widget is directed by metadata which must be associated to each trait under key ``widget``. This is either a callable, which produces a widget for that trait, or a :class:`dict`, passed as keyword arguments to a widget guesser. Guessing is based on the trait class. The overall widget can be further customised using the following attributes:
 
-:param conf: specification of the items of this configuration
-:param initv: an assignment of the items of this configuration, applied at initialisation
+.. attribute buttons,header,footer::
 
-Each element in *conf* specifies an item as a pair :class:`Tuple[Tuple[object,...],Dict[str,object]]`, specifying the positional and keyword arguments to be passed to method :meth:`add_entry`.
+   These are :class:`ipywidgets.Widget` instances which can be modified freely. The :attr:`buttons` widget appears immediately after the trait widgets, followed by the :attr:`footer` widget. The :attr:`header` widget appears immediately before the trait widgets. The header and footer are vertically layed-out, the buttons are horizontally layed-out. A close and reset buttons are present by default.
+
+.. attribute add_button::
+
+   A facility function with one positional parameter *callback* (a callable with no paramter) which adds a button associated with this callback. Keyword parameters are passed to the button constructor. If *callback* is a :class:`dict` instead of a callable, it is treated as the function which resets all the traits according to that dict.
   """
 #==================================================================================================
   widget_layout = dict(width='15cm')
   label_layout = dict(width='2cm',padding='0cm',align_self='flex-start')
   button_layout = dict(padding='0cm')
   rbutton_layout = dict(width='0.5cm',padding='0cm')
-  class Pconf:
-    __slots__ = 'name','value','helper','widget','cparser'
-    def __init__(s,*a): s.name,s.value,s.helper,s.widget,s.cparser = a
-    def __repr__(s): return 'Pconf<name={0.name!r},value={0.value!r},helper={0.helper!r},widget={0.widget!r},cparser={0.cparser!r}>'.format(s)
-
-#--------------------------------------------------------------------------------------------------
-  def __init__(self,*conf,**initv):
-#--------------------------------------------------------------------------------------------------
-    from collections import OrderedDict
-    self.pconf = OrderedDict()
-    self.initial = {}
-    for a,ka in conf: self.add_entry(*a,**ka)
-    self.reset(**initv)
-
-  def __getitem__(self,k): return self.pconf[k].value
-  def __setitem__(self,k,v): self.pconf[k].value = v
-  def __iter__(self): return iter(self.pconf)
-  def __len__(self): return len(self.pconf)
-  def __repr__(self): return 'Config<{}>'.format(','.join('{}={}'.format(k,repr(e.value)) for k,e in self.pconf.items()))
-
-#--------------------------------------------------------------------------------------------------
-  def fromipyui(self):
-    r"""
-Instantiates the items through a ipython user interface.
-    """
-#--------------------------------------------------------------------------------------------------
-    from IPython.display import display
-    display(self.widget)
-#--------------------------------------------------------------------------------------------------
-  def fromcmdline(self,args):
-    r"""
-Instantiates the items by parsing *args*.
-    """
-#--------------------------------------------------------------------------------------------------
-    self.cparser.parse_args(args,odict(self))
-
-#--------------------------------------------------------------------------------------------------
-  def reset(self,**ka):
-    r"""
-Reinitialises the item values.
-    """
-#--------------------------------------------------------------------------------------------------
-    for k in ka:
-      if k not in self.initial: raise KeyError(k)
-    for k,v in ka.items(): self.initial[k] = self.pconf[k].value = v
-    return self
-
-#--------------------------------------------------------------------------------------------------
-  def add_entry(self,name,value,cat=None,helper='',widget=None,cparser=None):
-    r"""
-:param name: name of the item
-:type name: :class:`str`
-:param value: the initial value of the item
-:type value: :class:`object`
-:param cat: the category of the item
-:type cat: :class:`Union[slice,Sequence[object],Dict[str,object]]`
-:param helper: the helper for the item
-:type helper: :class:`str`
-:param widget: the widget specification for the item
-:type widget: :class:`Union[str,Dict[str,object]]`
-:param cparser: the command line parser specification for the item
-:type cparser: :class:`Union[str,Dict[str,object]]`
-
-Adds an item to this configuration.
-
-* If *cat* is :const:`None`, the item value range is guessed from the type of *value*, which must be a number or string type.
-* If *cat* is a :class:`slice`, the item value ranges over a subset of numbers.
-
-  - If the :attr:`stop` attribute of *cat* is an integer, the target range is the set of integers between the values of *cat* attributes :attr:`start` (default :const:`0`)  and :attr:`stop` minus 1. The :attr:`step` attribute (default :const:`1`) specifies a sampling step.
-  - If the :attr:`stop` attribute of *cat* is real, the target range is the set of reals between the values of *cat* attributes :attr:`start` (default :const:`0`) and :attr:`stop`. The :attr:`step` attribute (default 100) specifies a sampling step, directly if it is a real or adjusted so as to obtain exactly that number of samples if it is an integer.
-
-* If *cat* is a :class:`Sequence[object]`, it is turned into a :class:`collections.OrderedDict` whose keys are the string values of its elements.
-* If *cat* is a :class:`Dict[str,object]` (which includes :class:`collections.OrderedDict` as obtained above), the item value range is the set of values of *cat*. The keys are simply string names to denote these values. If the special key ``__multiple__`` is set to :const:`True`, it is deleted and the target range is in fact the set of tuples of the other values of *cat*.
-
-*helper* can contain patterns of the form ``{widget-version|cparser-version}`` so the helper can have a different version in the two contexts.
-
-If *widget* is :const:`None`, it is replaced by an empty dict, and if it is a string, it is replaced with a dict with a single key ``type`` assigned that string. The ``type`` key, if present, must be the name of a widget constructor in module :mod:`ipywidgets` and must be compatible with *cat* and *value*. If not present, a default value is guessed from *cat* and *value*. The other key-value pairs of *widget* are passed to the widget constructor as keyword arguments.
-
-If *cparser* is :const:`None`, the argument is ignored by the command line parser. If it is a string, it is replaced by a dict with a single key ``spec`` assigned that string. The ``spec`` key holds the name of the argument as it appears in the command line. The other key-value pairs of *cparser* are passed to the :meth:`ArgumentParser.add_argument` method of the constructed parser.
-    """
-#--------------------------------------------------------------------------------------------------
-    import re
-    from collections import OrderedDict
-    from functools import partial
-    def checkbounds(x,typ,vmin,vmax,name):
-      try: x = typ(x)
-      except: raise ConfigException('Bounds constraint violated',name) from None
-      if not (vmin<=x and x<=vmax): raise ConfigException('Bounds constraint violated',name) from None
-      return x
-    def checkchoice(x,options,name):
-      try: return options[x]
-      except KeyError: raise ConfigException('Choice constraint violated',name) from None
-    def parsealt(x,pat=re.compile(r'\{([^}]+)\}'),n=2):
-      pos = 0
-      for m in pat.finditer(x):
-        b,e = m.span()
-        yield n*(x[pos:b],)
-        s = m.group(1).split('|'); pos = e
-        if len(s)==n: yield tuple(s)
-        else: raise Exception('Inconsistent number of alternatives')
-      yield n*(x[pos:],)
-    def set_widget_type(widget,*L):
-      if 'type' in widget:
-        if widget['type'] not in L: raise ConfigException('Inconsistent widget for value type',name)
-      else: widget.update(type=L[0])
-    type2widget = {
-      bool:('Checkbox','ToggleButton'),
-      int:('IntText',),
-      float:('FloatText',),
-      str:('Text','Textarea',),
-    }
-    mult2widget = {
-      True:('SelectMultiple',),
-      False:('Dropdown','Select','RadioButtons','ToggleButtons',),
-    }
-    try: helper = tuple(''.join(l) for l in zip(*parsealt(helper)))
-    except: raise ConfigException('Invalid helper spec',name)
-    if widget is None: widget = {}
-    elif isinstance(widget,str): widget = dict(type=widget)
-    elif isinstance(widget,dict): widget = widget.copy()
-    else: raise ConfigException('Invalid widget spec',name)
-    if cparser is not None:
-      if isinstance(cparser,str): cparser = dict(spec=(cparser,))
-      elif isinstance(cparser,dict): cparser = cparser.copy()
-      else: raise ConfigException('Invalid cparser spec',name)
-    if cat is None:
-      typ = type(value)
-      L = type2widget.get(typ)
-      if L is None: raise ConfigException('Inconsistent cat for value type',name)
-      set_widget_type(widget,*L)
-      if cparser is not None:
-        if typ is bool: cparser.update(action=('store_false' if value else 'store_true'))
-        else: cparser.update(type=(lambda x: eval(x,{})))
-    elif isinstance(cat,slice):
-      start,stop,step = (cat.start or 0),cat.stop,cat.step
-      if isinstance(stop,int):
-        if not (isinstance(start,int) and start<stop and (step is None or (isinstance(step,int) and step>0))): raise ConfigException('Invalid slice cat',name)
-        if step is None: step = 1
-        slider,typ = 'IntSlider',int
-      elif isinstance(stop,float):
-        if not (isinstance(start,(int,float)) and start<stop and (step is None or (isinstance(step,(int,float)) and step>0))): raise ConfigException('Invalid slice cat',name)
-        if step is None: step = (stop-start)/100
-        elif isinstance(step,int): step = (stop-start)/step
-        slider,typ = 'FloatSlider',float
-      else: raise ConfigException('Invalid slice cat',name)
-      set_widget_type(widget,slider)
-      widget.update(min=start,max=stop,step=step)
-      if cparser is not None:
-        cparser.update(type=partial(checkbounds,typ=typ,vmin=start,vmax=stop,name=name))
-    else:
-      if isinstance(cat,collections.abc.Sequence): cat = OrderedDict((str(x),x) for x in cat)
-      elif isinstance(cat,collections.abc.Mapping): cat = OrderedDict(cat)
-      else: raise ConfigException('Invalid cat type',name)
-      multiple = bool(cat.pop('__multiple__',False))
-      set_widget_type(widget,*mult2widget[multiple])
-      cvalues = tuple(cat.values())
-      values = value if multiple else (value,)
-      if any(v not in cvalues for v in values):
-        raise ConfigException('Inconsistent value for cat',name)
-      widget.update(options=cat)
-      if cparser is not None:
-        cparser.update(type=partial(checkchoice,options=cat,name=name))
-        if multiple: cparser.update(nargs='*')
-    self.pconf[name] = self.Pconf(name,value,helper,widget,cparser)
-    self.initial[name] = value
 
 #--------------------------------------------------------------------------------------------------
   @ondemand
   def widget(self):
 #--------------------------------------------------------------------------------------------------
-    from functools import partial
-    from collections import ChainMap
-    import ipywidgets
-    def upde(e,w): e.value = w.value
+    import ipywidgets, traitlets
+    def numeric(t,ws,slider,text):
+      from math import isfinite
+      vmin = ws.pop('min',None)
+      if vmin is None and (t.min is not None and isfinite(t.min)): vmin = t.min
+      vmax = ws.pop('max',None)
+      if vmax is None and (t.max is not None and isfinite(t.max)): vmax = t.max
+      return slider(min=vmin,max=vmax,**ws) if vmin is not None and vmax is not None else text(**ws)
+    def selector(t,ws):
+      opt = ws.get('options')
+      ws['options'] = [(str(v),v) for v in t.values] if opt is None else list(zip(opt,t.values))
+      return ipywidgets.Select(**ws)
     def updw(w,x): w.value = x
-    def row(e):
-      ka = e.widget.copy()
-      w = getattr(ipywidgets,ka.pop('type'))
-      layout = ChainMap(ka.pop('layout',{}),self.widget_layout)
-      w = w(value=e.value,layout=ipywidgets.Layout(**layout),**ka)
-      rbutton = ipywidgets.Button(icon='fa-undo',tooltip='Reset to default',layout=rbutton_layout)
-      label = ipywidgets.HTML('<span title="{}">{}</span>'.format(e.helper[0],e.name),layout=label_layout)
-      rbutton.on_click(lambda but,w=w,x=e.value: updw(w,x))
-      w.observe((lambda evt,e=e,w=w: upde(e,w)),'value')
-      return (e.name,w),ipywidgets.HBox(children=(rbutton,label,w))
+    def upda(name,w,x):
+      try: setattr(self,name,x)
+      except: w.value = getattr(self,name)
+    def row(name,t):
+      val = getattr(self,name)
+      ws = t.metadata.get('widget',{})
+      if isinstance(ws,dict):
+        ws = dict(ws)
+        if isinstance(t,traitlets.Integer): w = numeric(t,ws,ipywidgets.IntSlider,ipywidgets.IntText)
+        elif isinstance(t,traitlets.Float): w = numeric(t,ws,ipywidgets.FloatSlider,ipywidgets.FloatText)
+        elif isinstance(t,traitlets.Bool): w = ipywidgets.Checkbox(**ws)
+        elif isinstance(t,traitlets.Enum): w = selector(t,ws)
+        else: raise Exception('Cannot guess widget')
+      else: w = ws()
+      rbutton = ipywidgets.Button(icon='undo',tooltip='Reset to default',layout=rbutton_layout)
+      label = ipywidgets.HTML('<span title="{}">{}</span>'.format(str(t.help),name),layout=label_layout)
+      rbutton.on_click(lambda but,w=w,x=val: updw(w,x))
+      w.observe((lambda c,name=name,w=w: upda(name,w,c.new)),'value')
+      self.observe((lambda c,w=w: updw(w,c.new)),name)
+      w.value = val
+      return (name,val),ipywidgets.HBox(children=(rbutton,label,w))
+    def add_button(callback,**ka):
+      def reset(data):
+        for name,v in data.items(): setattr(self,name,v)
+      if isinstance(callback,dict): callback = (lambda data=callback: reset(data))
+      layout = collections.ChainMap(ka.pop('layout',{}),self.button_layout)
+      b = ipywidgets.Button(layout=ipywidgets.Layout(**layout),**ka)
+      b.on_click(lambda b: callback())
+      w.buttons.children += (b,)
+    def close():
+      w.close()
+      del self.widget
     rbutton_layout = ipywidgets.Layout(**self.rbutton_layout)
     label_layout = ipywidgets.Layout(**self.label_layout)
-    W,L = zip(*(row(e) for e in self.pconf.values()))
-    header,footer,buttons = [],[],[]
-    self.widget_context(header,footer,buttons)
-    if buttons: buttons = [ipywidgets.HBox(children=buttons)]
-    w = ipywidgets.VBox(children=header+list(L)+buttons+footer)
-    w.pconf = dict(W)
+    D,L = zip(*(row(name,t) for name,t in self.traits().items()))
+    w = self.widget_ = ipywidgets.VBox()
+    w.add_button = add_button
+    w.buttons = ipywidgets.HBox()
+    add_button(close,icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
+    add_button(dict(D),icon='undo',description='reset',layout=dict(width='1.8cm'))
+    w.header = ipywidgets.VBox()
+    w.footer = ipywidgets.VBox()
+    w.children = [w.header]+list(L)+[w.buttons,w.footer]
     return w
-#--------------------------------------------------------------------------------------------------
-  def widget_context(self,header,footer,buttons):
-    r"""
-:param header,footer,buttons: lists of widgets to update
-:type header,footer,buttons: :class:`List[ipywidgets.Widget]`
-
-Updates any of: the list *header* of prolog widgets, the list *footer* of epilog widgets and the list *buttons* of buttons. These widgets are put around the item widgets. This implementations only adds a reset button. Subclasses can refine that behaviour.
-    """
-#--------------------------------------------------------------------------------------------------
-    buttons.append(self.make_widget_reset_button(self.initial,icon='fa-undo',description='reset',layout=dict(width='1.8cm')))
-#--------------------------------------------------------------------------------------------------
-  def make_widget_reset_button(self,data,**ka):
-    r"""
-:param data: specification of how to reset this :class:`Config`
-:type data: :class:`Dict[str,object]`
-:rtype: :class:`ipywidgets.Button`
-
-Returns a button widget which resets the values of the items of this :class:`Config` according to *data*. The keys in *data* must correspond to items name, and the corresponding values are set as corresponding item value. The keyword parameters *ka* are passed to the button constructor.
-    """
-#--------------------------------------------------------------------------------------------------
-    from collections import ChainMap
-    import ipywidgets
-    def click(but):
-      for k,w in self.widget.pconf.items():
-        if k in data: w.value = data[k]
-    layout = ChainMap(ka.pop('layout',{}),self.button_layout)
-    b = ipywidgets.Button(layout=ipywidgets.Layout(**layout),**ka)
-    b.on_click(click)
-    return b
-
-#--------------------------------------------------------------------------------------------------
-  @ondemand
-  def cparser(self):
-#--------------------------------------------------------------------------------------------------
-    from argparse import ArgumentParser
-    header,footer = [],[]
-    self.cparser_context(header,footer)
-    p = ArgumentParser(description=''.join(header),epilog=''.join(footer))
-    for e in self.pconf.values():
-      if e.cparser is not None:
-        ka = e.cparser.copy()
-        spec = ka.pop('spec',())
-        p.add_argument(*spec,dest=e.name,default=e.value,help=e.helper[1],**ka)
-    return p
-#--------------------------------------------------------------------------------------------------
-  def cparser_context(self,header,footer):
-    r"""
-:param header,footer: lists of strings to update
-:type header,footer: :class:`List[str]`
-
-Updates any of the two lists of strings *header* and *footer*. They are each concatenated and passed to the command line parser as prolog and epilog, respectively. This implemetation does nothing. Subclasses can refine that behaviour.
-    """
-#--------------------------------------------------------------------------------------------------
-    pass
-
-class ConfigException (Exception): pass
 
 #==================================================================================================
 class HtmlPlugin:
@@ -642,327 +457,6 @@ class CallExpr (Expr):
 Symbolic expressions of this class are also callables, and trigger incarnation on invocation, then delegate the invocation to their value (expected to be a callable).
   """
   def __call__(self,*a,**ka): self.incarnate(); return self.value(*a,**ka)
-
-#==================================================================================================
-def ipybrowse(D,start=1,pgsize=10):
-  r"""
-:param D: a sequence object
-:type D: :class:`Sequence`
-:param start: the index of the initial page
-:type start: :class:`int`
-:param pgsize: the size of the pages
-:type pgsize: :class:`int`
-
-A simple utility to browse sliceable objects page per page in IPython.
-  """
-#==================================================================================================
-  import ipywidgets
-  from IPython.display import display, clear_output
-  P = (len(D)-1)//pgsize + 1
-  if P==1: display(D)
-  else:
-    def show():
-      with wout:
-        clear_output(wait=True)
-        display(D[(w.value-1)*pgsize:w.value*pgsize])
-    wout = ipywidgets.Output()
-    w = ipywidgets.IntSlider(description='page',value=(1 if start<1 else P if start>P else start),min=1,max=P,layout=dict(width='20cm'))
-    w.observe((lambda c: show()),'value')
-    show()
-    return ipywidgets.VBox(children=(w,wout))
-
-#==================================================================================================
-def ipyfilebrowse(path,start=None,step=50,track=True,context=(10,5),**ka):
-  r"""
-:param path: a path to an existing file
-:type path: :class:`Union[str,pathlib.Path]`
-:param start: index of start pointed
-:type start: :class:`Union[int,float]`
-:param step: step size in bytes
-:type step: :class:`int`
-:param track: whether to track changes in the file
-:type track: :class:`bool`
-:param context: pair of number of lines before and after to display around current position
-:type context: :class:`Tuple[int,int]`
-
-A simple utility to browse a file, possibly while it expands. If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
-  """
-#==================================================================================================
-  import ipywidgets
-  from pathlib import Path
-  def setpos(n,nbefore=context[0]+1,nafter=context[1]+1):
-    def readlinesFwd(u,n,k):
-      u.seek(n)
-      for i in range(k):
-        x = u.readline()
-        if x: yield x[:-1]
-        else: return
-    def readlinesBwd(u,n,k,D=256):
-      c = n; t = b''
-      while True:
-        if c==0:
-          if t: yield t
-          return
-        d = D; c -= d
-        if c<0: c,d = 0,d+c
-        u.seek(c)
-        L = u.read(d).rsplit(b'\n',k)
-        L[-1] += t
-        for x in L[-1:0:-1]:
-          yield x
-          k -= 1
-          if k==0: return
-        t = L[0]
-    lines = (nbefore+nafter-1)*[b'']
-    c = nbefore
-    x = list(readlinesBwd(file,n,nbefore))
-    lines[c] += b'\n'.join(x[:1]); lines[c-1:c-len(x):-1] = x[1:]
-    x = list(readlinesFwd(file,n,nafter))
-    lines[c] += b'\n'.join(x[:1]); lines[c+1:c+len(x)] = x[1:]
-    lines = [x.decode().replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') for x in lines]
-    lines[c] = '<span style="background-color: gray; color: white; border: thin solid gray;">{}</span>'.format(lines[c])
-    w_win.value = '<div style="white-space: pre; font-family: monospace; line-height:130%">{}</div>'.format('\n'.join(lines))
-  def toend(): w_ctrl.value = fsize
-  def tobeg(): w_ctrl.value = 0
-  def close():
-    w_main.close()
-    file.close()
-    if observer is not None: observer.stop(); observer.join()
-  def resetsize():
-    nonlocal fsize
-    atend = w_ctrl.value == fsize
-    w_ctrl.max = fsize = path.stat().st_size
-    if atend: w_ctrl.value = fsize
-    else: setpos(w_ctrl.value)
-  if isinstance(path,str): path = Path(path)
-  else: assert isinstance(path,Path)
-  path = path.absolute()
-  file = path.open('rb')
-  fsize = path.stat().st_size or 1
-  if start is None: start = fsize
-  elif isinstance(start,float):
-    assert 0<=start and start<=1
-    start = int(start*fsize)
-  else:
-    assert isinstance(start,int)
-    if start<0:
-      start += fsize
-      if start<0: start = 0
-  ka.setdefault('width','15cm')
-  ka.setdefault('border','thin solid black')
-  # widget creation
-  w_win = ipywidgets.HTML(layout=dict(overflow_x='auto',overflow_y='hidden',**ka))
-  w_ctrl = ipywidgets.IntSlider(min=0,max=fsize,step=step,value=start,layout=dict(width=w_win.layout.width))
-  w_toend = ipywidgets.Button(icon='angle-double-right',tooltip='Jump to end of file',layout=dict(width='.5cm',padding='0cm'))
-  w_tobeg = ipywidgets.Button(icon='angle-double-left',tooltip='Jump to beginning of file',layout=dict(width='.5cm',padding='0cm'))
-  w_close = ipywidgets.Button(icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
-  w_main = ipywidgets.VBox(children=(ipywidgets.HBox(children=(w_ctrl,w_tobeg,w_toend,w_close)),w_win))
-  # widget updaters
-  w_ctrl.observe((lambda c: setpos(c.new)),'value')
-  w_close.on_click(lambda b: close())
-  w_tobeg.on_click(lambda b: tobeg())
-  w_toend.on_click(lambda b: toend())
-  setpos(start)
-  if track:
-    from watchdog.observers import Observer
-    from watchdog.events import FileSystemEventHandler
-    class MyHandler (FileSystemEventHandler):
-      def __init__(s,p,f): super().__init__(); s.on_modified = (lambda evt: (f() if evt.src_path==p else None))
-    observer = Observer()
-    observer.schedule(MyHandler(str(path),resetsize),str(path.parent))
-    observer.start()
-  else: observer=None
-  return w_main
-
-#==================================================================================================
-class ipytoolbar:
-  r"""
-A simple utility to build a toolbar of buttons in IPython. Keyword arguments in the toolbar constructor are used as default values for all the buttons created. To create a new button, use method :meth:`add` with one positional argument: *callback* (a callable with no argument to invoke when the action is activated). If keyword arguments are present, they are passed to the button constructor. The button widget is returned. Method :meth:`display` displays the toolbar. The toolbar widget is available as attribute :attr:`widget`.
-  """
-#==================================================================================================
-  button_layout = dict(padding='0cm')
-  def __init__(self,**ka):
-    import ipywidgets
-    from collections import ChainMap
-    from IPython.display import display
-    self.widget = widget = ipywidgets.HBox(children=())
-    button_layout = ChainMap(ka,self.button_layout)
-    def add(callback,**ka):
-      layout = ChainMap(ka.pop('layout',{}),button_layout)
-      b = ipywidgets.Button(layout=ipywidgets.Layout(**layout),**ka)
-      b.on_click(lambda b: callback())
-      widget.children += (b,)
-      return b
-    self.add = add
-    self.display = lambda: display(widget)
-
-#==================================================================================================
-def exploredb(spec):
-  r"""
-:param spec: an sqlalchemy url or engine or metadata structure, defining the database to explore
-:type spec: :class:`Union[str,sqlalchemy.engine.Engine,sqlalchemy.sql.schema.MetaData]`
-
-Display an IPython widget for basic database exploration. If a metadata structure is specified, it must be bound to an existing engine and reflected.
-  """
-#==================================================================================================
-  import ipywidgets,traitlets
-  from functools import lru_cache
-  from pandas import read_sql_query
-  from sqlalchemy import select, func, MetaData, create_engine
-  from sqlalchemy.engine import Engine
-  from IPython.display import display, clear_output
-  class SelectMultipleOrdered (ipywidgets.VBox):
-    # essentially like ipywidgets.SelectMultiple, but preserves order of selection
-    def __init__(self,value=(),**ka):
-      w_sel = self.selector = ipywidgets.SelectMultiple(**ka)
-      w_display = ipywidgets.Text(disabled=True)
-      w_display.layout.width = w_sel.layout.width
-      super().__init__(children=(w_sel,w_display))
-      self.add_traits(value=traitlets.Tuple())
-      def g(L):
-        L = set(L)
-        for x in self.value:
-          try: L.remove(x)
-          except KeyError: continue
-          else: yield x
-        yield from L
-      def update_sel(c): self.value = tuple(g(c.new))
-      w_sel.observe(update_sel,'value')
-      def update(c):
-        if set(c.new)!= set(w_sel.value): w_sel.value = c.new
-        w_display.value = ';'.join(map(str,c.new))
-      self.observe(update,'value')
-      self.value = tuple(value)
-  def size(table): # returns the size of .table.
-    return engine.execute(select([func.count()]).select_from(table)).fetchone()[0]
-  def sample(columns,nsample,offset,order=None): # returns .nsample. row samples of .columns. ordered by .order.
-    sql = select(columns,limit=nsample,offset=offset,order_by=(order or columns))
-    r = read_sql_query(sql,engine)
-    r.index = list(range(offset,offset+min(nsample,len(r))))
-    return r
-  if isinstance(spec,MetaData):
-    meta = spec
-    if not meta.is_bound(): raise ValueError('Argument of type {} must be bound to an existing engine'.format(MetaData))
-    no_table_msg = '{} object has no table (perhaps it was not reflected)'.format(MetaData)
-  else:
-    if isinstance(spec,str): spec = create_engine(spec)
-    elif not isinstance(spec,Engine):
-      raise TypeError('Expected {}|{}|{}; Found {}'.format(str,Engine,MetaData,type(spec)))
-    meta = MetaData(bind=spec)
-    meta.reflect(views=True)
-    no_table_msg = 'Database is empty'
-  if not meta.tables: return no_table_msg
-  config = exploredb_scanconfig(meta.tables)
-  engine = meta.bind
-  # widget creation
-  w_title = ipywidgets.HTML('<div style="{}">{}</div>'.format(exploredb.style['title'],engine))
-  w_table = ipywidgets.Select(options=sorted(meta.tables.items()),layout=dict(width='10cm'))
-  w_size = ipywidgets.Text(value='',tooltip='Number of rows',disabled=True,layout=dict(width='2cm'))
-  w_schema = ipywidgets.HTML()
-  w_scol = SelectMultipleOrdered(layout=dict(flex_flow='column'))
-  w_ordr = SelectMultipleOrdered(layout=dict(flex_flow='column'))
-  w_detail = ipywidgets.Tab(children=(w_schema,w_scol,w_ordr),layout=dict(display='none'))
-  for i,label in enumerate(('Column definitions','Column selection','Column ordering')): w_detail.set_title(i,label)
-  w_detailb = ipywidgets.Button(tooltip='toggle detail display (red border means some columns are hidden)',icon='info-circle',layout=dict(width='.4cm',padding='0'))
-  w_reloadb = ipywidgets.Button(tooltip='reload table',icon='refresh',layout=dict(width='.4cm',padding='0'))
-  w_offset = ipywidgets.IntSlider(description='offset',min=0,step=1,layout=dict(width='12cm'))
-  w_nsample = ipywidgets.IntSlider(description='nsample',min=1,max=50,step=1,layout=dict(width='10cm'))
-  w_out = ipywidgets.Output()
-  # widget updaters
-  active = True
-  cfg = None
-  def show():
-    with w_out:
-      clear_output(wait=True)
-      display(sample(cfg.selected,cfg.nsample,cfg.offset,cfg.order))
-  def set_table(c=None):
-    nonlocal active,cfg
-    cfg = config[(w_table.value if c is None else c.new).name]
-    sz = size(w_table.value)
-    w_scol.selector.rows = w_ordr.selector.rows = min(len(cfg.options),20)
-    w_size.value = str(sz)
-    w_schema.value = cfg.schema
-    active = False
-    try:
-      w_scol.selector.options = w_ordr.selector.options = cfg.options
-      w_scol.value, w_ordr.value = cfg.selected, cfg.order
-      w_offset.max = max(sz-1,0)
-      w_offset.value = cfg.offset
-      w_nsample.value = cfg.nsample
-    finally: active = True
-    show()
-  def set_scol(c):
-    w_detailb.layout.border = 'none' if len(c.new) == len(cfg.options) else 'thin solid red'
-    if active: cfg.selected = c.new; show()
-  def set_ordr(c):
-    if active: cfg.order = c.new; show()
-  def set_offset(c):
-    if active: cfg.offset = c.new; show()
-  def set_nsample(c):
-    if active: cfg.nsample = c.new; show()
-  def toggledetail(inv={'inline':'none','none':'inline'}): w_detail.layout.display = inv[w_detail.layout.display]
-  # callback attachments
-  w_detailb.on_click((lambda b: toggledetail()))
-  w_reloadb.on_click((lambda b: show()))
-  w_table.observe(set_table,'value')
-  w_offset.observe(set_offset,'value')
-  w_nsample.observe(set_nsample,'value')
-  w_scol.observe(set_scol,'value')
-  w_ordr.observe(set_ordr,'value')
-  # initialisation
-  set_table()
-  return ipywidgets.VBox(children=(w_title,ipywidgets.HBox(children=(w_table,w_size,w_detailb,w_reloadb)),w_detail,ipywidgets.HBox(children=(w_offset,w_nsample,)),w_out))
-
-exploredb.style = dict(
-  schema='''
-#toplevel { border-collapse: collapse; }
-#toplevel > thead { display:block; }
-#toplevel > tbody { display: block; max-height: 10cm; overflow-y: auto; padding-right: 10cm; }
-#toplevel > thead > tr > td { padding: 1mm; text-align: center; font-weight: bold; color: white; background-color: navy; border: thin solid white; }
-#toplevel > tbody > tr > td { padding: 1mm; border: thin solid blue; overflow: hidden; }
-#toplevel > tbody > tr > td > span { position: relative; background-color: white; white-space: nowrap; color:black; z-index: 0; }
-#toplevel > tbody > tr > td:hover { overflow: visible; }
-#toplevel > tbody > tr > td:hover > span { color:purple; z-index: 1; }
-  ''',
-  title='background-color:gray; color:white; font-weight:bold; padding:.2cm',
-)
-
-#--------------------------------------------------------------------------------------------------
-def exploredb_scanconfig(tables):
-#--------------------------------------------------------------------------------------------------
-  class Tconf:
-    __slots__ = 'options','schema','selected','order','offset','nsample'
-    def __init__(s,table,schemag=None,offset=0,nsample=5):
-      s.options = [(c.name,c) for c in table.columns]
-      s.schema = schemag(table.columns)
-      s.selected = tuple(table.columns)
-      s.order = tuple(table.primary_key)
-      s.offset = offset
-      s.nsample = nsample
-  fstr = (lambda x: x)
-  fbool = (lambda x: 'x' if x else '')
-  fany = (lambda x: str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else '')
-  def row(c):
-    def val(x):
-      try: return x[1](getattr(c,x[0]))
-      except: return '*'
-    return '<tr>{}</tr>'.format(''.join('<td class="field-{}"><span>{}</span></td>'.format(x[0],val(x)) for x in schema))
-  schema = ( # this is the schema of schemas!
-    ('name',fstr,'name',4),
-    ('type',fany,'type',4),
-    ('primary_key',fbool,'P',.5),
-    ('nullable',fbool,'N',.5),
-    ('unique',fbool,'U',.5),
-    ('default',fany,'default',4),
-    ('constraints',fany,'constraints',4),
-    ('foreign_keys',fany,'foreign',4),
-  )
-  style = exploredb.style['schema']+'\n'.join('#toplevel td.field-{0} {{ min-width:{3}cm; max-width:{3}cm; }}'.format(*x) for x in schema)
-  thead = '<tr>{}</tr>'.format(''.join('<td title="{0}" class="field-{0}">{2}</td>'.format(*x) for x in schema))
-  tid = unid('exploredb')
-  pre = '<div><style scoped="scoped">{}</style><table id="{}"><thead>{}</thead><tbody>'.format(style.replace('#toplevel','#'+tid),tid,thead)
-  suf = '</tbody></table></div>'
-  return dict((name,Tconf(t,schemag=(lambda cols: pre+''.join(map(row,cols))+suf))) for name,t in tables.items())
 
 #==================================================================================================
 def html_parlist(html,La,Lka,opening=(),closing=(),style='padding: 5px'):

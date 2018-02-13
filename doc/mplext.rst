@@ -1,5 +1,5 @@
-:mod:`mplext` --- Some matplotlib utilities
-===========================================
+:mod:`PYTOOLS.mplext` --- Some matplotlib utilities
+===================================================
 
 This module provides utilities for matplotlib.
 
@@ -22,7 +22,7 @@ Typical output:
 Available types and functions
 -----------------------------
 
-.. automodule:: myutil.mplext
+.. automodule:: PYTOOLS.mplext
    :members:
    :member-order: bysource
    :show-inheritance:

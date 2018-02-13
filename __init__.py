@@ -151,87 +151,6 @@ Returns an object obtained from an environment variable whose name is derived fr
   else: return dflt
 
 #==================================================================================================
-class HasTraitsWidgetPlugin:
-  r"""
-Instances of this class must normally also be instances of :class:`traitlets.HasTraits`. The mixin adds an attribute :attr:`widget` which is an :class:`ipywidgets.Widget` that displays a configurator of the traits. The construction of the widget is directed by metadata which must be associated to each trait under key ``widget``. This is either a callable, which produces a widget for that trait, or a :class:`dict`, passed as keyword arguments to a widget guesser. Guessing is based on the trait class. The overall widget can be further customised using the following attributes:
-
-.. attribute buttons,header,footer::
-
-   These are :class:`ipywidgets.Widget` instances which can be modified freely. The :attr:`buttons` widget appears immediately after the trait widgets, followed by the :attr:`footer` widget. The :attr:`header` widget appears immediately before the trait widgets. The header and footer are vertically layed-out, the buttons are horizontally layed-out. A close and reset buttons are present by default.
-
-.. attribute add_button::
-
-   A facility function with one positional parameter *callback* (a callable with no paramter) which adds a button associated with this callback. Keyword parameters are passed to the button constructor. If *callback* is a :class:`dict` instead of a callable, it is treated as the function which resets all the traits according to that dict.
-  """
-#==================================================================================================
-  widget_layout = dict(width='15cm')
-  label_layout = dict(width='2cm',padding='0cm',align_self='flex-start')
-  button_layout = dict(padding='0cm')
-  rbutton_layout = dict(width='0.5cm',padding='0cm')
-
-#--------------------------------------------------------------------------------------------------
-  @ondemand
-  def widget(self):
-#--------------------------------------------------------------------------------------------------
-    import ipywidgets, traitlets
-    def numeric(t,ws,slider,text):
-      from math import isfinite
-      vmin = ws.pop('min',None)
-      if vmin is None and (t.min is not None and isfinite(t.min)): vmin = t.min
-      vmax = ws.pop('max',None)
-      if vmax is None and (t.max is not None and isfinite(t.max)): vmax = t.max
-      return slider(min=vmin,max=vmax,**ws) if vmin is not None and vmax is not None else text(**ws)
-    def selector(t,ws):
-      opt = ws.get('options')
-      ws['options'] = [(str(v),v) for v in t.values] if opt is None else list(zip(opt,t.values))
-      return ipywidgets.Select(**ws)
-    def updw(w,x): w.value = x
-    def upda(name,w,x):
-      try: setattr(self,name,x)
-      except: w.value = getattr(self,name)
-    def row(name,t):
-      val = getattr(self,name)
-      ws = t.metadata.get('widget',{})
-      if isinstance(ws,dict):
-        ws = dict(ws)
-        if isinstance(t,traitlets.Integer): w = numeric(t,ws,ipywidgets.IntSlider,ipywidgets.IntText)
-        elif isinstance(t,traitlets.Float): w = numeric(t,ws,ipywidgets.FloatSlider,ipywidgets.FloatText)
-        elif isinstance(t,traitlets.Bool): w = ipywidgets.Checkbox(**ws)
-        elif isinstance(t,traitlets.Enum): w = selector(t,ws)
-        else: raise Exception('Cannot guess widget')
-      else: w = ws()
-      rbutton = ipywidgets.Button(icon='undo',tooltip='Reset to default',layout=rbutton_layout)
-      label = ipywidgets.HTML('<span title="{}">{}</span>'.format(str(t.help),name),layout=label_layout)
-      rbutton.on_click(lambda but,w=w,x=val: updw(w,x))
-      w.observe((lambda c,name=name,w=w: upda(name,w,c.new)),'value')
-      self.observe((lambda c,w=w: updw(w,c.new)),name)
-      w.value = val
-      return (name,val),ipywidgets.HBox(children=(rbutton,label,w))
-    def add_button(callback,**ka):
-      def reset(data):
-        for name,v in data.items(): setattr(self,name,v)
-      if isinstance(callback,dict): callback = (lambda data=callback: reset(data))
-      layout = collections.ChainMap(ka.pop('layout',{}),self.button_layout)
-      b = ipywidgets.Button(layout=ipywidgets.Layout(**layout),**ka)
-      b.on_click(lambda b: callback())
-      w.buttons.children += (b,)
-    def close():
-      w.close()
-      del self.widget
-    rbutton_layout = ipywidgets.Layout(**self.rbutton_layout)
-    label_layout = ipywidgets.Layout(**self.label_layout)
-    D,L = zip(*(row(name,t) for name,t in self.traits().items()))
-    w = self.widget_ = ipywidgets.VBox()
-    w.add_button = add_button
-    w.buttons = ipywidgets.HBox()
-    add_button(close,icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
-    add_button(dict(D),icon='undo',description='reset',layout=dict(width='1.8cm'))
-    w.header = ipywidgets.VBox()
-    w.footer = ipywidgets.VBox()
-    w.children = [w.header]+list(L)+[w.buttons,w.footer]
-    return w
-
-#==================================================================================================
 class HtmlPlugin:
   r"""
 Instances of this class have an ipython HTML representation. The representation is by default simply the string representation of the instance (enclosed in a ``span`` element), but can be customised if it supports method :meth:`as_html`.
@@ -274,6 +193,7 @@ produces (up to some attributes):
    </table>
 
 which displays roughly as:
+
    +----+----------------------+
    | **abc**\[\|?1\|?5\|?7\|\] |
    +----+----------------------+
@@ -916,10 +836,10 @@ def size_fmt(size,binary=True,precision=4,suffix='B'):
 :type binary: :class:`bool`
 :param precision: number of digits displayed (at least 4)
 :type precision: :class:`int`
-  """ """
+
 Returns the representation of *size* with IEC prefix. Each prefix is *K* times the previous one for some constant *K* which depends on the convention: *K* =1024 with the binary convention (marked with an ``i`` after the prefix); *K* =1000 with the decimal convention. Example::
 
-   print(size_fmt(2**30), size_fmt(5300), size_fmt(5300,binary=False), size_fmt(42897.3,binary=False,suffix='m')
+   print(size_fmt(2**30), size_fmt(5300), size_fmt(5300,binary=False), size_fmt(42897.3,binary=False,suffix='m'))
    #> 1GiB 5.176KiB 5.3KB 42.9Km
   """
 #==================================================================================================
@@ -942,8 +862,8 @@ def time_fmt(time,precision=2):
 
 Returns the representation of *time* in one of days,hours,minutes,seconds,milli-seconds (depending on magnitude). Example::
 
-   print(time_fmt(100000,4),time_fmt(4238.45),time_fmt(5.35,0)),time_fmt(.932)
-   #> 1.1574day 1.18hr 5sec
+   print(time_fmt(100000,4),time_fmt(4238.45),time_fmt(5.35,0),time_fmt(.932476))
+   #> 1.1574day 1.18hr 5sec 932msec
   """
 #==================================================================================================
   fmt = '{{:.{}f}}'.format(precision).format

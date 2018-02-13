@@ -18,7 +18,7 @@ def fordoc(module):
     for f in list(pdir.iterdir()):
       if f.is_file(): f.unlink()
       else: rmtree(str(f))
-  mod = importlib.import_module('myutil.demo.'+module)
+  mod = importlib.import_module('PYTOOLS.demo.'+module)
   mod.automatic = True
   Thread(target=clock,args=(module,os.fdopen(os.dup(1),'w'),),daemon=True).start()
   with pout.open('w') as v:

@@ -5,7 +5,7 @@
 
 if __name__=='__main__':
   import sys,os
-  from myutil.demo.quickui import demo
+  from PYTOOLS.demo.quickui import demo # properly import this module
   demo()
   sys.exit(0)
 
@@ -49,22 +49,22 @@ class Demo (ExperimentUI):
 
     # setting up the experiment: each time the "Relaunch" button is clicked
     # the configuration *c* is invoked and its result *r* displayed in the main widget *wr*.
-    super(Demo,self).setup(c,lambda r: wr.setText(str(r)))
+    super().setup(c,lambda r: wr.setText(str(r)))
 
 #--------------------------------------------------------------------------------------------------
 
 def demo():
+  automatic = True
   with startup() as app:
     w = Demo()
     w.main.setFixedWidth(500)
     if automatic: autoplay(w)
 
-def autoplay(w):
-  from threading import Timer; from itertools import count
-  def save(wid=w.main.winId(),W=w.main,DIR=Path(__file__).resolve().parent,cnt=count(1)):
-    QtGui.QGuiApplication.primaryScreen().grabWindow(wid,0,0,W.width(),W.height()).save(str(DIR/'quickui{}.png'.format(next(cnt))))
-  actionSave = QtWidgets.QAction(w.main)
-  actionSave.triggered.connect(save)
-  for t,a in (.5,actionSave),(1.,w.actionRelaunch),(1.5,actionSave),(2.,w.actionQuit):
-    Timer(t,a.trigger).start()
-
+def autoplay(w,DIR=Path(__file__).resolve().parent):
+  from itertools import count; cnt = count(1)
+  def snap():
+    QtGui.QGuiApplication.primaryScreen().grabWindow(w.main.winId()).save(str(DIR/'quickui{}.png'.format(next(cnt))),'PNG')
+  actionSnap = QtWidgets.QAction(w.main); actionSnap.triggered.connect(snap)
+  #actionSnap.setText('Snap'); w.toolbar.addAction(actionSnap); return
+  from threading import Timer
+  for t,a in (.5,actionSnap),(1.,w.actionRelaunch),(1.5,actionSnap),(2.,w.actionQuit): Timer(t,a.trigger).start()

@@ -5,7 +5,7 @@
 
 if __name__=='__main__':
   import sys
-  from myutil.demo.monitor import demo
+  from PYTOOLS.demo.monitor import demo # properly import this module
   demo()
   sys.exit(0)
 

@@ -5,7 +5,7 @@
 
 if __name__=='__main__':
   import sys
-  from myutil.demo.mplext import demo
+  from PYTOOLS.demo.mplext import demo # properly import this module
   demo()
   sys.exit(0)
 
@@ -82,4 +82,3 @@ def Dnormal(mu=0.,sigma=1.): # the normal distribution
     pdf=lambda x,K=sigma*sqrt(2*pi): exp(-square(x-mu)/2)/K,
     cdf=lambda x,K=sigma*sqrt(2): .5*(1+erf((x-mu)/K)),
   )
-

@@ -1,9 +1,16 @@
+# File:                 ipywidgets.py
+# Creation date:        2018-02-01
+# Contributors:         Jean-Marc Andreoli
+# Language:             python
+# Purpose:              Utilities for the ipywidgets package
+#
+
 import traitlets
-from ipywidgets import IntSlider, FloatSlider, Text, HTML, IntText, FloatText, Dropdown, Select, SelectMultiple, Button, Output, Tab, Accordion, VBox, HBox, Box, Layout
+from ipywidgets import IntSlider, FloatSlider, Text, HTML, IntText, FloatText, BoundedIntText, BoundedFloatText, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, Accordion, VBox, HBox, Box, Layout
 from . import ondemand, unid
 
 #==================================================================================================
-def seq_browse(D,start=1,pgsize=10):
+def seq_browser(D,start=1,pgsize=10):
   r"""
 :param D: a sequence object
 :type D: :class:`Sequence`
@@ -12,7 +19,7 @@ def seq_browse(D,start=1,pgsize=10):
 :param pgsize: the size of the pages
 :type pgsize: :class:`int`
 
-Returns an :class:`ipywidgets.Widget` instance to browse a sequence object *D* page per page in IPython.
+Returns an :class:`ipywidgets.Widget` to browse a sequence object *D* page per page in IPython.
   """
 #==================================================================================================
   from IPython.display import display, clear_output
@@ -25,14 +32,14 @@ Returns an :class:`ipywidgets.Widget` instance to browse a sequence object *D* p
   w_out = Output()
   w_closeb = Button(icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
   w_pager = IntSlider(description='page',value=start,min=1,max=P,layout=dict(width='20cm'))
-  w = VBox(children=(HBox(children=(w_closeb,w_pager)),w_out))
+  w_main = VBox(children=(HBox(children=(w_closeb,w_pager)),w_out))
   w_pager.observe((lambda c: show(c.new)),'value')
-  w_closeb.on_click(lambda b: w.close())
+  w_closeb.on_click(lambda b: w_main.close())
   show(w_pager.value)
-  return w
+  return w_main
 
 #==================================================================================================
-def file_browse(path,start=None,step=50,track=True,context=(10,5),**ka):
+def file_browser(path,start=None,step=50,track=True,context=(10,5),**ka):
   r"""
 :param path: a path to an existing file
 :type path: :class:`Union[str,pathlib.Path]`
@@ -134,7 +141,7 @@ Returns an :class:`ipywidgets.Widget` to browse the file at *path*, possibly whi
   return w_main
 
 #==================================================================================================
-def db_browse(spec):
+def db_browser(spec):
   r"""
 :param spec: an sqlalchemy url or engine or metadata structure, defining the database to explore
 :type spec: :class:`Union[str,sqlalchemy.engine.Engine,sqlalchemy.sql.schema.MetaData]`
@@ -166,10 +173,10 @@ Returns an :class:`ipywidgets.Widget` to explore a database specified by *spec*.
     meta.reflect(views=True)
     no_table_msg = 'Database is empty'
   if not meta.tables: return no_table_msg
-  config = db_browse_initconfig(meta.tables)
+  config = db_browser_initconfig(meta.tables)
   engine = meta.bind
   # widget creation
-  w_title = HTML('<div style="{}">{}</div>'.format(db_browse.style['title'],engine))
+  w_title = HTML('<div style="{}">{}</div>'.format(db_browser.style['title'],engine))
   w_table = Select(options=sorted(meta.tables.items()),layout=dict(width='10cm'))
   w_size = Text(value='',tooltip='Number of rows',disabled=True,layout=dict(width='2cm'))
   w_closeb = Button(icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
@@ -230,7 +237,7 @@ Returns an :class:`ipywidgets.Widget` to explore a database specified by *spec*.
   set_table()
   return w_main
 
-db_browse.style = dict(
+db_browser.style = dict(
   schema='''
 #toplevel { border-collapse: collapse; }
 #toplevel > thead { display:block; }
@@ -245,7 +252,7 @@ db_browse.style = dict(
 )
 
 #--------------------------------------------------------------------------------------------------
-def db_browse_initconfig(tables):
+def db_browser_initconfig(tables):
 #--------------------------------------------------------------------------------------------------
   class Tconf:
     __slots__ = 'options','schema','selected','order','offset','nsample'
@@ -274,27 +281,107 @@ def db_browse_initconfig(tables):
     ('constraints',fany,'constraints',4),
     ('foreign_keys',fany,'foreign',4),
   )
-  style = db_browse.style['schema']+'\n'.join('#toplevel td.field-{0} {{ min-width:{3}cm; max-width:{3}cm; }}'.format(*x) for x in schema)
+  style = db_browser.style['schema']+'\n'.join('#toplevel td.field-{0} {{ min-width:{3}cm; max-width:{3}cm; }}'.format(*x) for x in schema)
   thead = '<tr>{}</tr>'.format(''.join('<td title="{0}" class="field-{0}">{2}</td>'.format(*x) for x in schema))
-  tid = unid('db_browse')
+  tid = unid('db_browser')
   pre = '<div><style scoped="scoped">{}</style><table id="{}"><thead>{}</thead><tbody>'.format(style.replace('#toplevel','#'+tid),tid,thead)
   suf = '</tbody></table></div>'
   return dict((name,Tconf(t,schemag=(lambda cols: pre+''.join(map(row,cols))+suf))) for name,t in tables.items())
 
 #==================================================================================================
+class HasTraitsConfigurator(VBox):
+  r"""
+:param target: a structure with traits
+:type target: :class:`traitlets.HasTraits`
+
+An instance of this class is an :class:`ipywidgets.Widget` for configuring a traitlets structure. The construction of the widget is directed by metadata which must be associated to each trait in *target* under the key ``widget``. This is either a callable, which produces a widget for that trait, or a :class:`dict`, passed as keyword arguments to a widget guesser. Guessing is based on the trait class. The configurator can be further customised using the following attributes:
+
+.. attribute:: toolbar,header,footer
+
+   These are :class:`ipywidgets.Widget` instances which can be modified freely. The :attr:`toolbar` widget appears immediately after the trait widgets, followed by the :attr:`footer` widget. The :attr:`header` widget appears immediately before the trait widgets. The header and footer are vertically layed-out, the toolbar is horizontally layed-out. A close and reset buttons are present in the toolbar by default.
+  """
+#==================================================================================================
+  main_layout = dict(width='15cm')
+  label_layout = dict(width='2cm',padding='0cm',align_self='flex-start')
+  button_layout = dict(padding='0cm')
+  buttons = None
+  header = None
+  footer = None
+
+  def __init__(self,target,**ka):
+    from functools import partial
+    def g_numeric(t,ws,typ):
+      slider = {int:IntSlider,float:FloatSlider}
+      btext = {int:BoundedIntText,float:BoundedFloatText}
+      text = {int:IntText,float:FloatText}
+      from math import isfinite
+      vmin = ws.pop('min',None)
+      if vmin is None and (t.min is not None and isfinite(t.min)): vmin = t.min
+      vmax = ws.pop('max',None)
+      if vmax is None and (t.max is not None and isfinite(t.max)): vmax = t.max
+      m = ws.pop('mode','slider')
+      return dict(slider=slider,text=btext)[m][typ](min=vmin,max=vmax,**ws) if vmin is not None and vmax is not None else text[typ](**ws)
+    def g_selector(t,ws):
+      mode = dict(select=Select,dropdown=Dropdown)
+      opt = ws.get('options')
+      ws['options'] = [(str(v),v) for v in t.values] if opt is None else list(zip(opt,t.values))
+      m = ws.pop('mode','select')
+      return mode[m](**ws)
+    def g_mselector(t,ws):
+      opt = ws.get('options')
+      ws['options'] = [(str(v),v) for v in t._trait.values] if opt is None else list(zip(opt,t._trait.values))
+      ordr = ws.pop('ordered',False)
+      return (SelectMultipleOrdered if ordr else SelectMultiple)(**ws)
+    def updw(w,x): w.value = x
+    def upda(name,w,x):
+      try: setattr(target,name,x)
+      except: w.value = getattr(target,name)
+    def rows(D,label_layout=Layout(**self.label_layout)):
+      for name,t in target.traits().items():
+        val = getattr(target,name)
+        ws = t.metadata.get('widget',{})
+        if isinstance(ws,dict):
+          ws = dict(ws)
+          if isinstance(t,traitlets.Integer): w = g_numeric(t,ws,int)
+          elif isinstance(t,traitlets.Float): w = g_numeric(t,ws,float)
+          elif isinstance(t,traitlets.Bool): w = Checkbox(**ws)
+          elif isinstance(t,traitlets.Enum): w = g_selector(t,ws)
+          elif isinstance(t,traitlets.List) and isinstance(t._trait,traitlets.Enum): w = g_mselector(t,ws)
+          else: raise Exception('Cannot guess widget')
+        else: w = ws()
+        for k,v in self.main_layout.items(): setattr(w.layout,k,v)
+        rbutton = Button(icon='undo',tooltip='Reset to default',layout=dict(width='0.5cm',padding='0cm'))
+        label = HTML('<span title="{}">{}</span>'.format(str(t.help),name),layout=label_layout)
+        rbutton.on_click(lambda but,w=w,x=val: updw(w,x))
+        w.observe((lambda c,name=name,w=w: upda(name,w,c.new)),'value')
+        target.observe((lambda c,w=w: updw(w,c.new)),name)
+        w.value = D[name] = val
+        yield HBox(children=(rbutton,label,w))
+    def reset(data):
+      for k,v in data.items(): setattr(target,k,v)
+    super().__init__(**ka)
+    initial = {}
+    self.toolbar = tb = Toolbar(**self.button_layout)
+    tb.add(self.close,icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
+    tb.add(partial(reset,initial),icon='undo',description='reset',layout=dict(width='1.8cm'))
+    self.header = VBox()
+    self.footer = VBox()
+    self.children = (self.header,)+tuple(rows(initial))+(self.toolbar,self.footer)
+
+#==================================================================================================
 class SelectMultipleOrdered (VBox):
   r"""
-Essentially like :class:`ipywidgets.SelectMultiple` but preserves order of selection.
+Essentially like :class:`SelectMultiple` but preserves order of selection.
   """
 #==================================================================================================
   options = traitlets.Any()
   rows = traitlets.Integer(min=0)
+  value = traitlets.Tuple()
   def __init__(self,value=(),**ka):
     w_sel = SelectMultiple(**ka)
     w_display = Text(disabled=True)
     w_display.layout.width = w_sel.layout.width
     super().__init__(children=(w_sel,w_display))
-    self.add_traits(value=traitlets.Tuple())
     def g(L):
       L = set(L)
       for x in self.value:
@@ -315,14 +402,16 @@ Essentially like :class:`ipywidgets.SelectMultiple` but preserves order of selec
 #==================================================================================================
 class Toolbar(HBox):
   r"""
-An :class:`ipywidgets.Widget` instance representing a toolbar of buttons. Keyword arguments in the toolbar constructor are used as default values for all the buttons created. To create a new button, use method :meth:`add` with one positional argument: *callback* (a callable with no argument to invoke when the action is activated). If keyword arguments are present, they are passed to the button constructor. The button widget is returned.
+An instance of this class is a widget toolbar of buttons. Keyword arguments in the toolbar constructor are used as default layout values for all the buttons created. To create a new button, use method :meth:`add` with one positional argument: *callback* (a callable with no argument to invoke when the action is activated). If keyword arguments are present, they are passed to the button constructor. The button widget is returned.
   """
 #==================================================================================================
   button_layout = dict(padding='0cm')
   def __init__(self,**ka):
     from collections import ChainMap
+    super().__init__()
     self.b_layout = ChainMap(ka,self.button_layout)
   def add(self,callback,**ka):
+    from collections import ChainMap
     layout = ChainMap(ka.pop('layout',{}),self.b_layout)
     b = Button(layout=Layout(**layout),**ka)
     b.on_click(lambda b: callback())

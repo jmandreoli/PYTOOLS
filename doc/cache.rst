@@ -1,5 +1,5 @@
-:mod:`cache` --- A persistent cache mechanism
-=============================================
+:mod:`PYTOOLS.cache` --- A persistent cache mechanism
+=====================================================
 
 This module provides basic persistent cache functionalities.
 
@@ -80,7 +80,7 @@ In both cases, the same key-value pairs are returned. There is an important diff
 Available types and functions
 -----------------------------
 
-.. automodule:: myutil.cache
+.. automodule:: PYTOOLS.cache
    :members:
    :member-order: bysource
    :show-inheritance:

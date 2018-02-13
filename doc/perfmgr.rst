@@ -1,5 +1,5 @@
-:mod:`perfmgr` --- A manager of performance results
-===================================================
+:mod:`PYTOOLS.perfmgr` --- A manager of performance results
+===========================================================
 
 This module provides a simple tool to record (machine execution) performance results.
 
@@ -22,8 +22,7 @@ Typical output:
 Available types and functions
 -----------------------------
 
-.. automodule:: myutil.perfmgr
+.. automodule:: PYTOOLS.perfmgr
    :members:
    :member-order: bysource
    :show-inheritance:
-

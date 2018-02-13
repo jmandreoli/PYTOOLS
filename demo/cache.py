@@ -5,7 +5,7 @@
 
 if __name__=='__main__':
   import sys
-  from myutil.demo.cache import demo # properly import this module
+  from PYTOOLS.demo.cache import demo # properly import this module
   demo(*sys.argv[1:])
   sys.exit(0)
 

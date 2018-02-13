@@ -1,5 +1,5 @@
-:mod:`monitor` --- Generic loop monitoring
-==========================================
+:mod:`PYTOOLS.monitor` --- Generic loop monitoring
+==================================================
 
 This module provides basic functionalities to monitor loops.
 
@@ -28,8 +28,7 @@ Typical output:
 Available types and functions
 -----------------------------
 
-.. automodule:: myutil.monitor
+.. automodule:: PYTOOLS.monitor
    :members:
    :member-order: bysource
    :show-inheritance:
-

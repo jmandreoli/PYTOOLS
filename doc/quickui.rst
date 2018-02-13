@@ -1,5 +1,5 @@
-:mod:`quickui` --- Quick QT5 UI design
-======================================
+:mod:`PYTOOLS.quickui` --- Quick QT5 UI design
+==============================================
 
 This module provides basic utilities to build simple interfaces with Qt5.
 
@@ -11,7 +11,7 @@ The following piece of code illustrates the use of this module.
 .. literalinclude:: ../demo/quickui.py
    :language: python
    :tab-width: 2
-   
+
 Typical output:
 
 .. |output1| image:: ../demo/quickui1.png
@@ -26,8 +26,7 @@ Typical output:
 Available types and functions
 -----------------------------
 
-.. automodule:: myutil.quickui
+.. automodule:: PYTOOLS.quickui
    :members:
    :member-order: bysource
    :show-inheritance:
-

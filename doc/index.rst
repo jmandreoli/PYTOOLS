@@ -12,6 +12,7 @@ Contents:
    :maxdepth: 2
 
    cache.rst
+   ipywidgets.rst
    quickui.rst
    mplext.rst
    monitor.rst
@@ -23,7 +24,7 @@ Contents:
 Available types and functions
 -----------------------------
 
-.. automodule:: myutil
+.. automodule:: PYTOOLS
    :members:
    :member-order: bysource
    :show-inheritance:
@@ -34,4 +35,3 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
-

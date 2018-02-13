@@ -12,8 +12,8 @@
 # All configuration values have a default; values that are commented out
 # serve to show the default.
 
-import sys,os
-sys.path.insert(0,'/home/andreoli/src/distrib')
+import sys,pathlib
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent.parent.parent))
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the

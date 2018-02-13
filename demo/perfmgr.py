@@ -5,7 +5,7 @@
 
 if __name__=='__main__':
   import sys
-  from myutil.demo.perfmgr import demo
+  from PYTOOLS.demo.perfmgr import demo # properly import this module
   demo(*sys.argv[1:])
   sys.exit(0)
 

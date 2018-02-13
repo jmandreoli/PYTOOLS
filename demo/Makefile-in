@@ -1,8 +1,7 @@
 PYTHON :=
-PYTHONPATH :=
 TARGET := cache.out monitor.out mplext.out quickui.out perfmgr.out
 
 all: ${TARGET}
 
 %.out: %.py
-	@export PYTHONPATH=${PYTHONPATH} ; ${PYTHON} make.py $(patsubst %.py,%,$<)
+	@export PYTHONPATH=../.. ; ${PYTHON} make.py $(patsubst %.py,%,$<)

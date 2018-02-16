@@ -6,7 +6,7 @@
 #
 
 import traitlets
-from ipywidgets import IntSlider, FloatSlider, Text, HTML, IntText, FloatText, BoundedIntText, BoundedFloatText, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, Accordion, VBox, HBox, Box, Layout
+from ipywidgets import IntSlider, FloatSlider, Text, HTML, IntText, FloatText, BoundedIntText, BoundedFloatText, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, Accordion, VBox, HBox, Box, Layout, Valid
 from . import ondemand, unid
 
 #==================================================================================================
@@ -180,7 +180,7 @@ Returns an :class:`ipywidgets.Widget` to explore a database specified by *spec*.
   w_table = Select(options=sorted(meta.tables.items()),layout=dict(width='10cm'))
   w_size = Text(value='',tooltip='Number of rows',disabled=True,layout=dict(width='2cm'))
   w_closeb = Button(icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
-  w_schema = HTML()
+  w_schema = VBox()
   w_scol = SelectMultipleOrdered(layout=dict(flex_flow='column'))
   w_ordr = SelectMultipleOrdered(layout=dict(flex_flow='column'))
   w_detail = Tab(children=(w_schema,w_scol,w_ordr),layout=dict(display='none'))
@@ -204,7 +204,7 @@ Returns an :class:`ipywidgets.Widget` to explore a database specified by *spec*.
     sz = size(w_table.value)
     w_scol.rows = w_ordr.rows = min(len(cfg.options),20)
     w_size.value = str(sz)
-    w_schema.value = cfg.schema
+    w_schema.children = cfg.schema
     active = False
     try:
       w_scol.options = w_ordr.options = cfg.options
@@ -238,16 +238,7 @@ Returns an :class:`ipywidgets.Widget` to explore a database specified by *spec*.
   return w_main
 
 db_browser.style = dict(
-  schema='''
-#toplevel { border-collapse: collapse; }
-#toplevel > thead { display:block; }
-#toplevel > tbody { display: block; max-height: 10cm; overflow-y: auto; padding-right: 10cm; }
-#toplevel > thead > tr > td { padding: 1mm; text-align: center; font-weight: bold; color: white; background-color: navy; border: thin solid white; }
-#toplevel > tbody > tr > td { padding: 1mm; border: thin solid blue; overflow: hidden; }
-#toplevel > tbody > tr > td > span { position: relative; background-color: white; white-space: nowrap; color:black; z-index: 0; }
-#toplevel > tbody > tr > td:hover { overflow: visible; }
-#toplevel > tbody > tr > td:hover > span { color:purple; z-index: 1; }
-  ''',
+  schema='background-color: navy; color: white; font-size: x-small; border: thin solid white; text-align: center;',
   title='background-color:gray; color:white; font-weight:bold; padding:.2cm',
 )
 
@@ -258,115 +249,118 @@ def db_browser_initconfig(tables):
     __slots__ = 'options','schema','selected','order','offset','nsample'
     def __init__(s,table,schemag=None,offset=0,nsample=5):
       s.options = [(c.name,c) for c in table.columns]
-      s.schema = schemag(table.columns)
+      s.schema = list(schemag(table.columns))
       s.selected = tuple(table.columns)
       s.order = tuple(table.primary_key)
       s.offset = offset
       s.nsample = nsample
-  fstr = (lambda x: x)
-  fbool = (lambda x: 'x' if x else '')
-  fany = (lambda x: str(x).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') if x else '')
-  def row(c):
-    def val(x):
-      try: return x[1](getattr(c,x[0]))
-      except: return '*'
-    return '<tr>{}</tr>'.format(''.join('<td class="field-{}"><span>{}</span></td>'.format(x[0],val(x)) for x in schema))
+  wstr = (lambda x: Text(value=x))
+  wbool = (lambda x: Checkbox(value=x,style=dict(description_width='initial')))
+  wany = (lambda x: Text(value=str(x)))
   schema = ( # this is the schema of schemas!
-    ('name',fstr,'name',4),
-    ('type',fany,'type',4),
-    ('primary_key',fbool,'P',.5),
-    ('nullable',fbool,'N',.5),
-    ('unique',fbool,'U',.5),
-    ('default',fany,'default',4),
-    ('constraints',fany,'constraints',4),
-    ('foreign_keys',fany,'foreign',4),
+    ('name',wstr,'name',Layout(width='4cm')),
+    ('type',wany,'type',Layout(width='4cm')),
+    ('primary_key',wbool,'P',Layout(width='.9cm',margin='0cm',top='.5mm')),
+    ('nullable',wbool,'N',Layout(width='.9cm',margin='0cm',top='.5mm')),
+    ('unique',wbool,'U',Layout(width='.9cm',margin='0cm',top='.5mm')),
+    ('default',wany,'default',Layout(width='4cm')),
+    ('constraints',wany,'constraints',Layout(width='4cm')),
+    ('foreign_keys',wany,'foreign',Layout(width='4cm')),
   )
-  style = db_browser.style['schema']+'\n'.join('#toplevel td.field-{0} {{ min-width:{3}cm; max-width:{3}cm; }}'.format(*x) for x in schema)
-  thead = '<tr>{}</tr>'.format(''.join('<td title="{0}" class="field-{0}">{2}</td>'.format(*x) for x in schema))
-  tid = unid('db_browser')
-  pre = '<div><style scoped="scoped">{}</style><table id="{}"><thead>{}</thead><tbody>'.format(style.replace('#toplevel','#'+tid),tid,thead)
-  suf = '</tbody></table></div>'
-  return dict((name,Tconf(t,schemag=(lambda cols: pre+''.join(map(row,cols))+suf))) for name,t in tables.items())
+  def schema_rows(cols):
+    def widget(c,x):
+      try: w = x[1](getattr(c,x[0]))
+      except: w =  Valid(value=False)
+      w.layout = x[3]
+      w.disabled = True
+      return w
+    yield schema_hrow
+    for c in cols:
+      yield HBox(children=[widget(c,x) for x in schema])
+  style = db_browser.style['schema']
+  schema_hrow = HBox(children=[HTML(value='<div style="{}" title="{}">{}</div>'.format(style,x[0],x[2]),layout=x[3]) for x in schema])
+  return dict((name,Tconf(t,schemag=schema_rows)) for name,t in tables.items())
 
 #==================================================================================================
-class HasTraitsConfigurator(VBox):
+def hastrait_editor(target,default_trait_layout=dict(width='15cm'),**ka):
+#==================================================================================================
   r"""
 :param target: a structure with traits
 :type target: :class:`traitlets.HasTraits`
+:param default_trait_layout: a dictionary of layout items
+:type default_trait_layout: :class:`Dict[str,str]`
 
-An instance of this class is an :class:`ipywidgets.Widget` for configuring a traitlets structure. The construction of the widget is directed by metadata which must be associated to each trait in *target* under the key ``widget``. This is either a callable, which produces a widget for that trait, or a :class:`dict`, passed as keyword arguments to a widget guesser. Guessing is based on the trait class. The configurator can be further customised using the following attributes:
+Returns an :class:`ipywidgets.Widget` to edit a traitlets structure. The construction of the widget is directed by metadata which must be associated to each editable trait in *target* under the key ``widget``. This is either a callable, which produces a widget for that trait, or a :class:`dict`, passed as keyword arguments to a widget guesser. Guessing is based on the trait class. Each property in *default_trait_layout* is applied to all the trait widget layouts which assign a :const:`None` value to that property. The overall editor widget can be further customised using the following attributes:
 
 .. attribute:: toolbar,header,footer
 
-   These are :class:`ipywidgets.Widget` instances which can be modified freely. The :attr:`toolbar` widget appears immediately after the trait widgets, followed by the :attr:`footer` widget. The :attr:`header` widget appears immediately before the trait widgets. The header and footer are vertically layed-out, the toolbar is horizontally layed-out. A close and reset buttons are present in the toolbar by default.
-  """
-#==================================================================================================
-  main_layout = dict(width='15cm')
-  label_layout = dict(width='2cm',padding='0cm',align_self='flex-start')
-  button_layout = dict(padding='0cm')
-  buttons = None
-  header = None
-  footer = None
+   They can be modified freely. The :attr:`toolbar` widget (a :class:`Toolbar` instance) appears immediately after the trait widgets, followed by the :attr:`footer` widget (a :class:`ipywidgets.VBox` instance). The :attr:`header` widget (a :class:`ipywidgets.VBox` instance) appears immediately before the trait widgets. A close and reset buttons are present in the toolbar by default.
 
-  def __init__(self,target,**ka):
-    from functools import partial
-    def g_numeric(t,ws,typ):
-      slider = {int:IntSlider,float:FloatSlider}
-      btext = {int:BoundedIntText,float:BoundedFloatText}
-      text = {int:IntText,float:FloatText}
-      from math import isfinite
-      vmin = ws.pop('min',None)
-      if vmin is None and (t.min is not None and isfinite(t.min)): vmin = t.min
-      vmax = ws.pop('max',None)
-      if vmax is None and (t.max is not None and isfinite(t.max)): vmax = t.max
-      m = ws.pop('mode','slider')
-      return dict(slider=slider,text=btext)[m][typ](min=vmin,max=vmax,**ws) if vmin is not None and vmax is not None else text[typ](**ws)
-    def g_selector(t,ws):
-      mode = dict(select=Select,dropdown=Dropdown)
-      opt = ws.get('options')
-      ws['options'] = [(str(v),v) for v in t.values] if opt is None else list(zip(opt,t.values))
-      m = ws.pop('mode','select')
-      return mode[m](**ws)
-    def g_mselector(t,ws):
-      opt = ws.get('options')
-      ws['options'] = [(str(v),v) for v in t._trait.values] if opt is None else list(zip(opt,t._trait.values))
-      ordr = ws.pop('ordered',False)
-      return (SelectMultipleOrdered if ordr else SelectMultiple)(**ws)
-    def updw(w,x): w.value = x
-    def upda(name,w,x):
-      try: setattr(target,name,x)
-      except: w.value = getattr(target,name)
-    def rows(D,label_layout=Layout(**self.label_layout)):
-      for name,t in target.traits().items():
-        val = getattr(target,name)
-        ws = t.metadata.get('widget',{})
-        if isinstance(ws,dict):
-          ws = dict(ws)
-          if isinstance(t,traitlets.Integer): w = g_numeric(t,ws,int)
-          elif isinstance(t,traitlets.Float): w = g_numeric(t,ws,float)
-          elif isinstance(t,traitlets.Bool): w = Checkbox(**ws)
-          elif isinstance(t,traitlets.Enum): w = g_selector(t,ws)
-          elif isinstance(t,traitlets.List) and isinstance(t._trait,traitlets.Enum): w = g_mselector(t,ws)
-          else: raise Exception('Cannot guess widget')
-        else: w = ws()
-        for k,v in self.main_layout.items(): setattr(w.layout,k,v)
-        rbutton = Button(icon='undo',tooltip='Reset to default',layout=dict(width='0.5cm',padding='0cm'))
-        label = HTML('<span title="{}">{}</span>'.format(str(t.help),name),layout=label_layout)
-        rbutton.on_click(lambda but,w=w,x=val: updw(w,x))
-        w.observe((lambda c,name=name,w=w: upda(name,w,c.new)),'value')
-        target.observe((lambda c,w=w: updw(w,c.new)),name)
-        w.value = D[name] = val
-        yield HBox(children=(rbutton,label,w))
-    def reset(data):
-      for k,v in data.items(): setattr(target,k,v)
-    super().__init__(**ka)
-    initial = {}
-    self.toolbar = tb = Toolbar(**self.button_layout)
-    tb.add(self.close,icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
-    tb.add(partial(reset,initial),icon='undo',description='reset',layout=dict(width='1.8cm'))
-    self.header = VBox()
-    self.footer = VBox()
-    self.children = (self.header,)+tuple(rows(initial))+(self.toolbar,self.footer)
+.. attribute:: label_layout
+
+   A shared :class:`ipywidgets.Layout` instance formatting the label of all the traits. Modifications of this layout therefore applies to all trait labels.
+  """
+  from functools import partial
+  def g_numeric(t,ws,typ):
+    slider = {int:IntSlider,float:FloatSlider}
+    btext = {int:BoundedIntText,float:BoundedFloatText}
+    text = {int:IntText,float:FloatText}
+    from math import isfinite
+    vmin = ws.pop('min',None)
+    if vmin is None and (t.min is not None and isfinite(t.min)): vmin = t.min
+    vmax = ws.pop('max',None)
+    if vmax is None and (t.max is not None and isfinite(t.max)): vmax = t.max
+    m = ws.pop('mode','slider')
+    return dict(slider=slider,text=btext)[m][typ](min=vmin,max=vmax,**ws) if vmin is not None and vmax is not None else text[typ](**ws)
+  def g_selector(t,ws):
+    mode = dict(select=Select,dropdown=Dropdown)
+    opt = ws.get('options')
+    ws['options'] = [(str(v),v) for v in t.values] if opt is None else list(zip(opt,t.values))
+    m = ws.pop('mode','select')
+    return mode[m](**ws)
+  def g_mselector(t,ws):
+    opt = ws.get('options')
+    ws['options'] = [(str(v),v) for v in t._trait.values] if opt is None else list(zip(opt,t._trait.values))
+    ordr = ws.pop('ordered',False)
+    return (SelectMultipleOrdered if ordr else SelectMultiple)(**ws)
+  def updw(w,x): w.value = x
+  def upda(name,w,x):
+    try: setattr(target,name,x)
+    except: w.value = getattr(target,name)
+  def rows(D):
+    for name,t in target.traits().items():
+      val = getattr(target,name)
+      ws = t.metadata.get('widget')
+      if ws is None: continue
+      if isinstance(ws,dict):
+        ws = dict(ws)
+        if isinstance(t,traitlets.Integer): w = g_numeric(t,ws,int)
+        elif isinstance(t,traitlets.Float): w = g_numeric(t,ws,float)
+        elif isinstance(t,traitlets.Bool): w = Checkbox(**ws)
+        elif isinstance(t,traitlets.Enum): w = g_selector(t,ws)
+        elif isinstance(t,traitlets.List) and isinstance(t._trait,traitlets.Enum): w = g_mselector(t,ws)
+        else: raise Exception('Cannot guess widget')
+      else: w = ws()
+      apply_default_layout(w,**default_trait_layout)
+      rbutton = Button(icon='undo',tooltip='Reset to default',layout=dict(width='0.5cm',padding='0cm'))
+      label = HTML('<span title="{}">{}</span>'.format(str(t.help),name),layout=label_layout)
+      rbutton.on_click(lambda but,w=w,x=val: updw(w,x))
+      w.observe((lambda c,name=name,w=w: upda(name,w,c.new)),'value')
+      target.observe((lambda c,w=w: updw(w,c.new)),name)
+      w.value = D[name] = val
+      yield HBox(children=(rbutton,label,w))
+  def reset(data):
+    for k,v in data.items(): setattr(target,k,v)
+  initial = {}
+  w_main = VBox(**ka)
+  w_main.label_layout = label_layout = Layout(width='2cm',padding='0cm',align_self='flex-start')
+  w_main.toolbar = tb = Toolbar()
+  tb.add(w_main.close,icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0cm'))
+  tb.add(partial(reset,initial),icon='undo',description='reset',layout=dict(width='1.8cm'))
+  w_main.header = VBox()
+  w_main.footer = VBox()
+  w_main.children = (w_main.header,)+tuple(rows(initial))+(w_main.toolbar,w_main.footer)
+  return w_main
 
 #==================================================================================================
 class SelectMultipleOrdered (VBox):
@@ -402,18 +396,37 @@ Essentially like :class:`SelectMultiple` but preserves order of selection.
 #==================================================================================================
 class Toolbar(HBox):
   r"""
-An instance of this class is a widget toolbar of buttons. Keyword arguments in the toolbar constructor are used as default layout values for all the buttons created. To create a new button, use method :meth:`add` with one positional argument: *callback* (a callable with no argument to invoke when the action is activated). If keyword arguments are present, they are passed to the button constructor. The button widget is returned.
+An instance of this class is a widget toolbar of buttons.
   """
 #==================================================================================================
-  button_layout = dict(padding='0cm')
   def __init__(self,**ka):
-    from collections import ChainMap
-    super().__init__()
-    self.b_layout = ChainMap(ka,self.button_layout)
+    self.b_layout = {}
+    super().__init__(**ka)
+
   def add(self,callback,**ka):
+    r"""
+:param callback: a function to call when the button is clicked
+:type callback: :class:`Callable[Tuple[],Any]`
+
+Adds a new button to the toolbar. If keyword arguments are present, they are passed to the button constructor. The button widget is returned.
+    """
     from collections import ChainMap
-    layout = ChainMap(ka.pop('layout',{}),self.b_layout)
-    b = Button(layout=Layout(**layout),**ka)
+    b = Button(**ka)
+    apply_default_layout(b,**self.b_layout)
     b.on_click(lambda b: callback())
     self.children += (b,)
     return b
+
+  def common_button_layout(self,**ka):
+    r"""
+Each property in *ka* is applied to all the button layouts of this toolbar (past and future), which assign a :const:`None` value to that property.
+    """
+    apply_default_layout(*self.children,**ka)
+    self.b_layout.update(ka)
+
+#==================================================================================================
+def apply_default_layout(*a,**ka):
+#==================================================================================================
+  for w in a:
+    for k,v in ka.items():
+      if getattr(w.layout,k) is None: setattr(w.layout,k,v)

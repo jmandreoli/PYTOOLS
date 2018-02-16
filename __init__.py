@@ -945,3 +945,19 @@ This namespace class defines class methods :meth:`load`, :meth:`loads`, :meth:`d
   def loads(cls,s):
     from io import BytesIO
     with BytesIO(s) as u: return cls.Unpickler(u).load()
+
+#--------------------------------------------------------------------------------------------------
+class forward:
+  r"""
+This object allows to name callable members of module/packages without loading them. They are loaded only on actual call.
+  """
+#--------------------------------------------------------------------------------------------------
+  __slot__ = '__spec__','__value__'
+  def __init__(self,s=()): self.__spec__ = s; self.__value__ = None
+  def __getattr__(self,a): return self.__class__(self.__spec__+(a,))
+  def __call__(self,*a,**ka):
+    from importlib import import_module
+    f = self.__value__
+    if f is None:
+      self.__value__ = f = getattr(import_module('.'.join(self.__spec__[:-1])),self.__spec__[-1])
+    return f(*a,**ka)

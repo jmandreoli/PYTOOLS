@@ -310,7 +310,7 @@ Objects of this class control a toolbar added to a figure. The toolbar is locate
 #==================================================================================================
 
 #------------------------------------------------------------------------------
-def pager(L,shape,vmake,vpaint,offset=0,toolbar=None,save=None,savedefaults=dict(dest='pager-sav',format='svg'),bstyle={},**_ka):
+def pager(L,shape,vmake,vpaint,offset=0,ctrlfactory=None,save=None,savedefaults=dict(dest='pager-sav',format='svg'),**_ka):
   r"""
 :param L: a list of arbitrary objects other than :const:`None`
 :type L: :class:`List[object]`
@@ -320,16 +320,18 @@ def pager(L,shape,vmake,vpaint,offset=0,toolbar=None,save=None,savedefaults=dict
 :type vmake: :class:`Callable[[Cell],None]`
 :param vpaint: a function to instantiate the display for a given page (see below)
 :type vpaint: :class:`Callable[[Cell,object],None]`
+:param ctrlfactory: the controller factory
+:type ctrlfactory: :class:`Callable[[Callable[[int],None],Callable[[],None]],int,int]`
 :param savedefaults: used as default keyword arguments of method :meth:`savefig` when saving pages
 :type savedefaults: :class:`Dict`
 
-This function first create a :class:`Cell` instance with all the remaining arguments, then splits it into a grid of sub-cells according to *shape*, then displays *L* page per page on the grid. Each page displays a slice of *L* of length equal to the product of the components of *shape* (or less, for the final page). The toolbar is enriched with page navigation buttons. A save button also allows to save the whole collection of pages in a given directory (beware: may be long).
+This function first create a :class:`Cell` instance with all the remaining arguments, then splits it into a grid of sub-cells according to *shape*, then displays *L* page per page on the grid. Each page displays a slice of *L* of length equal to the product of the components of *shape* (or less, for the final page). A controller object is obtained by invoking *ctrlfactory* with the page displayer, the pageset saver, the number of pages and the index of the initial page.
 
 Function *vmake* takes as input a :class:`Cell` instance and instantiates it as needed. It can store information (e.g. about the specific role of each artist created in the cell), if needed, by simply setting attributes in the cell. This is called once for each cell at the begining of the display.
 
 Function *vpaint* takes as input a cell and an element of *L* or None, and displays that element in the cell (or resets the cell to indicate a missing value), possibly using the artists created by *vmake* and stored in the cell. This is called once at each page display and for each cell.
 
-Unfortunately, matplotlib toolbars are not standardised: the depend on the backend and may not support adding button.
+Unfortunately, matplotlib toolbars are not standardised: they depend on the backend and may not support adding button.
   """
 #------------------------------------------------------------------------------
   from numpy import ceil, rint, clip
@@ -338,6 +340,39 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
   from matplotlib.pyplot import close
   from pathlib import Path
   from shutil import rmtree
+  from functools import partial
+  def mplctrl(painter,saver,npage,start,fig,**ka):
+    def toggle_ctrl():
+      ctrl.ax.set_visible(not ctrl.ax.get_visible())
+      fig.canvas.draw()
+    toolbar = Toolbar(fig,**ka)
+    actions = [
+      ('<<',(lambda:ctrl.set_val(clip(ctrl.val-1,1,npage)))),
+      ('>>',(lambda:ctrl.set_val(clip(ctrl.val+1,1,npage)))),
+      ('toggle-ctrl',toggle_ctrl),
+      ('save-all',saver),
+    ]
+    for a,f in actions: toolbar.addAction(a,f)
+    ctrl = Slider(fig.add_axes((0.1,0.,.8,.03),visible=False,zorder=1),'page',.5,npage+.5,valinit=0,valfmt='%.0f/{}'.format(npage),closedmin=False,closedmax=False)
+    ctrl.on_changed(lambda p:painter(int(rint(p))-1))
+    ctrl.set_val(start)
+  def ipyctrl(painter,saver,npage,start,**ka):
+    from .ipywidgets import Toolbar
+    from IPython.display import display, clear_output
+    from ipywidgets import HBox, IntSlider
+    def fwd(): n = w_slider.value; jmp(n+1 if n<npage else 1)
+    def bwd(): n = w_slider.value; jmp(npage if n==1 else n-1)
+    def jmp(n): w_slider.value = n
+    w_tb = Toolbar(**ka)
+    w_tb.add(bwd,icon='backward',layout=dict(padding='0cm',width='.5cm'))
+    w_tb.add(fwd,icon='forward',layout=dict(padding='0cm',width='.5cm'))
+    w_tb.add(saver,icon='save',layout=dict(padding='0cm',width='.5cm'))
+    w_slider = IntSlider(value=start,min=1,max=npage)
+    w_slider.observe((lambda c: painter(c.new-1)),'value')
+    w = HBox(children=(w_tb,w_slider),layout=dict(border='thin solid blue'))
+    display(w)
+    painter(start-1)
+    return w.close
   def gen(L):
     yield from L
     while True: yield None
@@ -347,9 +382,6 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
   def paintp(cell,p,draw=True):
     for c,x in zip(genc(cell),gen(L[p*cellpp:])): vpaint(c,x)
     if draw: cell.figure.canvas.draw()
-  def toggle_ctrl():
-    ctrl.ax.set_visible(not ctrl.ax.get_visible())
-    cell.figure.canvas.draw()
   def save_all():
     ka = _ka.copy()
     ka.update(fig=None,figsize=((cell.figure.get_figwidth(),cell.figure.get_figheight())))
@@ -363,19 +395,11 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
   cellpp = Nr*Nc
   npage = int(ceil(len(L)/cellpp))
   if save is None:
-    actions = [
-      ('<<',(lambda:ctrl.set_val(clip(ctrl.val-1,1,npage)))),
-      ('>>',(lambda:ctrl.set_val(clip(ctrl.val+1,1,npage)))),
-      ('toggle-ctrl',toggle_ctrl),
-      ('save-all',save_all),
-      ]
-    if toolbar is None:
-      try: toolbar = cell.figure.canvas.toolbar; toolbar.addAction
-      except: toolbar = Toolbar(cell.figure,**bstyle)
-    for a,f in actions: toolbar.addAction(a,f)
-    ctrl = Slider(cell.figure.add_axes((0.1,0.,.8,.03),visible=False,zorder=1),'page',.5,npage+.5,valinit=0,valfmt='%.0f/{}'.format(npage),closedmin=False,closedmax=False)
-    ctrl.on_changed(lambda p:paintp(cell,int(rint(p))-1))
-    ctrl.set_val(1+offset/cellpp)
+    if ctrlfactory is None: ctrlfactory = partial(mplctrl,fig=cell.figure)
+    elif ctrlfactory == 'ipywidgets': ctrlfactory = ipyctrl
+    else: raise Exception('Unknown control factory')
+    close = ctrlfactory(partial(paintp,cell),save_all,npage,int(rint(1+offset/cellpp)))
+    if close: cell.figure.canvas.mpl_connect('close_event',(lambda evt: close()))
   else:
     s = savedefaults.copy()
     s.update(save)
@@ -391,4 +415,4 @@ Unfortunately, matplotlib toolbars are not standardised: the depend on the backe
         paintp(cell,p,False)
         cell.figure.savefig(str((pth/'p{:02d}'.format(p)).with_suffix('.'+s['format'])),**s)
     except Exception as e: logger.warn('Error saving page %s: %s',p,e)
-    close(cell.figure.number)
+    close(cell.figure)

@@ -30,7 +30,7 @@ A decorator to declare, in a class, a computable attribute which is computed onl
   """
 #==================================================================================================
 
-  __slots__ = ('get',)
+  __slots__ = 'get',
 
   def __init__(self,get):
     from inspect import signature
@@ -91,6 +91,31 @@ Keys in the proxy are turned into attributes of this instance. If *__proxy__* is
     except KeyError: raise AttributeError(a) from None
   def __str__(self): return str(self.__proxy__)
   def __repr__(self): return repr(self.__proxy__)
+
+#==================================================================================================
+class forward:
+  r"""
+This object allows to name callable members of module/packages without loading them. They are loaded only on actual call. Example::
+
+   A = forward.numpy.array; print(A)
+   #> forward<numpy.array> # numpy is not loaded
+   print(A((1,3,2)))
+   #> [1 2 3] # numpy is loaded
+  """
+#==================================================================================================
+  __slot__ = '__spec__','__value__'
+  def __init__(self,s=()): self.__spec__ = s; self.__value__ = None
+  def __getattr__(self,a): return self.__class__(self.__spec__+(a,))
+  def __call__(self,*a,**ka):
+    from importlib import import_module
+    f = self.__value__
+    if f is None:
+      self.__value__ = f = getattr(import_module('.'.join(self.__spec__[:-1])),self.__spec__[-1])
+    return f(*a,**ka)
+  def __getstate__(self): return self.__spec__
+  def __setstate__(self,s): self.__spec__ = s; self.__value__ = None
+  def __repr__(self): return 'forward<{}{}>'.format('.'.join(self.__spec__),('' if self.__value__ is None else ':incarnated'))
+forward = forward()
 
 #==================================================================================================
 def config_xdg(rsc,dflt=None):
@@ -262,32 +287,6 @@ class HtmlPluginPointer:
     return E.span(self.name,**ka)
 
 #==================================================================================================
-def zipaxes(L,fig,sharex=False,sharey=False,**ka):
-  r"""
-:param L: an arbitrary sequence
-:type L: :class:`Sequence[object]`
-:param fig: a figure
-:type fig: :class:`matplotlib.figure.Figure`
-:param sharex,sharey: whether all the axes share the same x-axis (resp. y-axis) scale
-:type sharex,sharey: :class:`bool`
-:param ka: passed to :meth:`add_subplot` generating new axes
-
-Yields the pair of *o* and an axes on *fig* for each item *o* in sequence *L*. The axes are spread more or less uniformly.
-  """
-#==================================================================================================
-  from math import sqrt,ceil
-  L = list(L)
-  N = len(L)
-  nc = int(ceil(sqrt(N)))
-  nr = int(ceil(N/nc))
-  axrefx,axrefy = None,None
-  for i,o in enumerate(L,1):
-    ax = fig.add_subplot(nr,nc,i,sharex=axrefx,sharey=axrefy,**ka)
-    if sharex and axrefx is None: axrefx = ax
-    if sharey and axrefy is None: axrefy = ax
-    yield o,ax
-
-#==================================================================================================
 class Expr (HtmlPlugin):
   r"""
 Instances of this class implement closed symbolic expressions.
@@ -364,18 +363,22 @@ Set *f* as the config function of this instance. Raises an error if the instance
     ka = ','.join('{}={}'.format(k,repr(v)) for k,v in sorted(ka.items()))
     return '{}({}{}{})'.format(func,a,sep,ka)
 
+#--------------------------------------------------------------------------------------------------
 class MapExpr (Expr,collections.abc.Mapping):
   r"""
 Symbolic expressions of this class are also (read-only) mappings and trigger incarnation on all the mapping operations, then delegate such operations to their value (expected to be a mapping).
   """
+#--------------------------------------------------------------------------------------------------
   def __getitem__(self,k): self.incarnate(); return self.value[k]
   def __len__(self): self.incarnate(); return len(self.value)
   def __iter__(self): self.incarnate(); return iter(self.value)
 
+#--------------------------------------------------------------------------------------------------
 class CallExpr (Expr):
   r"""
 Symbolic expressions of this class are also callables, and trigger incarnation on invocation, then delegate the invocation to their value (expected to be a callable).
   """
+#--------------------------------------------------------------------------------------------------
   def __call__(self,*a,**ka): self.incarnate(); return self.value(*a,**ka)
 
 #==================================================================================================
@@ -945,19 +948,3 @@ This namespace class defines class methods :meth:`load`, :meth:`loads`, :meth:`d
   def loads(cls,s):
     from io import BytesIO
     with BytesIO(s) as u: return cls.Unpickler(u).load()
-
-#--------------------------------------------------------------------------------------------------
-class forward:
-  r"""
-This object allows to name callable members of module/packages without loading them. They are loaded only on actual call.
-  """
-#--------------------------------------------------------------------------------------------------
-  __slot__ = '__spec__','__value__'
-  def __init__(self,s=()): self.__spec__ = s; self.__value__ = None
-  def __getattr__(self,a): return self.__class__(self.__spec__+(a,))
-  def __call__(self,*a,**ka):
-    from importlib import import_module
-    f = self.__value__
-    if f is None:
-      self.__value__ = f = getattr(import_module('.'.join(self.__spec__[:-1])),self.__spec__[-1])
-    return f(*a,**ka)

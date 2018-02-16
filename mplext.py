@@ -397,7 +397,7 @@ Unfortunately, matplotlib toolbars are not standardised: they depend on the back
   if save is None:
     if ctrlfactory is None: ctrlfactory = partial(mplctrl,fig=cell.figure)
     elif ctrlfactory == 'ipywidgets': ctrlfactory = ipyctrl
-    else: raise Exception('Unknown control factory')
+    elif not callable(ctrlfactory): raise Exception('Unknown control factory')
     close = ctrlfactory(partial(paintp,cell),save_all,npage,int(rint(1+offset/cellpp)))
     if close: cell.figure.canvas.mpl_connect('close_event',(lambda evt: close()))
   else:

@@ -15,7 +15,7 @@ from itertools import islice, chain
 from collections import namedtuple, OrderedDict
 from collections.abc import MutableMapping
 from weakref import WeakValueDictionary
-from time import process_time, perf_counter
+from time import time
 from . import SQliteNew, size_fmt, time_fmt, html_table, html_parlist, HtmlPlugin, pickleclass
 
 SCHEMA = '''
@@ -31,8 +31,7 @@ CREATE TABLE Cell (
   tstamp TIMESTAMP DEFAULT ( datetime('now') ),
   hits INTEGER DEFAULT 0,
   size INTEGER DEFAULT 0,
-  tprc REAL,
-  ttot REAL
+  duration REAL
   )
 
 CREATE UNIQUE INDEX BlockIndex ON Block (functor)
@@ -75,7 +74,7 @@ The index entry attached to a cell describes the call event which produced it. A
 - ``tstamp``: date of creation, last update or last reuse, of the cell;
 - ``hits``: number of hits (reuse) since creation;
 - ``size``: either 0 if the value is still being computed, or the size in bytes of the computed value, with a negative sign if that value is an exception;
-- ``tprc``, ``ttot``: process and total time (in sec) of its computation.
+- ``duration``: duration (in float sec) of its computation.
 
 A :class:`CacheDB` instance acts as a mapping object, where the keys are block identifiers (:class:`int`) and values are :class:`CacheBlock` objects for the corresponding blocks.
 
@@ -342,18 +341,18 @@ Implements cacheing as follows:
         getval = self.db.storage.lookup(cell,size==0)
     if row is None:
       logger.info('%s MISS(%s)',self,cell)
-      tm = process_time(),perf_counter()
+      tm = time()
       try: cval = self.functor.getval(arg)
       except BaseException as e: cval = e; size = -1
       else: size = 1
-      tm = process_time()-tm[0],perf_counter()-tm[1]
+      tm = time()-tm
       try: size *= setval(cval)
       except:
         with self.db.connect() as conn:
           conn.execute('DELETE FROM Cell WHERE oid=?',(cell,))
         raise
       with self.db.connect() as conn:
-        conn.execute('UPDATE Cell SET size=?, tprc=?, ttot=?, tstamp=datetime(\'now\') WHERE oid=?',(size,tm[0],tm[1],cell))
+        conn.execute('UPDATE Cell SET size=?, duration=?, tstamp=datetime(\'now\') WHERE oid=?',(size,tm,cell))
         if not conn.total_changes: logger.info('%s LOST(%s)',self,cell)
       if size<0: raise cval
     else:
@@ -373,7 +372,7 @@ Implements cacheing as follows:
 
   def __getitem__(self,cell):
     with self.db.connect() as conn:
-      r = conn.execute('SELECT ckey, tstamp, hits, size, tprc, ttot FROM Cell WHERE oid=?',(cell,)).fetchone()
+      r = conn.execute('SELECT ckey, tstamp, hits, size, duration FROM Cell WHERE oid=?',(cell,)).fetchone()
     if r is None: raise KeyError(cell)
     return r
 
@@ -395,7 +394,7 @@ Implements cacheing as follows:
 
   def items(self):
     with self.db.connect() as conn:
-      for row in conn.execute('SELECT oid, ckey, tstamp, hits, size, tprc, ttot FROM Cell WHERE block=?',(self.block,)):
+      for row in conn.execute('SELECT oid, ckey, tstamp, hits, size, duration FROM Cell WHERE block=?',(self.block,)):
         yield row[0],row[1:]
 
   def clear(self):
@@ -410,7 +409,7 @@ Implements cacheing as follows:
     n = len(self)-self._html_limit
     L = self.items(); closing = None
     if n>0: L = islice(L,self._html_limit); closing = '{} more'.format(n)
-    return html_table(sorted(L),hdrs=('ckey','tstamp','hits','size','tprc','ttot'),fmts=((lambda ckey,h=self.functor.html: h(ckey,_)),str,str,size_fmt_,time_fmt_,time_fmt_),opening=repr(self),closing=closing)
+    return html_table(sorted(L),hdrs=('ckey','tstamp','hits','size','duration'),fmts=((lambda ckey,h=self.functor.html: h(ckey,_)),str,str,size_fmt_,time_fmt_),opening=repr(self),closing=closing)
   def __repr__(self): return 'Cache<{}>'.format(repr(self.functor))
 
 #==================================================================================================

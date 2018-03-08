@@ -13,7 +13,7 @@ from sqlalchemy import Column, Index, ForeignKey
 from sqlalchemy.types import Text, Integer, Float, DateTime, PickleType
 from sqlalchemy.ext.declarative import as_declarative, declared_attr
 from sqlalchemy.orm import relationship
-from . import SQLinit, zipaxes, ormsroot, html_table, HtmlPlugin
+from . import SQLinit, ormsroot, html_table, HtmlPlugin
 
 logger = logging.getLogger(__name__)
 

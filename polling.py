@@ -24,6 +24,7 @@ Objects of this class are python environments which can be used to encapsulate a
 :type fields: :class:`List[Dict[str,object]]`
 
 Each field descriptor is a dictionary with the following keys:
+
 * ``name``: name of the field (:class:`str`)
 * ``type``: sql type of the field as recognised by sqlite (:class:`str`)
 * ``init``: initial value of the field

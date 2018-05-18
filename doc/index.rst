@@ -15,6 +15,7 @@ Contents:
    ipywidgets.rst
    quickui.rst
    mplext.rst
+   polling.rst
    monitor.rst
    tfutil.rst
    perfmgr.rst

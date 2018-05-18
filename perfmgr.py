@@ -14,7 +14,7 @@ from sqlalchemy import Column, Index, ForeignKey
 from sqlalchemy.types import Text, Integer, Float, DateTime, PickleType
 from sqlalchemy.ext.declarative import as_declarative, declared_attr
 from sqlalchemy.orm import relationship
-from . import SQLinit, zipaxes, ormsroot, html_table, HtmlPlugin
+from . import SQLinit, ormsroot, html_table, HtmlPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,10 @@ Displays the results of selected experiments in this context. The selection test
       assert d is not None, 'Unknown slot: {}'.format(slot)
       if x is None: x = d
       return lambda exp: getattr(exp,slot)==x
+    def zipaxes(L,fig,**ka):
+      from math import sqrt,ceil
+      n = len(L); nc = int(ceil(sqrt(n))); nr = int(ceil(n/nc))
+      for k,x in enumerate(L,1): yield x,fig.add_subplot(nr,nc,k,**ka)
     fmtd = dict(args=(lambda x:'{{{}}}'.format(','.join('{}={}'.format(k,v) for k,v in sorted(x.items())))))
     fmtd.update(fmt)
     if isinstance(meter,str): meterf = lambda r,m=meter: r[m]

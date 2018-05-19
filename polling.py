@@ -27,15 +27,14 @@ Each field descriptor is a dictionary with the following keys:
 
 * ``name``: name of the field (:class:`str`)
 * ``type``: sql type of the field as recognised by sqlite (:class:`str`)
-* ``init``: initial value of the field
-* ``update`` (optional): updater function (no input); must return a value compatible with the field type; if omitted, initial value is never updated
+* ``value``: either a single value compatible with field type (used as initial value and never updated) or a function with no input which returns a value compatible with the field type (evaluated at each poll and used as current value)
   """
   def __init__(self,path,*fields,interval=1.,maxerror=3):
     def open_():
       nonlocal conn
       if path.exists(): path.unlink()
       conn = sqlite3.connect(str(path))
-      try: conn.execute(sql_create);conn.execute(sql_init,sql_init_p);conn.commit()
+      try: conn.execute(sql_create);conn.execute(sql_init,inits_);conn.commit()
       except: close_(); raise
     def close_():
       try: conn.close()
@@ -49,19 +48,19 @@ Each field descriptor is a dictionary with the following keys:
       while ongoing:
         ongoing = not self.stop_requested.wait(interval)
         try:
-          try:
-            conn.execute(sql_update, updates_())
-            conn.commit()
-            error = 0
-            continue
-          except sqlite3.Error: raise
-          except Exception as exc:
-            error += 1
-            if error < maxerror:
-              conn.execute(sql_error,(traceback.format_exc(),))
+          conn.execute(sql_update,updates_())
+          conn.commit()
+          error = 0
+          continue
+        except Error as exc:
+          error += 1
+          if error < maxerror:
+            try:
+              conn.execute(sql_update,exc.args[0])
               conn.commit()
-              continue
-            else: lasterr = str(exc); close_()
+            except sqlite3.Error: pass
+            continue
+          else: lasterr = str(exc.__context__)
         except sqlite3.Error as exc:
           error += 1
           if error < maxerror:
@@ -75,13 +74,26 @@ Each field descriptor is a dictionary with the following keys:
       except: pass
       close_()
     super().__init__(target=run_,daemon=True)
-    sql_create = 'CREATE TABLE Status (started DATETIME, pid INTEGER, elapsed FLOAT, error TEXT{})'.format(''.join(', {name} {type}'.format(**f) for f in fields))
-    sql_init = 'INSERT INTO Status (started,pid,elapsed{}) VALUES (?,?,?{})'.format(''.join(',{name}'.format(**f) for f in fields),len(fields)*',?')
-    sql_update = 'UPDATE Status SET error=NULL, elapsed=?{}'.format(''.join(', {name}=?'.format(**f) for f in fields if f.get('update') is not None))
-    updates_ = lambda L=tuple(f['update'] for f in fields if f.get('update') is not None): (time.time()-started,)+tuple(p() for p in L)
-    sql_error = 'UPDATE Status SET error=?'
-    started = time.time()
-    sql_init_p = (datetime.fromtimestamp(started),os.getpid(),0.)+tuple(f['init'] for f in fields)
+    DefaultTypes = {int:'INTEGER',float:'FLOAT',str:'TEXT',datetime:'DATETIME',bytes:'BLOB'}
+    nonefunc = lambda: None
+    started = time.time(); elapsed = lambda started=started:time.time()-started
+    for f in fields:
+      assert all(k in ('name','type','value','error_value') for k in f)
+      f.setdefault('type',DefaultTypes.get(type(f['value'])))
+    fields = (
+      dict(name='started',type='DATETIME',value=datetime.fromtimestamp(started)),
+      dict(name='pid',type='INTEGER',value=os.getpid()),
+      dict(name='elapsed',type='FLOAT',value=elapsed,error_value=elapsed),
+      dict(name='error',type='TEXT',value=nonefunc,error_value=traceback.format_exc),
+    ) + fields
+    sql_create = 'CREATE TABLE Status ({})'.format(', '.join('{name} {type}'.format(**f) for f in fields))
+    sql_init,inits_ = zip(*((f['name'],f['value']) for f in fields if not callable(f['value'])))
+    sql_init = 'INSERT INTO Status ({}) VALUES ({})'.format(','.join(sql_init),','.join(len(sql_init)*'?'))
+    sql_update,setf,error_setf = zip(*(('{name}=?'.format(**f),f['value'],f.get('error_value',nonefunc)) for f in fields if callable(f['value'])))
+    def updates_(setf=setf,error_setf=error_setf):
+      try: return tuple(p() for p in setf)
+      except: raise Error(tuple(p() for p in error_setf))
+    sql_update = 'UPDATE Status SET {}'.format(', '.join(sql_update))
     self.stop_requested = threading.Event()
     conn = None
     if isinstance(path,str): path = Path(path)
@@ -91,3 +103,5 @@ Each field descriptor is a dictionary with the following keys:
   def __exit__(self,*a):
     self.stop_requested.set()
     self.join()
+
+class Error (Exception): pass

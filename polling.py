@@ -20,10 +20,10 @@ Objects of this class are python contexts which can be used to encapsulate any p
 :type interval: :class:`float`
 :param maxerror: maximum number of consecutive errors before giving up
 :type maxerror: :class:`int`
-:param fields: list of field descriptor to record at each polling
-:type fields: :class:`List[Tuple[str,object]]`
+:param fields: list of field descriptor (see below) specifying what to record at each polling
+:param staticfields: dictionary of static values specifying what to record initially
 
-Each field descriptor is a pair of an sql column specification and a value. The value is either a single value compatible with column type (used as initial value and never updated) or a function with no input which returns a value compatible with the column type (evaluated at each poll and used in the report)
+Each field descriptor is a pair of an sql column specification and a function with no input which returns a value compatible with the column type.
   """
   def __init__(self,path,*fields,interval=1.,maxerror=3,**staticfields):
     def open_():

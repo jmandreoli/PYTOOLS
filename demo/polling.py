@@ -19,9 +19,9 @@ def demo():
   logging.basicConfig(level=logging.INFO)
   current = 0
   with PollingThread(DIR/'test.db',
-    dict(name='current',type='INTEGER',value=(lambda: current)),
-    dict(name='fortytwo',value=42),
-    #dict(name='generate_an_error',type='INTEGER',value=(lambda: 1/0))
+    ('current',(lambda: current)),
+    #('generate_an_error FLOAT',(lambda: 1/0)),
+    fortytwo=42,
   ):
     for i in range(1,61):
       current += 1

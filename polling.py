@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class PollingThread (threading.Thread):
   """
-Objects of this class are python environments which can be used to encapsulate any piece of code into a monitor executing on a separate thread. The monitor polls the code at regular intervals and stores a report. Only one report is stored at all time.
+Objects of this class are python contexts which can be used to encapsulate any piece of code into a monitor executing on a separate thread. The monitor polls the code at regular intervals and stores a report. Only one report is stored at all time.
 
 :param path: location of the monitor reporting file
 :type param: :class:`Union[str,pathlib.Path]`
@@ -21,20 +21,16 @@ Objects of this class are python environments which can be used to encapsulate a
 :param maxerror: maximum number of consecutive errors before giving up
 :type maxerror: :class:`int`
 :param fields: list of field descriptor to record at each polling
-:type fields: :class:`List[Dict[str,object]]`
+:type fields: :class:`List[Tuple[str,object]]`
 
-Each field descriptor is a dictionary with the following keys:
-
-* ``name``: name of the field (:class:`str`)
-* ``type``: sql type of the field as recognised by sqlite (:class:`str`)
-* ``value``: either a single value compatible with field type (used as initial value and never updated) or a function with no input which returns a value compatible with the field type (evaluated at each poll and used as current value)
+Each field descriptor is a pair of an sql column specification and a value. The value is either a single value compatible with column type (used as initial value and never updated) or a function with no input which returns a value compatible with the column type (evaluated at each poll and used in the report)
   """
-  def __init__(self,path,*fields,interval=1.,maxerror=3):
+  def __init__(self,path,*fields,interval=1.,maxerror=3,**staticfields):
     def open_():
       nonlocal conn
       if path.exists(): path.unlink()
       conn = sqlite3.connect(str(path))
-      try: conn.execute(sql_create);conn.execute(sql_init,inits_);conn.commit()
+      try: init_()
       except: close_(); raise
     def close_():
       try: conn.close()
@@ -48,19 +44,15 @@ Each field descriptor is a dictionary with the following keys:
       while ongoing:
         ongoing = not self.stop_requested.wait(interval)
         try:
-          conn.execute(sql_update,updates_())
-          conn.commit()
-          error = 0
-          continue
-        except Error as exc:
-          error += 1
-          if error < maxerror:
-            try:
-              conn.execute(sql_update,exc.args[0])
-              conn.commit()
-            except sqlite3.Error: pass
-            continue
-          else: lasterr = str(exc.__context__)
+          try: updates_(); error=0; continue
+          except sqlite3.Error: raise
+          except Exception as exc:
+            error += 1
+            if error < maxerror:
+              try: updates_error()
+              except: pass
+              continue
+            else: lasterr = str(exc)
         except sqlite3.Error as exc:
           error += 1
           if error < maxerror:
@@ -74,28 +66,33 @@ Each field descriptor is a dictionary with the following keys:
       except: pass
       close_()
     super().__init__(target=run_,daemon=True)
-    DefaultTypes = {int:'INTEGER',float:'FLOAT',str:'TEXT',datetime:'DATETIME',bytes:'BLOB'}
-    nonefunc = lambda: None
-    started = time.time(); elapsed = lambda started=started:time.time()-started
-    for f in fields:
-      assert all(k in ('name','type','value','error_value') for k in f)
-      f.setdefault('type',DefaultTypes.get(type(f['value'])))
-    fields = (
-      dict(name='started',type='DATETIME',value=datetime.fromtimestamp(started)),
-      dict(name='pid',type='INTEGER',value=os.getpid()),
-      dict(name='elapsed',type='FLOAT',value=elapsed,error_value=elapsed),
-      dict(name='error',type='TEXT',value=nonefunc,error_value=traceback.format_exc),
-    ) + fields
-    sql_create = 'CREATE TABLE Status ({})'.format(', '.join('{name} {type}'.format(**f) for f in fields))
-    sql_init,inits_ = zip(*((f['name'],f['value']) for f in fields if not callable(f['value'])))
-    sql_init = 'INSERT INTO Status ({}) VALUES ({})'.format(','.join(sql_init),','.join(len(sql_init)*'?'))
-    sql_update,setf,error_setf = zip(*(('{name}=?'.format(**f),f['value'],f.get('error_value',nonefunc)) for f in fields if callable(f['value'])))
-    def updates_(setf=setf,error_setf=error_setf):
-      try: return tuple(p() for p in setf)
-      except: raise Error(tuple(p() for p in error_setf))
-    sql_update = 'UPDATE Status SET {}'.format(', '.join(sql_update))
-    self.stop_requested = threading.Event()
     conn = None
+    NoneFunc = lambda: None
+    DefaultTypes={int:'INTEGER',float:'FLOAT',str:'TEXT',datetime:'DATETIME',bytes:'BLOB'}
+    def field(cdef,upd,upd_error=NoneFunc):
+      cdef = cdef.strip().split(' ',1); name = cdef[0]
+      return name,(DefaultTypes.get(type(upd()),'BLOB') if len(cdef)==1 else cdef[1]),upd,upd_error
+    def staticfield(name,value):
+      return name,DefaultTypes.get(type(value),'BLOB'),value
+    started = time.time(); elapsed = lambda started=started:time.time()-started
+    staticfields = list(staticfields.items())
+    staticfields[0:0] = ('started',datetime.fromtimestamp(started)), ('pid',os.getpid())
+    staticfields = [staticfield(*x) for x in staticfields]
+    fields = list(fields)
+    fields[0:0] = ('elapsed',elapsed,elapsed),('error TEXT',NoneFunc,traceback.format_exc)
+    fields = [field(*x) for x in fields]
+    sql_create = 'CREATE TABLE Status ({})'.format(', '.join('{} {}'.format(f[0],f[1]) for l in (staticfields,fields) for f in l))
+    sql_init = 'INSERT INTO Status ({}) VALUES ({})'.format(','.join(f[0] for f in staticfields),','.join(len(staticfields)*'?'))
+    def init_(sql_create=sql_create,sql_init=sql_init,initv=[f[2] for f in staticfields]):
+      conn.execute(sql_create)
+      conn.execute(sql_init,initv)
+      conn.commit()
+    sql_update = 'UPDATE Status SET {}'.format(', '.join('{}=?'.format(f[0]) for f in fields))
+    def updates_(u=[f[2] for f in fields],sql_update=sql_update):
+      conn.execute(sql_update,tuple(p() for p in u))
+      conn.commit()
+    def updates_error(u=[f[3] for f in fields]): return updates_(u)
+    self.stop_requested = threading.Event()
     if isinstance(path,str): path = Path(path)
   def __enter__(self):
     self.start()
@@ -103,5 +100,3 @@ Each field descriptor is a dictionary with the following keys:
   def __exit__(self,*a):
     self.stop_requested.set()
     self.join()
-
-class Error (Exception): pass

@@ -5,7 +5,7 @@
 # Purpose:              a thread which polls code at regular intervals
 #
 
-import os,logging,sqlite3,time,threading,traceback
+import os,socket,logging,sqlite3,time,threading,traceback
 from datetime import datetime
 from pathlib import Path
 logger = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ Each field descriptor is a pair of an sql column specification and a function wi
       return name,DefaultTypes.get(type(value),'BLOB'),value
     started = time.time(); elapsed = lambda started=started:time.time()-started
     staticfields = list(staticfields.items())
-    staticfields[0:0] = ('started',datetime.fromtimestamp(started)), ('pid',os.getpid())
+    staticfields[0:0] = ('started',datetime.fromtimestamp(started)), ('pid','{}:{}'.format(socket.getfqdn(),os.getpid()))
     staticfields = [staticfield(*x) for x in staticfields]
     fields = list(fields)
     fields[0:0] = ('elapsed',elapsed,elapsed),('error TEXT',NoneFunc,traceback.format_exc)

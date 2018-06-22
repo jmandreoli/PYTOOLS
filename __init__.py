@@ -771,12 +771,19 @@ Displays a link to the monitor of :class:`pyspark.SparkContext` *sc*. Recall tha
     r"""
 Returns an instance of :class:`pyspark.SparkContext` created with the predefined configuration held in attribute :attr:`conf` of this class, updated by *conf* (its value must then be a :class:`dict` of :class:`str`). If *debug* is :const:`True`, prints the exact configuration used. If *display* is :const:`True`, displays a link to the monitor of the created context.
     """
+    cls._init()
     from pyspark import SparkContext, SparkConf
     cfg = SparkConf().setAll(cls.conf.items()).setAll(conf.items())
     if debug: print(cfg.toDebugString())
     sc = SparkContext(conf=cfg,**ka)
     if display: cls.display_monitor_link(sc)
     return sc
+
+  @classmethod
+  def _init(cls):
+    if cls.conf is None:
+      cls.init()
+      assert isinstance(cls.conf,dict) and all((isinstance(k,str) and isinstance(v,str)) for k,v in cls.conf.items()), 'Class method {0.__module__}.{0.__name__}.init must assign a str-str dictionary to class attribute \'conf\''.format(cls)
 
   init = config_xdg('spark/pyspark.py')
   if init is None: init = classmethod(lambda cls,**ka: None)

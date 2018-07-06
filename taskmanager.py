@@ -41,8 +41,9 @@ def sendmail(message,login=None,password=None,smtpargs=None,**ka):
   if not message.get('date'): message['date'] = datetime.now().astimezone().strftime('%a, %d %b %Y %H:%M:%S %z')
   ka.update(from_addr=sender(message),to_addrs=recipients(message),msg=message.as_string())
   with SMTP(**smtpargs) as s:
-    s.starttls()
-    s.login(login,password)
+    if login is not None:
+      s.starttls()
+      s.login(login,password)
     return s.sendmail(**ka)
 
 #==================================================================================================

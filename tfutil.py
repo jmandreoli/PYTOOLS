@@ -189,7 +189,6 @@ The graph of the default session must have an attribute :attr:`saver` (possibly 
             for v in s.run(summary_ops):
               summary_writer.add_summary(v,global_step=vstep)
             summary_writer.flush()
-            if env.logger is not None: env.logger.info('[iterc=%s] summary dumped',step)
           if do_ck is True or env.stop is not None:
             vstep = step_getter(s,step)
             self.checkpoint(s,global_step=vstep,write_meta_graph=env.stop)
@@ -424,6 +423,81 @@ class EVF_log_message (EVF_base):
     yield from (E.tr(E.td(lvl),E.td(E.b('count'),': {} '.format(n),colspan='2')) for lvl,n in zip(self.NAME,self.perlevel) if n != 0)
 
 #==================================================================================================
+class TF_Model:
+  r"""
+This class is not meant to be instantiated, only refined. It defines a class of tensorflow graphs designed for a naive externally fed training loop.
+  """
+#==================================================================================================
+#--------------------------------------------------------------------------------------------------
+  @classmethod
+  def graph(cls,*a,optimiser=None,saver=None):
+    r"""
+The list of tensors *a* is meant to be sent to summary. The first one is optimised using *optimiser*.
+    """
+#--------------------------------------------------------------------------------------------------
+    gstep = tensorflow.train.create_global_step()
+    tensorflow.group(
+      optimiser.minimize(a[0]),
+      tensorflow.assign_add(gstep,1),*(tf_freeze(t) for t in a),
+      name='train')
+    tensorflow.add_to_collection(tensorflow.GraphKeys.INIT_OP,tensorflow.global_variables_initializer())
+    tensorflow.add_to_collection(tensorflow.GraphKeys.SUMMARY_OP,tensorflow.summary.merge_all())
+    tensorflow.get_default_graph().saver = None if saver is None else tensorflow.train.Saver(**saver)
+
+#--------------------------------------------------------------------------------------------------
+  @classmethod
+  def feeder(cls,g,placeholders=None,formatter=None):
+    r"""
+:param g: a tensorflow graph
+:param placeholders: a list of names of placeholders in *g*
+:type placeholders: :class:`List[str]`
+:param formatter: a batch formatter function
+:type formatter: :class:`Callable[[Any],List[numpy.array]]`
+
+Returns the callable which, given a batch, returns the feed dictionary whose keys are the placeholders denoted by *placeholders* in *g* and values are the corresponding arrays in the list obtained by applying callable *formatter* to the batch.
+
+Must be overloaded in subclasses to provide the values of *placeholders* and *formatter*.
+    """
+#--------------------------------------------------------------------------------------------------
+    def f(batch,setup={},placeholders=[g.get_tensor_by_name(p+':0') for p in placeholders]):
+      fd = dict(zip(placeholders,formatter(batch)))
+      fd.update(setup)
+      return fd
+    return f
+
+#--------------------------------------------------------------------------------------------------
+  @classmethod
+  def trainloop(cls,s,traindata,trainsetup={}):
+    r"""
+:param s: a tensorflow session
+:param traindata: training data as a batch iterator
+:type traindata: :class:`Iterable[Any]`
+:param trainsetup: feed dictionary added to the feed dictionary of each training batch
+
+Iterates over *traindata* and evaluates the op named ``train`` on each batch. Invokes (just once) method :meth:`feeder` with the graph of session *s* as unique argument to obtain the feeder, which is then applied to each batch to obtain the feed dictionary of its evaluation.
+    """
+#--------------------------------------------------------------------------------------------------
+    feeder = cls.feeder(s.graph)
+    for batch in traindata: yield s.run('train',feeder(batch,trainsetup))
+
+#--------------------------------------------------------------------------------------------------
+  @classmethod
+  def testreport(cls,s,testdata,testsetup={}):
+    r"""
+:param s: a tensorflow session
+:param testdata: test data as a single batch
+:param testsetup: feed dictionary added to the feed dictionary of the test batch
+
+Returns a status report containing the number of steps so far, and the accuracy computed on the test batch by evaluating the op named ``accuracy``. Invokes :meth:`feeder` with the graph of session *s* as unique argument to obtain the feeder, which is then applied to the test batch to obtain the feed dictionary of its evaluation.
+    """
+#--------------------------------------------------------------------------------------------------
+    feeder = cls.feeder(s.graph)
+    return {
+      'global-step':    s.run(tensorflow.train.get_global_step(s.graph)),
+      'test-accuracy':  s.run('accuracy:0',feeder(testdata,testsetup)),
+    }
+
+#==================================================================================================
 def tf_categorical_accuracy(y,y_,name='accuracy'):
   r"""
 Returns the accuracy op of a batch prediction score tensor *y* to a reference tensor *y_* in onehot representation. Both tensors *y,y_* are of shape *(n,d)* where *n* is the size of the current batch and *d* the dimension of the score vector and onehot representation.
@@ -487,17 +561,20 @@ def manage(*paths,ivname='tr'):
   from IPython.core.getipython import get_ipython
   def showtr():
     if tr: tr.refresh()
-    with wout: clear_output(); display(tr)
+    with w_out: clear_output(); display(tr)
   def settr(c): nonlocal tr; tr = c.new; interpreter.push({ivname:tr}); showtr()
   interpreter = get_ipython()
   tr = ()
   interpreter.push({ivname:tr})
-  wtr = ipywidgets.Dropdown(description=ivname,options=OrderedDict(chain((('...',()),),((p,TFTrace(p)) for p in paths))),style={'description_width':'initial'})
-  wshow = ipywidgets.Button(icon='fa-refresh',tooltip='refresh',layout=ipywidgets.Layout(width='.4cm',padding='0cm'))
-  wout = ipywidgets.Output()
-  wtr.observe(settr,'value')
-  wshow.on_click(lambda b: showtr())
-  return ipywidgets.VBox(children=(ipywidgets.HBox(children=(wtr,wshow),layout={'border-bottom':'thin solid black'}),wout))
+  w_tr = ipywidgets.Dropdown(description=ivname,options=OrderedDict(chain((('...',()),),((p,TFTrace(p)) for p in paths))),style={'description_width':'initial'})
+  w_out = ipywidgets.Output()
+  b_refresh = ipywidgets.Button(icon='refresh',tooltip='refresh',layout=ipywidgets.Layout(width='.4cm',padding='0cm'))
+  b_close = ipywidgets.Button(icon='close',tooltip='close',layout=ipywidgets.Layout(width='.4cm',padding='0cm'))
+  w_main = ipywidgets.VBox(children=(ipywidgets.HBox(children=(w_tr,b_refresh,b_close),layout={'border-bottom':'thin solid black'}),w_out))
+  w_tr.observe(settr,'value')
+  b_refresh.on_click(lambda b: showtr())
+  b_close.on_click(lambda b: w_main.close())
+  return w_main
 
 #==================================================================================================
 def gpus(n=0):

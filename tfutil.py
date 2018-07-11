@@ -548,9 +548,7 @@ def tf_config(**ka):
   ka.setdefault('log_device_placement',True)
   d = ka.setdefault('device_count',{})
   n = d.setdefault('GPU',0)
-  d = ka.setdefault('gpu_options',{})
-  d.setdefault('visible_device_list',','.join(str(x) for x in gpus(-n)) if n else '')
-  ka['gpu_options'] = tensorflow.GPUOptions(**d)
+  os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(str(x) for x in gpus(-n)) if n else ''
   return tensorflow.ConfigProto(**ka)
 
 #==================================================================================================

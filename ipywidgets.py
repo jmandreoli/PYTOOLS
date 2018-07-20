@@ -155,7 +155,8 @@ Returns an :class:`ipywidgets.Widget` to explore a database specified by *spec*.
   from sqlalchemy.engine import Engine
   from IPython.display import display, clear_output
   def size(table): # returns the size of .table.
-    return engine.execute(select([func.count()]).select_from(table)).fetchone()[0]
+    try: return engine.execute(select([func.count()]).select_from(table)).fetchone()[0]
+    except: return -1
   def sample(columns,nsample,offset,order=None): # returns .nsample. row samples of .columns. ordered by .order.
     sql = select(columns,limit=nsample,offset=offset,order_by=(order or columns))
     r = read_sql_query(sql,engine)

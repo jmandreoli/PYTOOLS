@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class PollingThread (threading.Thread):
   """
-Objects of this class are python contexts which can be used to encapsulate any piece of code into a monitor executing on a separate thread. The monitor polls the code at regular intervals and stores a report. Only one report is stored at all time.
+Objects of this class are python contexts which can be used to encapsulate any piece of code into a monitor executing on a separate thread. The monitor polls the code at regular intervals and stores a report. Only one report is stored at all time (any new report replaces the previous one).
 
 :param path: location of the monitor reporting file
 :type param: :class:`Union[str,pathlib.Path]`
@@ -20,7 +20,7 @@ Objects of this class are python contexts which can be used to encapsulate any p
 :type interval: :class:`float`
 :param maxerror: maximum number of consecutive errors before giving up
 :type maxerror: :class:`int`
-:param fields: list of field descriptor (see below) specifying what to record at each polling
+:param fields: list of field descriptors (see below) specifying what to record at each polling
 :param staticfields: dictionary of static values specifying what to record initially
 
 Each field descriptor is a pair of an sql column specification and a function with no input which returns a value compatible with the column type.
@@ -49,8 +49,7 @@ Each field descriptor is a pair of an sql column specification and a function wi
           except Exception as exc:
             error += 1
             if error < maxerror:
-              try: updates_error()
-              except: pass
+              updates_error()
               continue
             else: lasterr = str(exc)
         except sqlite3.Error as exc:
@@ -66,7 +65,6 @@ Each field descriptor is a pair of an sql column specification and a function wi
       except: pass
       close_()
     super().__init__(target=run_,daemon=True)
-    conn = None
     NoneFunc = lambda: None
     DefaultTypes={int:'INTEGER',float:'FLOAT',str:'TEXT',datetime:'DATETIME',bytes:'BLOB'}
     def field(cdef,upd,upd_error=NoneFunc):
@@ -83,11 +81,12 @@ Each field descriptor is a pair of an sql column specification and a function wi
     fields = [field(*x) for x in fields]
     sql_create = 'CREATE TABLE Status ({})'.format(', '.join('{} {}'.format(f[0],f[1]) for l in (staticfields,fields) for f in l))
     sql_init = 'INSERT INTO Status ({}) VALUES ({})'.format(','.join(f[0] for f in staticfields),','.join(len(staticfields)*'?'))
+    sql_update = 'UPDATE Status SET {}'.format(', '.join('{}=?'.format(f[0]) for f in fields))
+    conn = None
     def init_(sql_create=sql_create,sql_init=sql_init,initv=[f[2] for f in staticfields]):
       conn.execute(sql_create)
       conn.execute(sql_init,initv)
       conn.commit()
-    sql_update = 'UPDATE Status SET {}'.format(', '.join('{}=?'.format(f[0]) for f in fields))
     def updates_(u=[f[2] for f in fields],sql_update=sql_update):
       conn.execute(sql_update,tuple(p() for p in u))
       conn.commit()

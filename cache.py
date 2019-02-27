@@ -227,7 +227,7 @@ Instances of this class implements blocks of cells sharing the same functor.
 :param db: specification of the cache repository where the block resides
 :type db: :class:`Union[CacheDB,pathlib.Path,str]`
 :param functor: functor of the block
-:type functor: :class:`Functor`
+:type functor: :class:`AbstractFunctor`
 :param cacheonly: if :const:`True`, cell creation is disallowed
 :type cacheonly: :class:`bool`
 

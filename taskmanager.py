@@ -20,6 +20,7 @@ from lxml.builder import ElementMaker as xmlElementMaker
 from lxml.html import tostring as tohtml, fromstring as fromhtml
 from smtplib import SMTP
 from base64 import b64encode
+from markdownify import markdownify
 
 logger = logging.getLogger(__name__)
 
@@ -159,15 +160,15 @@ Returns a calendar event, which can be further extended. The *permalink*, if not
   return evt
 
 #--------------------------------------------------------------------------------------------------
-def xmlpuretext(e,pat=re.compile('(\n{2,})',re.UNICODE)):
+def xmlpuretext(e):
   r"""
 :param e: XML node
 :type e: :class:`lxml.etree.ElementBase`
 
-Returns the text content of *e*, contracting multiple consecutive newlines into a single one.
+Returns the markdownified text content of *e*.
   """
 #--------------------------------------------------------------------------------------------------
-  return pat.sub('\n',''.join(xmlElementTextIterator(e)))
+  return markdownify(tohtml(e,encoding=str))
 
 #--------------------------------------------------------------------------------------------------
 def xmlsubstitute(doc,d):

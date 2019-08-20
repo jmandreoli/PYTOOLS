@@ -28,15 +28,16 @@ def demo1():
 def demo2():
   fmts = 'iterc:{0} x:{1.value[0]:.4f} (mean: {1.stat.avg:.4f}) y:{1.value[1]:.4f}'
   m = stats_monitor(label='stat',targetf=(lambda env: env.value[0]))
+  m *= buffer_monitor(label='buf',targetf=(lambda env: (env.value,)))
   m *= iterc_monitor(maxiter=200,fmt=fmts.format,show=.8)
-  m *= buffer_monitor(label='buf',targetf=(lambda env: env.value))
   def initf(fig,bounds=((-1.5,1.5),(-1.5,1.5))):
     ax = fig.add_subplot(1,1,1,xlim=bounds[0],ylim=bounds[1],aspect='equal')
     return ax.plot(())
   def updatef(env,artists):
+    try: buf = env.buf
+    except AttributeError: return
     line, = artists
-    try: line.set_data(*zip(*env.buf))
-    except: pass
+    line.set_data(*zip(*buf))
   env = m.run(cycloid(a=.3,omega=5.1,step=2.),detach=(None if automatic else dict(delay=1.)),logger=logger)
   display(env,initf,updatef,figsize=(10,8))
 
@@ -67,9 +68,9 @@ def cycloid(a,omega,step):
 
 def demo():
   logging.basicConfig(level=logging.INFO)
-  for d in demo1, demo2:
-    print(80*'-'); print(d.__name__)
-    d()
+  for demo_ in demo1, demo2:
+    print(80*'-'); print(demo_.__name__)
+    demo_()
     if not automatic:
       try: input('RET: continue; ^-C: stop')
       except: print();break

@@ -53,7 +53,7 @@ def display(*l,**ka): # l must be a list of Distr instances (probability distrib
 def demo():
   from matplotlib.pyplot import show
   display(Dbeta(),Dweibull(),Dnormal(),figsize=(10,8))
-  show(not automatic)
+  if not automatic: show()
 
 def Dbeta(a=1.5,b=2.5): # the beta distribution
   return Distr(

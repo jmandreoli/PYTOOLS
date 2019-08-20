@@ -6,7 +6,7 @@
 #
 
 import traitlets
-from ipywidgets import IntSlider, FloatSlider, Text, HTML, IntText, FloatText, BoundedIntText, BoundedFloatText, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, Accordion, VBox, HBox, Box, Layout, Valid
+from ipywidgets import Label, IntSlider, FloatSlider, Text, HTML, IntText, FloatText, BoundedIntText, BoundedFloatText, Checkbox, Dropdown, Select, SelectMultiple, FloatProgress, Button, Output, Tab, Accordion, VBox, HBox, Box, Layout, Valid
 from . import ondemand, unid
 
 #==================================================================================================
@@ -155,7 +155,8 @@ Returns an :class:`ipywidgets.Widget` to explore a database specified by *spec*.
   from sqlalchemy.engine import Engine
   from IPython.display import display, clear_output
   def size(table): # returns the size of .table.
-    return engine.execute(select([func.count()]).select_from(table)).fetchone()[0]
+    try: return engine.execute(select([func.count()]).select_from(table)).fetchone()[0]
+    except: return -1
   def sample(columns,nsample,offset,order=None): # returns .nsample. row samples of .columns. ordered by .order.
     sql = select(columns,limit=nsample,offset=offset,order_by=(order or columns))
     r = read_sql_query(sql,engine)
@@ -360,6 +361,53 @@ Returns an :class:`ipywidgets.Widget` to edit a traitlets structure. The constru
   w_main.header = VBox()
   w_main.footer = VBox()
   w_main.children = (w_main.header,)+tuple(rows(initial))+(w_main.toolbar,w_main.footer)
+  return w_main
+
+#==================================================================================================
+def progress_reporter(progress,interval=None,maxerror=3):
+#==================================================================================================
+  """
+:param progress: returns the progress value (between 0. and 1.) when invoked
+:type progress: :class:`Callable[[],float]`
+:param interval: duration in seconds between two progress reports
+:type interval: :class:`float`
+
+Returns a :class:`ipywidgets.Widget` reporting on the progress of some activity. The *progress* callable can, in addition to returning the current progress value, display information about the progress, using functions :func:`print` and :func:`IPython.display.display`.
+  """
+  import traceback
+  from threading import Timer
+  from IPython.display import clear_output
+  error = 0
+  stopped = False
+  def update(repeat=True):
+    nonlocal error
+    if stopped: return
+    with w_out:
+      clear_output(wait=True)
+      try:
+        p = progress()
+        w_progressbar.value = p
+        w_progress.value = '{:.1%}'.format(p)
+        error = 0
+      except:
+        error += 1
+        print(traceback.format_exc())
+    w_out.layout.border = 'thin solid red' if error else 'thin solid blue'
+    if error > maxerror: w_out.layout.border = 'thick solid red'
+    elif repeat: Timer((1. if error else interval),update).start()
+  def close():
+    nonlocal stopped
+    stopped = True
+    w_main.close()
+  w_closeb = Button(icon='close',layout=dict(width='.5cm',padding='0cm'),tooltip='Close progress report')
+  w_refreshb = Button(icon='refresh',layout=dict(width='.5cm',padding='0cm'),tooltip='Refresh progress report')
+  w_progress = Label()
+  w_progressbar = FloatProgress(value=0.,min=0.,max=1.,step=.01)
+  w_out = Output()
+  w_main = VBox((HBox((w_closeb,w_progressbar,w_progress,w_refreshb)),w_out))
+  w_closeb.on_click(lambda b: close())
+  w_refreshb.on_click(lambda b: update(False))
+  update(interval is not None)
   return w_main
 
 #==================================================================================================

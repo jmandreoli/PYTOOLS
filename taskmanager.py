@@ -20,6 +20,7 @@ from lxml.builder import ElementMaker as xmlElementMaker
 from lxml.html import tostring as tohtml, fromstring as fromhtml
 from smtplib import SMTP
 from base64 import b64encode
+from markdownify import markdownify
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +42,9 @@ def sendmail(message,login=None,password=None,smtpargs=None,**ka):
   if not message.get('date'): message['date'] = datetime.now().astimezone().strftime('%a, %d %b %Y %H:%M:%S %z')
   ka.update(from_addr=sender(message),to_addrs=recipients(message),msg=message.as_string())
   with SMTP(**smtpargs) as s:
-    s.starttls()
-    s.login(login,password)
+    if login is not None:
+      s.starttls()
+      s.login(login,password)
     return s.sendmail(**ka)
 
 #==================================================================================================
@@ -158,15 +160,15 @@ Returns a calendar event, which can be further extended. The *permalink*, if not
   return evt
 
 #--------------------------------------------------------------------------------------------------
-def xmlpuretext(e,pat=re.compile('(\n{2,})',re.UNICODE)):
+def xmlpuretext(e):
   r"""
 :param e: XML node
 :type e: :class:`lxml.etree.ElementBase`
 
-Returns the text content of *e*, contracting multiple consecutive newlines into a single one.
+Returns the markdownified text content of *e*.
   """
 #--------------------------------------------------------------------------------------------------
-  return pat.sub('\n',''.join(xmlElementTextIterator(e)))
+  return markdownify(tohtml(e,encoding=str))
 
 #--------------------------------------------------------------------------------------------------
 def xmlsubstitute(doc,d):

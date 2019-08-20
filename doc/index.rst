@@ -13,6 +13,7 @@ Contents:
 
    cache.rst
    ipywidgets.rst
+   project.rst
    quickui.rst
    mplext.rst
    polling.rst

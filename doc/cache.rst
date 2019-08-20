@@ -12,7 +12,7 @@ The following piece of code illustrates the use of this module.
    :language: python
    :tab-width: 2
 
-To illustrate the cross-process capability of the cache, the code at the bottom (functions :func:`demo` and :func:`demo_`) runs each of the demos defined in `DEMOS` twice, in two distinct processes started within 2 seconds of each other.
+To illustrate the cross-process capability of the cache, function :func:`demo` runs each of the demos defined in variable `DEMOS` twice, in two distinct processes started within 2 seconds of each other. When applicable, the cache produced by the first run is reused in the second.
 
 * Using the :func:`persistent_cache` decorator, function :func:`simplefunc` is turned into a persistent cache, and invocations of that function reuse the cache from one run to the other. Indeed, the cache is on disk (in folder *DIR*) and is shared across processes/threads.
 
@@ -58,23 +58,16 @@ In the example above, the first argument of the persistently cached function :fu
 
 Persistent cacheing with symbolic expressions for workflow task execution
 .........................................................................
-In a typical workflow task executor (see e.g. function :func:`stepB` in the example above), the first argument *E* is typically an instance of :class:`MapExpr` whose configuration describes all the previous tasks in the workflow. Its incarnation is the set of key-value pairs computed by the previous tasks. The new task typically seeks to enrich this set with some new key-value pairs, based on that of *E*. Since *E* is immutable, it is not possible to directly update it. There are two possibilities
-
-* Convert *E* into a proper dictionary::
+In a typical workflow task executor (see e.g. function :func:`stepB` in the example above), the first argument *E* is typically an instance of :class:`MapExpr` whose configuration describes all the previous tasks in the workflow. Its incarnation is the set of key-value pairs computed by the previous tasks. The new task typically seeks to enrich this set with some new key-value pairs, based on those of *E*. Since *E* is immutable, it is not possible to directly update it. There are two possibilities: convert *E* into a proper dictionary, or keep *E* as such and use function :func:`collections.ChainMap`::
 
    def task_exec(E,...):
      ... # compute some update dictionary D from E and the other arguments
-     DE = dict(E); DE.update(D); return DE
-
-* Use function :func:`chain` from module :mod:`itertools`::
-
-   def task_exec(E,...):
-     ... # compute some update dictionary D from E and the other arguments
-     return chain(E,**D)
+     return dict(E,**D) # first solution
+     return ChainMap(E,**D) # second solution
 
 In both cases, the same key-value pairs are returned. There is an important difference though.
 
-* In the first solution, *E* is recursively incarnated by its conversion to a dict, so the cached value *DE* contains all the key-value pairs already typically assigned by the previous tasks. The new key-value pairs from *D* are appended. The advantage of that solution is that a single cache lookup gives access to the computed results of all the tasks up to the current one. On the other hand, the drawback is that this cached value might be large, and mostly redundant with the cached values of the previous tasks.
+* In the first solution, *E* is recursively incarnated by its conversion to a dict, so the cached value contains all the key-value pairs already typically assigned by the previous tasks, to which the new key-value pairs from *D* are appended. The advantage of that solution is that a single cache lookup gives access to the computed results of all the tasks up to the current one. On the other hand, the drawback is that this cached value is mostly redundant with the cached values of the previous tasks, and these may be very large.
 * In the second solution, the cached value essentially holds the new key-value pairs of *D* together with the configuration of *E*, not its recursive incarnation, and the former is usually much smaller than the latter. The price to pay is that access to the results of previous tasks now requires re-incarnating *E* hence re-accessing the cache, but that overhead is often small and worth the economy in overall cache redundancy.
 
 Available types and functions

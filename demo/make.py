@@ -3,7 +3,6 @@ from pathlib import Path
 from threading import Thread
 from itertools import cycle
 from shutil import rmtree
-DIR = Path(__file__).parent.resolve()
 
 def clock(module,v):
   print(' ',module,end='\r',file=v,flush=True)
@@ -11,14 +10,15 @@ def clock(module,v):
     time.sleep(.3)
     print(c,end='\r',file=v,flush=True)
 def fordoc(module):
-  prefix = str(DIR.parent)
-  pout = (DIR/module).with_suffix('.out')
-  pdir = pout.with_suffix('.dir')
-  if pdir.exists():
-    for f in list(pdir.iterdir()):
-      if f.is_file(): f.unlink()
-      else: rmtree(str(f))
-  mod = importlib.import_module('PYTOOLS.demo.'+module)
+  spec = importlib.util.find_spec(module)
+  modpath = Path(spec.origin)
+  pdir = modpath.with_suffix('.dir')
+  if pdir.exists(): rmtree(str(pdir)); pdir.mkdir()
+  pout = modpath.with_suffix('.out')
+  prefix = modpath
+  for _ in range(len(module.split('.'))): prefix = prefix.parent
+  prefix = str(prefix)
+  mod = spec.loader.load_module()
   mod.automatic = True
   Thread(target=clock,args=(module,os.fdopen(os.dup(1),'w'),),daemon=True).start()
   with pout.open('w') as v:
@@ -30,6 +30,4 @@ def fordoc(module):
   r = r.replace(prefix,'...')
   with pout.open('w') as v: v.write(r)
 
-if __name__=='__main__':
-  module = sys.argv[1]
-  fordoc(module)
+if __name__=='__main__': fordoc(*sys.argv[1:])

@@ -9,11 +9,11 @@ def MatrixSquared(x,manual=None):
   return _timing((lambda a,dot=(_manualdot if manual else dot): dot(a,a)),_somematrix(x))
 
 def _timing(f,*a,**ka):
-  from time import time,clock
-  p = time(),clock()
+  from time import time,process_time
+  p = time(),process_time()
   f(*a,**ka)
-  p = time()-p[0],clock()-p[1]
-  return dict(time=p[0],clock=p[1]),p[0]
+  p = time()-p[0],process_time()-p[1]
+  return dict(time=p[0],process_time=p[1]),p[0]
 
 def _somematrix(x):
   from numpy import linspace, newaxis

@@ -5,7 +5,7 @@
 # Purpose:              a thread which polls code at regular intervals
 #
 
-import os,logging,sqlite3,time,threading,traceback
+import os,socket,logging,sqlite3,time,threading,traceback
 from datetime import datetime
 from pathlib import Path
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ Objects of this class are python contexts which can be used to encapsulate any p
 :param fields: list of field descriptors (see below) specifying what to record at each polling
 :param staticfields: dictionary of static values specifying what to record initially
 
-Each field descriptor is a pair of an sql column specification and a function with no input which returns a value compatible with the column type.
+Each field descriptor is a pair of an sql column specification and a function with no input which returns a value compatible with the column type. An optional third component can specify an other function to be used in case of error.
   """
   def __init__(self,path,*fields,interval=1.,maxerror=3,**staticfields):
     def open_():
@@ -74,7 +74,7 @@ Each field descriptor is a pair of an sql column specification and a function wi
       return name,DefaultTypes.get(type(value),'BLOB'),value
     started = time.time(); elapsed = lambda started=started:time.time()-started
     staticfields = list(staticfields.items())
-    staticfields[0:0] = ('started',datetime.fromtimestamp(started)), ('pid',os.getpid())
+    staticfields[0:0] = ('started',datetime.fromtimestamp(started)), ('pid','{}:{}'.format(socket.getfqdn(),os.getpid()))
     staticfields = [staticfield(*x) for x in staticfields]
     fields = list(fields)
     fields[0:0] = ('elapsed',elapsed,elapsed),('error TEXT',NoneFunc,traceback.format_exc)
@@ -87,10 +87,16 @@ Each field descriptor is a pair of an sql column specification and a function wi
       conn.execute(sql_create)
       conn.execute(sql_init,initv)
       conn.commit()
+<<<<<<< HEAD
     def updates_(u=[f[2] for f in fields],sql_update=sql_update):
       conn.execute(sql_update,tuple(p() for p in u))
+=======
+    sql_update = 'UPDATE Status SET '+', '.join('{}=?'.format(f[0]) for f in fields)
+    def updates_(updf=[f[2] for f in fields],sql_update=sql_update):
+      conn.execute(sql_update,tuple(u() for u in updf))
+>>>>>>> cc45b4fcac38a794d097703666f60855144685ce
       conn.commit()
-    def updates_error(u=[f[3] for f in fields]): return updates_(u)
+    def updates_error(updf=[f[3] for f in fields]): updates_(updf)
     self.stop_requested = threading.Event()
     if isinstance(path,str): path = Path(path)
   def __enter__(self):

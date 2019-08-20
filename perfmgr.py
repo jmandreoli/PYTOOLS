@@ -93,10 +93,13 @@ Displays the results of selected experiments in this context. The selection test
       assert d is not None, 'Unknown slot: {}'.format(slot)
       if x is None: x = d
       return lambda exp: getattr(exp,slot)==x
-    def zipaxes(L,fig,**ka):
+    def zipaxes(L,fig):
       from math import sqrt,ceil
       n = len(L); nc = int(ceil(sqrt(n))); nr = int(ceil(n/nc))
-      for k,x in enumerate(L,1): yield x,fig.add_subplot(nr,nc,k,**ka)
+      ax = None
+      for k,x in enumerate(L,1):
+        ax = fig.add_subplot(nr,nc,k,sharex=ax,sharey=ax)
+        yield x,ax
     fmtd = dict(args=(lambda x:'{{{}}}'.format(','.join('{}={}'.format(k,v) for k,v in sorted(x.items())))))
     fmtd.update(fmt)
     if isinstance(meter,str): meterf = lambda r,m=meter: r[m]
@@ -116,7 +119,7 @@ Displays the results of selected experiments in this context. The selection test
     assert tests, 'No experiment passed the filter'
     targets = tuple(zip(cycle('bgrcmyk'),sorted(rngs[targeti])))
     nontargeti = [i for i,r in enumerate(rngs) if i!=targeti and len(r)>1]
-    for (c,D),ax in zipaxes(sorted(tests.items()),fig,sharex=True,sharey=True):
+    for (c,D),ax in zipaxes(sorted(tests.items()),fig):
       ax.set_title(','.join('{}={}'.format(slots[i],c[i]) for i in nontargeti),fontsize='small')
       for col,val in targets:
         t = D.get(val)

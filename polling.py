@@ -87,14 +87,8 @@ Each field descriptor is a pair of an sql column specification and a function wi
       conn.execute(sql_create)
       conn.execute(sql_init,initv)
       conn.commit()
-<<<<<<< HEAD
-    def updates_(u=[f[2] for f in fields],sql_update=sql_update):
-      conn.execute(sql_update,tuple(p() for p in u))
-=======
-    sql_update = 'UPDATE Status SET '+', '.join('{}=?'.format(f[0]) for f in fields)
     def updates_(updf=[f[2] for f in fields],sql_update=sql_update):
       conn.execute(sql_update,tuple(u() for u in updf))
->>>>>>> cc45b4fcac38a794d097703666f60855144685ce
       conn.commit()
     def updates_error(updf=[f[3] for f in fields]): updates_(updf)
     self.stop_requested = threading.Event()

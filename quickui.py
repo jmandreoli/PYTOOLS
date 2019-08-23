@@ -186,7 +186,7 @@ Methods:
 
   def setup(self,c0,exper):
     r"""
-:param c0: A configurator to use in this setup 
+:param c0: A configurator to use in this setup
 :type c0: :class:`Configurator`
 :param exper: Experiment function
 :type exper: :class:`Callable[[object],None]`
@@ -746,7 +746,7 @@ Only one of *step*, *nval* can be specified. If both are :const:`None`, then *st
 #--------------------------------------------------------------------------------------------------
 class LogScalarEditWidget (ScalarEditWidget):
   r"""
-The value space is a log scaled grid in an interval of real numbers. 
+The value space is a log scaled grid in an interval of real numbers.
 
 :param mstep: multiplicative size of grid step (must be greater than 1.)
 :type mstep: :class:`float`
@@ -778,7 +778,7 @@ Only one of *mstep*, *nval* can be specified. If both are :const:`None`, then *m
 #--------------------------------------------------------------------------------------------------
 class SetEditWidget (EditWidget):
   r"""
-An instance of this class edits a subset from an explicit set of string options. 
+An instance of this class edits a subset from an explicit set of string options.
 
 :param options: list of options or option-tooltip pairs
 :type options: :class:`Iterable[Union[str,Tuple[str,str]]]`
@@ -875,7 +875,7 @@ The widget consists of one checkable widget of class :class:`QtWidgets.QPressBut
 #--------------------------------------------------------------------------------------------------
 class BooleanEditWidget (EditWidget):
   r"""
-An instance of this class edits a Boolean flag. 
+An instance of this class edits a Boolean flag.
 
 :param parent: parent widget
 :type parent: :class:`QtWidgets.QWidget`

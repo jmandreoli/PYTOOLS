@@ -5,6 +5,7 @@ docstack.dir/*
 perfmgr.dir/*
 *.out
 *.png
+*.gif
 *.qcfg
 *.mp4
 

@@ -2,20 +2,13 @@
 # Contributors:         Jean-Marc Andreoli
 # Language:             python
 # Purpose:              Illustration of the quickui module
-
-if __name__=='__main__':
-  import sys,os
-  from PYTOOLS.demo.quickui import demo # properly import this module
-  demo()
-  sys.exit(0)
-
+from make import RUN; RUN(__name__,__file__,2)
 #--------------------------------------------------------------------------------------------------
 
 from pathlib import Path
 from functools import partial
 from ..quickui import ExperimentUI, cbook as Q, configuration, startup
 from qtpy import QtCore, QtGui, QtWidgets
-automatic = False
 
 class Demo (ExperimentUI):
 
@@ -54,17 +47,14 @@ class Demo (ExperimentUI):
 #--------------------------------------------------------------------------------------------------
 
 def demo():
-  automatic = True
   with startup() as app:
     w = Demo()
     w.main.setFixedWidth(500)
-    if automatic: autoplay(w)
-
-def autoplay(w,DIR=Path(__file__).resolve().parent):
-  from itertools import count; cnt = count(1)
-  def snap():
-    QtGui.QGuiApplication.primaryScreen().grabWindow(w.main.winId()).save(str(DIR/'quickui{}.png'.format(next(cnt))),'PNG')
-  actionSnap = QtWidgets.QAction(w.main); actionSnap.triggered.connect(snap)
-  #actionSnap.setText('Snap'); w.toolbar.addAction(actionSnap); return
-  from threading import Timer
-  for t,a in (.5,actionSnap),(1.,w.actionRelaunch),(1.5,actionSnap),(2.,w.actionQuit): Timer(t,a.trigger).start()
+    def actions():
+      from itertools import count; cnt = count(1)
+      def snap():
+        QtGui.QGuiApplication.primaryScreen().grabWindow(w.main.winId()).save(str(RUN.dir/'quickui{}.png'.format(next(cnt))),'PNG')
+      actionSnap = QtWidgets.QAction(w.main); actionSnap.triggered.connect(snap)
+      #actionSnap.setText('Snap'); w.toolbar.addAction(actionSnap); return
+      for t,a in (.5,actionSnap),(1.,w.actionRelaunch),(1.5,actionSnap),(2.,w.actionQuit): yield t,a.trigger
+    RUN.play(*actions())

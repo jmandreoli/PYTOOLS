@@ -4,4 +4,4 @@ TARGET := cache.out monitor.out mplext.out quickui.out perfmgr.out polling.out
 all: ${TARGET}
 
 %.out: %.py
-	@export PYTHONPATH=../.. ; ${PYTHON} make.py PYTOOLS.demo.$(patsubst %.py,%,$<)
+	@export PYTHONPATH=../.. ; ${PYTHON} make.py $(patsubst %.py,%,$<) 2

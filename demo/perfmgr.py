@@ -2,21 +2,12 @@
 # Contributors:         Jean-Marc Andreoli
 # Language:             python
 # Purpose:              Illustration of the perfmgr module
-
-if __name__=='__main__':
-  import sys
-  from PYTOOLS.demo.perfmgr import demo # properly import this module
-  demo(*sys.argv[1:])
-  sys.exit(0)
-
+from make import RUN; RUN(__name__,__file__,2)
 #--------------------------------------------------------------------------------------------------
 
 import logging
 from ..perfmgr import sessionmaker, geometric, Context, Experiment
 from pathlib import Path; DIR = Path(__file__).resolve().parent
-automatic = False
-
-#--------------------------------------------------------------------------------------------------
 
 def demo_(compute=False):
   logging.basicConfig(level=logging.INFO,format='[proc %(process)d] %(message)s',datefmt='%H:%M:%S')
@@ -31,12 +22,13 @@ def demo_(compute=False):
         orms.root.addexperiment(exp)
         orms.commit()
   else: # display
-    from matplotlib.pyplot import figure, show
+    from matplotlib.pyplot import figure, show, close
     fig = figure(figsize=(16,8))
     orms.root.addcontext(ctx).display(fig,'args',meter='time')
     fig.tight_layout()
-    if automatic: fig.savefig(str(DIR/'perfmgr.png'))
-    else: show()
+    def action(): fig.savefig(str(RUN.dir/'perfmgr.png')); close()
+    RUN.play(action)
+    show()
   orms.close()
 
 def demo(phase=None):

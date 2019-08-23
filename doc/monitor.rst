@@ -20,7 +20,7 @@ Typical output:
 
 .. literalinclude:: ../demo/monitor.out
 
-.. |output| image:: ../demo/monitor.png
+.. |output| image:: ../demo/monitor.gif
    :width: 400px
 
 |output|

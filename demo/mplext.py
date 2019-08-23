@@ -2,20 +2,12 @@
 # Contributors:         Jean-Marc Andreoli
 # Language:             python
 # Purpose:              Illustration of the mplext module
-
-if __name__=='__main__':
-  import sys
-  from PYTOOLS.demo.mplext import demo # properly import this module
-  demo()
-  sys.exit(0)
-
+from make import RUN; RUN(__name__,__file__,2)
 #--------------------------------------------------------------------------------------------------
 
-from pathlib import Path
 from scipy.special import betainc, beta, gamma, erf
 from numpy import sqrt, square, exp, infty, pi, linspace
 from ..mplext import Cell
-automatic = False
 
 from collections import namedtuple
 Distr = namedtuple('Distr',('name','dom','domv','mean','std','pdf','cdf'))
@@ -46,14 +38,16 @@ def display(*l,**ka): # l must be a list of Distr instances (probability distrib
     ax.text(.5,.5,'Distribution details from Wikipedia.',ha='center',va='center')
     ax.set_xticks(()) ; ax.set_yticks(())
     view.figure.tight_layout()
-  if automatic: view.figure.savefig(str(Path(__file__).parent.resolve()/'mplext.png'))
+  return view
 
 #--------------------------------------------------------------------------------------------------
 
 def demo():
-  from matplotlib.pyplot import show
-  display(Dbeta(),Dweibull(),Dnormal(),figsize=(10,8))
-  if not automatic: show()
+  from matplotlib.pyplot import show, close
+  view = display(Dbeta(),Dweibull(),Dnormal(),figsize=(10,8))
+  def action(): view.figure.savefig(str(RUN.dir/'mplext.png')); close()
+  RUN.play(action)
+  show()
 
 def Dbeta(a=1.5,b=2.5): # the beta distribution
   return Distr(

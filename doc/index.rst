@@ -6,22 +6,21 @@
 Welcome to PYTOOLS's documentation!
 ===================================
 
-Contents:
-
 .. toctree::
    :maxdepth: 2
+   :caption: Contents:
 
-   cache.rst
-   ipywidgets.rst
-   project.rst
-   quickui.rst
-   mplext.rst
-   polling.rst
-   monitor.rst
-   tfutil.rst
-   perfmgr.rst
-   cpuinfomgr.rst
-   taskmanager.rst
+   _mod_cache.rst
+   _mod_ipywidgets.rst
+   _mod_project.rst
+   _mod_quickui.rst
+   _mod_mplext.rst
+   _mod_polling.rst
+   _mod_monitor.rst
+   _mod_tfutil.rst
+   _mod_perfmgr.rst
+   _mod_cpuinfomgr.rst
+   _mod_taskmanager.rst
 
 Available types and functions
 -----------------------------

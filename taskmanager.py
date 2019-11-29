@@ -4,6 +4,15 @@
 # Language:             python
 # Purpose:              Simple task utilities
 #
+r"""
+:mod:`PYTOOLS.taskmanager` --- simple task utilities
+====================================================
+
+This module provides basic utilities to build simple tasks.
+
+Available types and functions
+-----------------------------
+"""
 
 import logging, os, re, icalendar, uuid, sys
 from datetime import datetime, timedelta

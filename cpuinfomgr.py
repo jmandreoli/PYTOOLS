@@ -4,6 +4,15 @@
 # Language:       python
 # Purpose:        Records cpu information from machines on the cloud
 #
+r"""
+:mod:`PYTOOLS.cpuinfomgr` --- A manager of network cpu info
+===========================================================
+
+This module provides a simple tool to record cpu info about accessible hosts.
+
+Available types and functions
+-----------------------------
+"""
 
 import subprocess, re, logging
 from collections import defaultdict

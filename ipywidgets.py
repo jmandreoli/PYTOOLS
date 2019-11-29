@@ -4,6 +4,15 @@
 # Language:             python
 # Purpose:              Utilities for the ipywidgets package
 #
+r"""
+:mod:`PYTOOLS.ipywidgets` --- IPython widgets utilities
+=======================================================
+
+This module provides basic utilities for IPython widgets (from module :mod:`ipywidgets`).
+
+Available types and functions
+-----------------------------
+"""
 
 import traitlets
 from ipywidgets import Label, IntSlider, FloatSlider, Text, HTML, IntText, FloatText, BoundedIntText, BoundedFloatText, Checkbox, Dropdown, Select, SelectMultiple, FloatProgress, Button, Output, Tab, Accordion, VBox, HBox, Box, Layout, Valid

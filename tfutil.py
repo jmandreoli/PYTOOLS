@@ -4,6 +4,15 @@
 # Language:             python
 # Purpose:              Some utilities for tensorflow
 #
+r"""
+:mod:`PYTOOLS.tfutil` --- Utilities for tensorflow
+==================================================
+
+This module provides some utilities for tensorflow development.
+
+Available types and functions
+-----------------------------
+"""
 
 import os, sys, subprocess
 from contextlib import contextmanager

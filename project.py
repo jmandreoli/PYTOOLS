@@ -4,6 +4,15 @@
 # Language:             python
 # Purpose:              Some utilities for project management
 #
+r"""
+:mod:`PYTOOLS.project` --- Run management
+=========================================
+
+This module provides some utilities to manage multiple runs of a script.
+
+Available types and functions
+-----------------------------
+"""
 
 import os, sys, subprocess
 from pathlib import Path

@@ -10,17 +10,17 @@ Welcome to PYTOOLS's documentation!
    :maxdepth: 2
    :caption: Contents:
 
-   _mod_cache.rst
-   _mod_ipywidgets.rst
-   _mod_project.rst
-   _mod_quickui.rst
-   _mod_mplext.rst
-   _mod_polling.rst
-   _mod_monitor.rst
-   _mod_tfutil.rst
-   _mod_perfmgr.rst
-   _mod_cpuinfomgr.rst
-   _mod_taskmanager.rst
+   mod_cache.rst
+   mod_ipywidgets.rst
+   mod_project.rst
+   mod_quickui.rst
+   mod_mplext.rst
+   mod_polling.rst
+   mod_monitor.rst
+   mod_tfutil.rst
+   mod_perfmgr.rst
+   mod_cpuinfomgr.rst
+   mod_taskmanager.rst
 
 Available types and functions
 -----------------------------

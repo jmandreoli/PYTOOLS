@@ -5,7 +5,7 @@
 # Purpose:              Some utilities in Python
 #
 
-import os, collections, logging
+import os, re, collections, logging
 logger = logging.getLogger(__name__)
 
 #==================================================================================================
@@ -955,3 +955,13 @@ This namespace class defines class methods :meth:`load`, :meth:`loads`, :meth:`d
   def loads(cls,s):
     from io import BytesIO
     with BytesIO(s) as u: return cls.Unpickler(u).load()
+
+#--------------------------------------------------------------------------------------------------
+def einsum_nd(sgn,*a,pat=re.compile(r'(\w+)\.?')):
+  r"""
+Equivalent of numpy.einsum with named dimensions (limited to 26 like the original!). Dimension names must be words in the sense of the :mod:`re` module (unicode allowed) and must be separated by '.' in operand shapes.
+  """
+#--------------------------------------------------------------------------------------------------
+  from numpy import einsum
+  D = collections.defaultdict(lambda A=iter('abcdefghijklmnopqrstuvwxyz'): next(A))
+  return einsum(pat.sub((lambda m,D=D:D[m[1]]),sgn),*a)

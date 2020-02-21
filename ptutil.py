@@ -131,10 +131,10 @@ Instances of this class control basic classification runs.
     def header_info(run): logger.info(header_fmt,*header)
     def train_info(run):
       if run.batch%period==0:
-        logger.info(current_fmt+'TRAIN loss: %.2f',*current(run),run.loss)
+        logger.info(current_fmt+'TRAIN loss: %.3f',*current(run),run.loss)
     def valid_info(run):
       if run.batch%vperiod==0:
-        logger.info(current_fmt+'VALIDATION loss: %.2f, accuracy: %.2f',*current(run),*run.valid)
+        logger.info(current_fmt+'VALIDATION loss: %.3f, accuracy: %.3f',*current(run),*run.valid)
     def all_info(run): train_info(run); valid_info(run)
     on_open = None if logger is None else header_info
     on_batch = None if logger is None else (None if vperiod is None else valid_info) if period is None else (train_info if vperiod is None else all_info)

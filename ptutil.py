@@ -52,10 +52,10 @@ Instances of this class are classification runs.
     with training(net,True):
       self.progress = 0.
       self.step = self.epoch = 0
-      self.walltime = self.cputime = 0.
       self.valid_ = None,-1
+      self.time = 0.,0.
+      start = process_time(),time()
       self.emit('open',self)
-      starttimes = process_time(),time()
       try:
         while self.progress<1.:
           self.batch = 0; self.loss = 0.
@@ -67,7 +67,7 @@ Instances of this class are classification runs.
             optimiser.step()
             self.step += 1
             self.batch += 1; self.loss += (loss.item()-self.loss)/self.batch
-            self.walltime,self.cputime = time()-starttimes[1],process_time()-starttimes[0]
+            self.time = process_time()-start[0],time()-start[1]
             self.emit('batch',self)
           self.epoch += 1
           self.emit('epoch',self)
@@ -124,7 +124,7 @@ Instances of this class control basic classification runs.
 #--------------------------------------------------------------------------------------------------
   def __init__(self,max_epoch=int(1e9),max_time=float('inf'),period:int=None,vperiod:int=None,logger=None):
 #--------------------------------------------------------------------------------------------------
-    current = lambda run: (run.walltime,run.step,run.epoch,run.batch)
+    current = lambda run: (run.time[1],run.step,run.epoch,run.batch)
     header = 'TIME','STEP','EPO','BAT'
     current_fmt = '%6.1f %6d %3d/%4d '
     header_fmt =  '%6s %6s %3s/%4s '
@@ -139,7 +139,7 @@ Instances of this class control basic classification runs.
     on_open = None if logger is None else header_info
     on_batch = None if logger is None else (None if vperiod is None else valid_info) if period is None else (train_info if vperiod is None else all_info)
     def on_epoch(run):
-      run.progress = p = min(max(run.epoch/max_epoch,run.walltime/max_time),1.)
+      run.progress = p = min(max(run.epoch/max_epoch,run.time[1]/max_time),1.)
       if logger is not None:
         p = '{:.0%}'.format(p)
         logger.info(current_fmt+'PROGRESS: %s',*current(run),p)
@@ -160,7 +160,7 @@ Instances of this class log information about classification runs into mlflow.
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,uri:str,exp:str,period:int=None,vperiod:int=None,checkpoint:int=None):
+  def __init__(self,uri:str,exp:str,period:int=None,vperiod:int=None,checkpoint:float=None):
 #--------------------------------------------------------------------------------------------------
     import mlflow, mlflow.pytorch
     mlflow.set_tracking_uri(uri)
@@ -177,6 +177,7 @@ Instances of this class log information about classification runs into mlflow.
     def on_open(run):
       mlflow.start_run()
       mlflow.log_params(run.params)
+      run.checkpointed = 0.
     def on_close(run):
       vloss,vaccu = run.valid
       mlflow.log_metric('vloss',vloss,run.step)
@@ -185,8 +186,10 @@ Instances of this class log information about classification runs into mlflow.
       mlflow.end_run()
     on_batch = (None if vperiod is None else valid_info) if period is None else (train_info if vperiod is None else all_info)
     def on_epoch(run):
-      if run.epoch%checkpoint==0:
+      t = run.time[1]
+      if t-run.checkpointed>checkpoint:
         mlflow.pytorch.log_model(run.tnet,'model_{:03d}'.format(run.epoch))
+        run.checkpointed = t
     if checkpoint is None: on_epoch = None
     self.on_open,self.on_close,self.on_batch,self.on_epoch = on_open,on_close,on_batch,on_epoch
 

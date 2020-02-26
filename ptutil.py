@@ -28,11 +28,19 @@ Instances of this class are classification runs.
 
   _events_ = ['open','batch','epoch','close']
 
-  net = None
-  optimiser = None
-  device = None
-  train_data = None
-  valid_data = None
+  net:'torch.nn.Module' = None
+  optimiser:'torch.optim.Optimizer' = None
+  device:'torch.device' = None
+
+  # for train runs:
+  train_data:'Iterable[Tuple[torch.tensor,torch.tensor]]' = None
+  valid_data:'Iterable[Tuple[torch.tensor,torch.tensor]]' = None
+
+  # for proto runs:
+  nepoch: int = None
+  labels:'Union[int,Iterable[int]]' = None
+  init:'torch.tensor' = None
+  projection:'Callable[torch.tensor,NoneType]' = None
 
 #--------------------------------------------------------------------------------------------------
   def __init__(self,**ka):
@@ -47,14 +55,23 @@ Instances of this class are classification runs.
 #--------------------------------------------------------------------------------------------------
   def train(self):
     r"""
-Executes a training run.
+Executes a training run. Expected attributes at startup: `net`, `optimiser`, `device`, `train_data`, `valid_data`. Available attributes: `progress`, `time`, `step`, `epoch`, `batch`, `loss`, `tnet`, `eval_valid`, `eval_test`.
     """
 #--------------------------------------------------------------------------------------------------
+    def ondevice(data):
+      for inputs,labels in data: yield inputs.to(self.device),labels.to(self.device)
+    def eval_cache(data):
+      current = None,-1
+      def cache():
+        nonlocal current
+        if current[1] != self.step: current = self.eval(net,ondevice(data)),self.step
+        return current[0]
+      return cache
     self.tnet = net = self.net.to(self.device)
+    self.eval_valid,self.eval_test = eval_cache(self.valid_data),eval_cache(self.test_data)
     optimiser = self.optimiser(net.parameters())
     self.progress = 0.
     self.step = self.epoch = 0
-    self.valid_ = None,-1
     self.time = 0.,0.
     with training(net,True):
       self.emit('open',self)
@@ -62,8 +79,7 @@ Executes a training run.
         start = process_time(),time()
         while self.progress<1.:
           self.batch = 0; self.loss = 0.
-          for inputs,labels in self.train_data:
-            inputs,labels = inputs.to(self.device),labels.to(self.device)
+          for inputs,labels in ondevice(self.train_data):
             optimiser.zero_grad()
             loss = self.lossF(net(inputs),labels)
             loss.backward()
@@ -71,6 +87,7 @@ Executes a training run.
             self.step += 1; self.batch += 1
             self.loss += (loss.item()-self.loss)/self.batch
             self.time = process_time()-start[0],time()-start[1]
+            del inputs,labels,loss # free memory before emitting (not sure this works)
             self.emit('batch',self)
           self.epoch += 1
           self.emit('epoch',self)
@@ -78,47 +95,45 @@ Executes a training run.
         self.emit('close',self)
 
 #--------------------------------------------------------------------------------------------------
-  @property
-  def valid(self):
-#--------------------------------------------------------------------------------------------------
-    v = self.valid_
-    if v[1] != self.step: self.valid_ = v = self.predict(self.valid_data),self.step
-    return v[0]
-
-#--------------------------------------------------------------------------------------------------
-  def predict(self,data):
-#--------------------------------------------------------------------------------------------------
-    self.tnet = net = self.net.to(self.device)
-    loss = 0.; accuracy = 0.
-    with training(net,False),torch.no_grad():
-      for n,(inputs,labels) in enumerate(data,1):
-        inputs,labels = inputs.to(self.device),labels.to(self.device)
-        outputs = net(inputs)
-        loss += (self.lossF(outputs,labels).item()-loss)/n
-        accuracy += (self.accuracyF(outputs,labels).item()-accuracy)/n
-    return loss,accuracy
-
-#--------------------------------------------------------------------------------------------------
-  def proto(self,init,labels,projection=None,nepoch=100): # params should be attributes of self
+  def proto(self):
     r"""
-Executes a prototype discovery run.
+Executes a prototype discovery run. Expected attributes at startup: `net`, `optimiser`, `device`, `labels`, `nepoch`, `init`, `projection` (optional)
     """
 #--------------------------------------------------------------------------------------------------
-    if projection is None: projection = lambda a: None
-    if isinstance(labels,int): labels = range(labels)
+    projection = (lambda a: None) if self.projection is None else self.projection
+    labels = range(self.labels) if isinstance(self.labels,int) else self.labels
     self.tnet = net = self.net.to(self.device)
     with training(net,True):
       for label in labels:
-        param = torch.autograd.Variable(init.clone().unsqueeze(0),requires_grad=True).to(self.device)
+        param = torch.autograd.Variable(self.init.clone().unsqueeze(0),requires_grad=True).to(self.device)
         optimiser = self.optimiser([param])
         label = torch.tensor([label]).to(device=self.device)
-        for n in range(nepoch):
+        for n in range(self.nepoch):
           optimiser.zero_grad()
           loss = self.lossF(net(param),label)
           loss.backward()
           optimiser.step()
           projection(param.data)
         yield param.detach().numpy()[0]
+
+#--------------------------------------------------------------------------------------------------
+  def eval(self,net,data):
+    r"""
+Evaluates a model on some data.
+
+:param net: the model
+:type net: :class:`torch.Module`
+:param data: a list of batches (each batch is an inputs-labels pair)
+:type data: :class:`Iterable[Tuple[torch.tensor,torch.tensor]]`
+    """
+#--------------------------------------------------------------------------------------------------
+    loss = 0.; accuracy = 0.
+    with training(net,False),torch.no_grad():
+      for n,(inputs,labels) in enumerate(data,1):
+        outputs = net(inputs)
+        loss += (self.lossF(outputs,labels).item()-loss)/n
+        accuracy += (self.accuracyF(outputs,labels).item()-accuracy)/n
+    return loss,accuracy
 
 #--------------------------------------------------------------------------------------------------
   def bind_listeners(self,*a):
@@ -159,16 +174,17 @@ Instances of this class control basic classification runs.
         logger.info(current_fmt+'TRAIN loss: %.3f',*current(run),run.loss)
     def valid_info(run):
       if run.batch%vperiod==0:
-        logger.info(current_fmt+'VALIDATION loss: %.3f, accuracy: %.3f',*current(run),*run.valid)
-    def all_info(run): train_info(run); valid_info(run)
+        logger.info(current_fmt+'VALIDATION loss: %.3f, accuracy: %.3f',*current(run),*run.eval_valid())
+    def test_info(run):
+      logger.info(current_fmt+'TEST loss: %.3f, accuracy: %.3f',*current(run),*run.eval_test())
+    def progress_info(run):
+      logger.info(current_fmt+'PROGRESS: %s',*current(run),'{:.0%}'.format(run.progress))
+    def set_progress(run): run.progress = min(max(run.epoch/max_epoch,run.time[1]/max_time),1.)
     on_open = None if logger is None else header_info
-    on_batch = None if logger is None else (None if vperiod is None else valid_info) if period is None else (train_info if vperiod is None else all_info)
-    def on_epoch(run):
-      run.progress = p = min(max(run.epoch/max_epoch,run.time[1]/max_time),1.)
-      if logger is not None:
-        p = '{:.0%}'.format(p)
-        logger.info(current_fmt+'PROGRESS: %s',*current(run),p)
-    self.on_open,self.on_batch,self.on_epoch = on_open,on_batch,on_epoch
+    on_batch = None if logger is None else compose((None if period is None else train_info),(None if vperiod is None else valid_info))
+    on_epoch = compose(set_progress,(None if logger is None else progress_info))
+    on_close = None if logger is None else test_info
+    self.on_open,self.on_close,self.on_batch,self.on_epoch = on_open,on_close,on_batch,on_epoch
 
 #==================================================================================================
 class RunMlflowListener:
@@ -195,21 +211,25 @@ Instances of this class log information about classification runs into mlflow.
         mlflow.log_metric('tloss',run.loss,run.step)
     def valid_info(run):
       if run.batch%vperiod==0:
-        vloss,vaccu = run.valid
+        vloss,vaccu = run.eval_valid()
         mlflow.log_metric('vloss',vloss,run.step)
         mlflow.log_metric('vaccu',vaccu,run.step)
-    def all_info(run): train_info(run); valid_info(run)
     def on_open(run):
       mlflow.start_run()
       mlflow.log_params(run.params)
       run.checkpointed = 0.
     def on_close(run):
-      vloss,vaccu = run.valid
-      mlflow.log_metric('vloss',vloss,run.step)
-      mlflow.log_metric('vaccu',vaccu,run.step)
-      mlflow.pytorch.log_model(run.tnet,'model')
-      mlflow.end_run()
-    on_batch = (None if vperiod is None else valid_info) if period is None else (train_info if vperiod is None else all_info)
+      try:
+        vloss,vaccu = run.eval_valid()
+        mlflow.log_metric('vloss',vloss,run.step)
+        mlflow.log_metric('vaccu',vaccu,run.step)
+        loss,accu = run.eval_test()
+        mlflow.set_tag('test-loss',loss)
+        mlflow.set_tag('test-accu',accu)
+        mlflow.pytorch.log_model(run.tnet,'model')
+      finally:
+        mlflow.end_run()
+    on_batch = compose((None if period is None else train_info),(None if vperiod is None else valid_info))
     def on_epoch(run):
       t = run.time[1]
       if t-run.checkpointed>checkpoint_after:
@@ -234,3 +254,11 @@ def training(net,flag):
   net.train(flag)
   yield
   net.train(oflag)
+
+#==================================================================================================
+def compose(*L):
+#==================================================================================================
+  L = [f for f in L if f is not None]
+  if not L: return None
+  if len(L)==1: return L[0]
+  return lambda run,L=L: tuple(f(run) for f in L)

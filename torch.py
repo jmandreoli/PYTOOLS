@@ -22,25 +22,71 @@ import torch
 #==================================================================================================
 class ClassificationRun (Dispatcher):
   r"""
-Instances of this class are classification runs.
+Instances of this class are classification runs. Two kinds of runs are supported:
+
+* ``train`` runs  (method :meth:`exec_train`) are used to train a classification model,
+* ``proto`` runs (method :meth:`exec_proto`) are used to discover prototypical instances of each class given a model.
+
+Train runs emit messages during their execution, so can be controlled. Use method :meth:`Dispatcher.bind` (general) or :meth:`ClassificationRun.bind_listeners` (specific) to bind callbacks to the run.
   """
 #==================================================================================================
 
   _events_ = ['open','batch','epoch','close']
 
-  net:'torch.nn.Module' = None
-  optimiser:'torch.optim.Optimizer' = None
-  device:'torch.device' = None
+  # for all runs:
+  ## preset configuration
+  lossF: 'Callable[[torch.tensor,torch.tensor],float]'
+  r"""Classification loss (cross-entropy)"""
+  accuracyF: 'Callable[[torch.tensor,torch.tensor],float]'
+  r"""Classification accuracy"""
+  ## set at instantiation
+  net: 'torch.nn.Module'
+  r"""The model"""
+  optimiser: 'Callable[[List[torch.nn.Parameter]],torch.optim.Optimizer]'
+  r"""The optimiser factory"""
+  device: 'torch.device'
+  r"""On which device to run"""
+  params: 'Map[str,str]'
+  r"""A dictionary for the parameters of the run (subset of attributes)"""
 
   # for train runs:
-  train_data:'Iterable[Tuple[torch.tensor,torch.tensor]]' = None
-  valid_data:'Iterable[Tuple[torch.tensor,torch.tensor]]' = None
+  ## set at instantiation
+  train_data: 'Iterable[Tuple[torch.tensor,torch.tensor]]'
+  r"""Each batch is a pair of a tensor of inputs and a tensor of labels (first dim = size of batch)"""
+  valid_data: 'Iterable[Tuple[torch.tensor,torch.tensor]]'
+  r"""Each batch is a pair of a tensor of inputs and a tensor of labels (first dim = size of batch)"""
+  test_data: 'Iterable[Tuple[torch.tensor,torch.tensor]]'
+  r"""Each batch is a pair of a tensor of inputs and a tensor of labels (first dim = size of batch)"""
+  ## set at execution
+  progress: 'float'
+  r"""Between 0. and 1., stop when 1. is reached."""
+  time: 'Tuple[float,float]'
+  r"""A pair of the walltime and processing time since beginning of run"""
+  step: 'int'
+  r"""Number of completed global steps"""
+  epoch: 'int'
+  r"""Number of completed epochs"""
+  batch: 'int'
+  r"""Number of completed batches"""
+  loss: 'float'
+  r"""Mean loss since beginning of current epoch"""
+  tnet: 'torch.nn.Module'
+  r"""Copy of :attr:`net` located on :attr:`device`"""
+  eval_valid: 'Callable[[],Tuple[float,float]]'
+  r"""Function returning the validation performance (loss,accuracy) at the end of the last completed step"""
+  eval_test: 'Callable[[],Tuple[float,float]]'
+  r"""Function returning the test performance (loss,accuracy) at the end of the last completed step"""
 
   # for proto runs:
-  nepoch: int = None
-  labels:'Union[int,Iterable[int]]' = None
-  init:'torch.tensor' = None
-  projection:'Callable[torch.tensor,NoneType]' = None
+  ## set at instantiation
+  nepoch: 'int'
+  r"""Number of epochs to run"""
+  labels: 'Union[int,Iterable[int]]'
+  r"""List of labels to process (or range if integer type)"""
+  init: 'torch.tensor'
+  r"""Initial instance"""
+  projection: 'Callable[[torch.tensor],NoneType]'
+  r"""Called after each optimiser step to re-project instance within domain range"""
 
 #--------------------------------------------------------------------------------------------------
   def __init__(self,**ka):
@@ -53,9 +99,9 @@ Instances of this class are classification runs.
       setattr(self,k,v)
 
 #--------------------------------------------------------------------------------------------------
-  def train(self):
+  def exec_train(self):
     r"""
-Executes a training run. Expected attributes at startup: `net`, `optimiser`, `device`, `train_data`, `valid_data`. Available attributes: `progress`, `time`, `step`, `epoch`, `batch`, `loss`, `tnet`, `eval_valid`, `eval_test`.
+Executes a train run. Parameters passed as attributes.
     """
 #--------------------------------------------------------------------------------------------------
     def ondevice(data):
@@ -95,26 +141,27 @@ Executes a training run. Expected attributes at startup: `net`, `optimiser`, `de
         self.emit('close',self)
 
 #--------------------------------------------------------------------------------------------------
-  def proto(self):
+  def exec_proto(self):
     r"""
-Executes a prototype discovery run. Expected attributes at startup: `net`, `optimiser`, `device`, `labels`, `nepoch`, `init`, `projection` (optional)
+Executes a proto run. Parameters passed as attributes.
     """
 #--------------------------------------------------------------------------------------------------
-    projection = (lambda a: None) if self.projection is None else self.projection
+    def proto(label):
+      param = torch.autograd.Variable(init.clone(),requires_grad=True).to(self.device)
+      optimiser = self.optimiser([param])
+      label = torch.tensor([label]).to(device=self.device)
+      for n in range(self.nepoch):
+        optimiser.zero_grad()
+        loss = self.lossF(net(param),label)
+        loss.backward()
+        optimiser.step()
+        project(param.data)
+      return param.detach().numpy()
+    project = (lambda a: None) if self.project is None else self.project
     labels = range(self.labels) if isinstance(self.labels,int) else self.labels
     self.tnet = net = self.net.to(self.device)
-    with training(net,True):
-      for label in labels:
-        param = torch.autograd.Variable(self.init.clone().unsqueeze(0),requires_grad=True).to(self.device)
-        optimiser = self.optimiser([param])
-        label = torch.tensor([label]).to(device=self.device)
-        for n in range(self.nepoch):
-          optimiser.zero_grad()
-          loss = self.lossF(net(param),label)
-          loss.backward()
-          optimiser.step()
-          projection(param.data)
-        yield param.detach().numpy()[0]
+    init = self.init[None,...] # make a single instance batch
+    with training(net,True): return tuple(proto(label)[0] for label in labels)
 
 #--------------------------------------------------------------------------------------------------
   def eval(self,net,data):
@@ -123,7 +170,7 @@ Evaluates a model on some data.
 
 :param net: the model
 :type net: :class:`torch.Module`
-:param data: a list of batches (each batch is an inputs-labels pair)
+:param data: a list of batches
 :type data: :class:`Iterable[Tuple[torch.tensor,torch.tensor]]`
     """
 #--------------------------------------------------------------------------------------------------
@@ -136,9 +183,15 @@ Evaluates a model on some data.
     return loss,accuracy
 
 #--------------------------------------------------------------------------------------------------
-  def bind_listeners(self,*a):
+  def bind_listeners(self,*listeners):
+    r"""
+Binds the set of *listeners* (objects) to the events. The list of listeners is processed sequentially. For each listener, the methods of that listener whose name match ``on_`` followed by the name of a supported event are bound to this dispatcher.
+
+:param listeners: list of listener object
+:param type: :class:`List[object]`
+    """
 #--------------------------------------------------------------------------------------------------
-    for x in a:
+    for x in listeners:
       self.bind(**dict((ev,t) for ev in self._events_ for t in (getattr(x,'on_'+ev,None),) if t is not None))
     return self
 

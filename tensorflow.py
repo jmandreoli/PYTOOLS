@@ -5,8 +5,8 @@
 # Purpose:              Some utilities for tensorflow
 #
 r"""
-:mod:`PYTOOLS.tfutil` --- Utilities for tensorflow
-==================================================
+:mod:`PYTOOLS.tensorflow` --- Utilities for tensorflow
+======================================================
 
 This module provides some utilities for tensorflow development.
 

@@ -5,8 +5,8 @@
 # Purpose:              Some utilities for pytorch
 #
 r"""
-:mod:`PYTOOLS.ptutil` --- Utilities for pytorch
-===============================================
+:mod:`PYTOOLS.torch` --- Utilities for pytorch
+==============================================
 
 This module provides some utilities for pytorch development.
 
@@ -45,48 +45,48 @@ Train runs emit messages during their execution, so can be controlled. Use metho
   optimiser: 'Callable[[List[torch.nn.Parameter]],torch.optim.Optimizer]'
   r"""The optimiser factory"""
   device: 'torch.device'
-  r"""On which device to run"""
+  r"""The device on which to execute the run"""
   params: 'Map[str,str]'
   r"""A dictionary for the parameters of the run (subset of attributes)"""
 
   # for train runs:
   ## set at instantiation
   train_data: 'Iterable[Tuple[torch.tensor,torch.tensor]]'
-  r"""Each batch is a pair of a tensor of inputs and a tensor of labels (first dim = size of batch)"""
+  r"""[``train``] Each batch is a pair of a tensor of inputs and a tensor of labels (first dim = size of batch)"""
   valid_data: 'Iterable[Tuple[torch.tensor,torch.tensor]]'
-  r"""Each batch is a pair of a tensor of inputs and a tensor of labels (first dim = size of batch)"""
+  r"""[``train``] Each batch is a pair of a tensor of inputs and a tensor of labels (first dim = size of batch)"""
   test_data: 'Iterable[Tuple[torch.tensor,torch.tensor]]'
-  r"""Each batch is a pair of a tensor of inputs and a tensor of labels (first dim = size of batch)"""
+  r"""[``train``] Each batch is a pair of a tensor of inputs and a tensor of labels (first dim = size of batch)"""
   ## set at execution
   progress: 'float'
-  r"""Between 0. and 1., stop when 1. is reached."""
+  r"""[``train``\*] Between 0. and 1., stop when 1. is reached"""
   time: 'Tuple[float,float]'
-  r"""A pair of the walltime and processing time since beginning of run"""
+  r"""[``train``\*] A pair of the walltime and processing time since beginning of run"""
   step: 'int'
-  r"""Number of completed global steps"""
+  r"""[``train``\*] Number of completed global steps"""
   epoch: 'int'
-  r"""Number of completed epochs"""
+  r"""[``train``\*] Number of completed epochs"""
   batch: 'int'
-  r"""Number of completed batches"""
+  r"""[``train``\*] Number of completed batches"""
   loss: 'float'
-  r"""Mean loss since beginning of current epoch"""
+  r"""[``train``\*] Mean loss since beginning of current epoch"""
   tnet: 'torch.nn.Module'
-  r"""Copy of :attr:`net` located on :attr:`device`"""
+  r"""[``train``\*] Copy of :attr:`net` located on :attr:`device`"""
   eval_valid: 'Callable[[],Tuple[float,float]]'
-  r"""Function returning the validation performance (loss,accuracy) at the end of the last completed step"""
+  r"""[``train``\*] Function returning the validation performance (loss,accuracy) at the end of the last completed step"""
   eval_test: 'Callable[[],Tuple[float,float]]'
-  r"""Function returning the test performance (loss,accuracy) at the end of the last completed step"""
+  r"""[``train``\*] Function returning the test performance (loss,accuracy) at the end of the last completed step"""
 
   # for proto runs:
   ## set at instantiation
   nepoch: 'int'
-  r"""Number of epochs to run"""
+  r"""[``proto``] Number of epochs to run"""
   labels: 'Union[int,Iterable[int]]'
-  r"""List of labels to process (or range if integer type)"""
+  r"""[``proto``] List of labels to process (or range if integer type)"""
   init: 'torch.tensor'
-  r"""Initial instance"""
+  r"""[``proto``] Initial instance"""
   projection: 'Callable[[torch.tensor],NoneType]'
-  r"""Called after each optimiser step to re-project instance within domain range"""
+  r"""[``proto``] Called after each optimiser step to re-project instance within domain range"""
 
 #--------------------------------------------------------------------------------------------------
   def __init__(self,**ka):
@@ -215,7 +215,7 @@ Instances of this class control basic classification runs.
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,max_epoch=int(1e9),max_time=float('inf'),period:int=None,vperiod:int=None,logger=None):
+  def __init__(self,max_epoch=int(1e9),max_time=float('inf'),period:'int'=None,vperiod:'int'=None,logger=None):
 #--------------------------------------------------------------------------------------------------
     current = lambda run: (run.time[1],run.step,run.epoch,run.batch)
     header = 'TIME','STEP','EPO','BAT'
@@ -248,13 +248,13 @@ Instances of this class log information about classification runs into mlflow.
 :type period: :class:`int`
 :param vperiod: validation metrics are logged after this number of batch iterations (repeatedly)
 :type vperiod: :class:`int`
-:param checkpoint: the model is logged after this number of epochs (repeatedly)
-:type checkpoint: :class:`int`
+:param checkpoint_after: the model is logged after this number of epochs (repeatedly)
+:type checkpoint_after: :class:`int`
   """
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,uri:str,exp:str,period:int=None,vperiod:int=None,checkpoint_after:float=None):
+  def __init__(self,uri:'str',exp:'str',period:'int'=None,vperiod:'int'=None,checkpoint_after:'float'=None):
 #--------------------------------------------------------------------------------------------------
     import mlflow, mlflow.pytorch
     mlflow.set_tracking_uri(uri)
@@ -292,7 +292,7 @@ Instances of this class log information about classification runs into mlflow.
     self.on_open,self.on_close,self.on_batch,self.on_epoch = on_open,on_close,on_batch,on_epoch
 
   @staticmethod
-  def load_model(uri:str,exp:str,run_id:str=None,**ka):
+  def load_model(uri:'str',exp:'str',run_id:'str'=None,**ka):
     import mlflow, mlflow.pytorch
     mlflow.set_tracking_uri(uri)
     mlflow.set_experiment(exp)

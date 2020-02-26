@@ -46,17 +46,20 @@ Instances of this class are classification runs.
 
 #--------------------------------------------------------------------------------------------------
   def train(self):
+    r"""
+Executes a training run.
+    """
 #--------------------------------------------------------------------------------------------------
     self.tnet = net = self.net.to(self.device)
     optimiser = self.optimiser(net.parameters())
+    self.progress = 0.
+    self.step = self.epoch = 0
+    self.valid_ = None,-1
+    self.time = 0.,0.
     with training(net,True):
-      self.progress = 0.
-      self.step = self.epoch = 0
-      self.valid_ = None,-1
-      self.time = 0.,0.
-      start = process_time(),time()
       self.emit('open',self)
       try:
+        start = process_time(),time()
         while self.progress<1.:
           self.batch = 0; self.loss = 0.
           for inputs,labels in self.train_data:
@@ -65,8 +68,8 @@ Instances of this class are classification runs.
             loss = self.lossF(net(inputs),labels)
             loss.backward()
             optimiser.step()
-            self.step += 1
-            self.batch += 1; self.loss += (loss.item()-self.loss)/self.batch
+            self.step += 1; self.batch += 1
+            self.loss += (loss.item()-self.loss)/self.batch
             self.time = process_time()-start[0],time()-start[1]
             self.emit('batch',self)
           self.epoch += 1
@@ -85,7 +88,7 @@ Instances of this class are classification runs.
 #--------------------------------------------------------------------------------------------------
   def predict(self,data):
 #--------------------------------------------------------------------------------------------------
-    net = self.net.to(self.device)
+    self.tnet = net = self.net.to(self.device)
     loss = 0.; accuracy = 0.
     with training(net,False),torch.no_grad():
       for n,(inputs,labels) in enumerate(data,1):
@@ -94,6 +97,28 @@ Instances of this class are classification runs.
         loss += (self.lossF(outputs,labels).item()-loss)/n
         accuracy += (self.accuracyF(outputs,labels).item()-accuracy)/n
     return loss,accuracy
+
+#--------------------------------------------------------------------------------------------------
+  def proto(self,init,labels,projection=None,nepoch=100): # params should be attributes of self
+    r"""
+Executes a prototype discovery run.
+    """
+#--------------------------------------------------------------------------------------------------
+    if projection is None: projection = lambda a: None
+    if isinstance(labels,int): labels = range(labels)
+    self.tnet = net = self.net.to(self.device)
+    with training(net,True):
+      for label in labels:
+        param = torch.autograd.Variable(init.clone().unsqueeze(0),requires_grad=True).to(self.device)
+        optimiser = self.optimiser([param])
+        label = torch.tensor([label]).to(device=self.device)
+        for n in range(nepoch):
+          optimiser.zero_grad()
+          loss = self.lossF(net(param),label)
+          loss.backward()
+          optimiser.step()
+          projection(param.data)
+        yield param.detach().numpy()[0]
 
 #--------------------------------------------------------------------------------------------------
   def bind_listeners(self,*a):
@@ -160,7 +185,7 @@ Instances of this class log information about classification runs into mlflow.
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,uri:str,exp:str,period:int=None,vperiod:int=None,checkpoint:float=None):
+  def __init__(self,uri:str,exp:str,period:int=None,vperiod:int=None,checkpoint_after:float=None):
 #--------------------------------------------------------------------------------------------------
     import mlflow, mlflow.pytorch
     mlflow.set_tracking_uri(uri)
@@ -187,19 +212,19 @@ Instances of this class log information about classification runs into mlflow.
     on_batch = (None if vperiod is None else valid_info) if period is None else (train_info if vperiod is None else all_info)
     def on_epoch(run):
       t = run.time[1]
-      if t-run.checkpointed>checkpoint:
+      if t-run.checkpointed>checkpoint_after:
         mlflow.pytorch.log_model(run.tnet,'model_{:03d}'.format(run.epoch))
         run.checkpointed = t
-    if checkpoint is None: on_epoch = None
+    if checkpoint_after is None: on_epoch = None
     self.on_open,self.on_close,self.on_batch,self.on_epoch = on_open,on_close,on_batch,on_epoch
 
   @staticmethod
-  def restore(uri:str,exp:str,run_id:str=None):
+  def load_model(uri:str,exp:str,run_id:str=None,**ka):
     import mlflow, mlflow.pytorch
     mlflow.set_tracking_uri(uri)
     mlflow.set_experiment(exp)
     if run_id is None: run_id = mlflow.search_runs().run_id[0] # most recent run
-    return mlflow.pytorch.load_model('runs:/{}/model'.format(run_id))
+    return mlflow.pytorch.load_model('runs:/{}/model'.format(run_id),**ka)
 
 #==================================================================================================
 @contextmanager

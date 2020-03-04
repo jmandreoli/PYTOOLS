@@ -59,7 +59,7 @@ Train runs emit messages during their execution, so can be controlled. Use metho
   r"""[``train``] Each batch is a pair of a tensor of inputs and a tensor of labels (first dim = size of batch)"""
   ## set at execution
   progress: 'float'
-  r"""[``train``\*] Between 0. and 1., stop when 1. is reached"""
+  r"""[``train``] Between 0. and 1., stop when 1. is reached"""
   time: 'Tuple[float,float]'
   r"""[``train``\*] A pair of the walltime and processing time since beginning of run"""
   step: 'int'
@@ -187,7 +187,7 @@ Evaluates a model on some data.
     r"""
 Binds the set of *listeners* (objects) to the events. The list of listeners is processed sequentially. For each listener, the methods of that listener whose name match ``on_`` followed by the name of a supported event are bound to this dispatcher.
 
-:param listeners: list of listener object
+:param listeners: list of listener objects
 :param type: :class:`List[object]`
     """
 #--------------------------------------------------------------------------------------------------
@@ -248,8 +248,8 @@ Instances of this class log information about classification runs into mlflow.
 :type period: :class:`int`
 :param vperiod: validation metrics are logged after this number of batch iterations (repeatedly)
 :type vperiod: :class:`int`
-:param checkpoint_after: the model is logged after this number of epochs (repeatedly)
-:type checkpoint_after: :class:`int`
+:param checkpoint_after: the model is logged at the first epoch end after this number of seconds (repeatedly)
+:type checkpoint_after: :class:`float`
   """
 #==================================================================================================
 

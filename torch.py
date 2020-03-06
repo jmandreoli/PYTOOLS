@@ -95,22 +95,28 @@ Train runs emit messages during their execution, so can be controlled. Use metho
     self.accuracyF = lambda outputs,labels: torch.mean((torch.argmax(outputs,1)==labels).float())
     self.params = {}
     for k,v in ka.items():
-      if k not in ('net','optimiser','device','train_data','valid_data'): self.params[k] = str(v)
+      if k not in ('net','optimiser','device'): self.params[k] = str(v)
       setattr(self,k,v)
+    if hasattr(self,'data'):
+      D = self.data
+      dl = dict(batch_size=self.batch_size,drop_last=True,pin_memory=self.pin_memory)
+      self.train_data,self.valid_data,self.test_data = (
+        torch.utils.data.DataLoader(D.train,shuffle=True,**dl),
+        torch.utils.data.DataLoader(D.valid,**dl),
+        torch.utils.data.DataLoader(D.test,**dl),
+      )
 
 #--------------------------------------------------------------------------------------------------
   def exec_train(self):
     r"""
-Executes a train run. Parameters passed as attributes.
+Executes a train run. Parameters passed as attributes. Emitted events: open, batch epoch, close.
     """
 #--------------------------------------------------------------------------------------------------
-    def ondevice(data):
-      for inputs,labels in data: yield inputs.to(self.device),labels.to(self.device)
     def eval_cache(data):
       current = None,-1
       def cache():
         nonlocal current
-        if current[1] != self.step: current = self.eval(net,ondevice(data)),self.step
+        if current[1] != self.step: current = self.eval(net,to(data,self.device)),self.step
         return current[0]
       return cache
     self.tnet = net = self.net.to(self.device)
@@ -125,7 +131,7 @@ Executes a train run. Parameters passed as attributes.
         start = process_time(),time()
         while self.progress<1.:
           self.batch = 0; self.loss = 0.
-          for inputs,labels in ondevice(self.train_data):
+          for inputs,labels in to(self.train_data,self.device):
             optimiser.zero_grad()
             loss = self.lossF(net(inputs),labels)
             loss.backward()
@@ -146,22 +152,20 @@ Executes a train run. Parameters passed as attributes.
 Executes a proto run. Parameters passed as attributes.
     """
 #--------------------------------------------------------------------------------------------------
-    def proto(label):
-      param = torch.autograd.Variable(init.clone(),requires_grad=True).to(self.device)
-      optimiser = self.optimiser([param])
-      label = torch.tensor([label]).to(device=self.device)
-      for n in range(self.nepoch):
-        optimiser.zero_grad()
-        loss = self.lossF(net(param),label)
-        loss.backward()
-        optimiser.step()
-        project(param.data)
-      return param.detach().numpy()
     project = (lambda a: None) if self.project is None else self.project
-    labels = range(self.labels) if isinstance(self.labels,int) else self.labels
-    self.tnet = net = self.net.to(self.device)
-    init = self.init[None,...] # make a single instance batch
-    with training(net,True): return tuple(proto(label)[0] for label in labels)
+    self.protos = torch.repeat_interleave(self.init[None,...],len(self.labels),0)
+    net = self.net.to(self.device)
+    with training(net,True):
+      for proto,label in zip(self.protos,self.labels):
+        param = torch.nn.Parameter(proto[None,...]).to(self.device)
+        optimiser = self.optimiser([param])
+        label = torch.tensor([label]).to(device=self.device)
+        for n in range(self.nepoch):
+          optimiser.zero_grad()
+          loss = self.lossF(net(param),label)
+          loss.backward()
+          optimiser.step()
+          project(param.data[0])
 
 #--------------------------------------------------------------------------------------------------
   def eval(self,net,data):
@@ -300,6 +304,62 @@ Instances of this class log information about classification runs into mlflow.
     return mlflow.pytorch.load_model('runs:/{}/model'.format(run_id),**ka)
 
 #==================================================================================================
+class ClassificationDataset:
+  r"""
+Instances of this class are classification datasets.
+  """
+#==================================================================================================
+  name = None
+  classes = None
+  def raw(self,train=None): raise NotImplementedError()
+  def mpl(self,x): raise NotImplementedError()
+
+  loaded = False
+#--------------------------------------------------------------------------------------------------
+  def load(self,pcval,**dl):
+#--------------------------------------------------------------------------------------------------
+    o = self.__class__()
+    D = self.raw(train=True)
+    n = len(D); nvalid = int(pcval*n); ntrain = n-nvalid
+    o.train,o.valid = torch.utils.data.random_split(D,(ntrain,nvalid))
+    o.test = self.raw(train=False)
+    o.loaded = True
+    return o
+
+#--------------------------------------------------------------------------------------------------
+  def display(self,rowspec,colspec,control=None,**ka):
+#--------------------------------------------------------------------------------------------------
+    from ipywidgets import IntSlider,Layout,Label,HBox
+    from matplotlib.pyplot import subplots
+    parsespec = lambda spec: (spec if len(spec)==3 else spec+(0.,)) if isinstance(spec,tuple) else (1,spec,0.)
+    nrow,rowsz,rowp = parsespec(rowspec)
+    ncol,colsz,colp = parsespec(colspec)
+    fig,axes = subplots(nrow,ncol,squeeze=False,figsize=(ncol*colsz+rowp,nrow*rowsz+colp),**ka)
+    updates = [(ax,self.mpl(ax)) for axr in axes for ax in axr]
+    def disp(sample):
+      for (value,label),(ax,update) in zip(sample,updates):
+        update(value)
+        ax.set_title(self.classes[label],fontsize='xx-small',pad=1)
+    if control is None:
+      dataset = self.raw(train=False)
+      N = len(dataset)
+      K = len(updates)
+      w = IntSlider(value=1,min=0,step=K,max=(N//K-1)*K,layout=Layout(width='10cm'))
+      w.observe((lambda ev: disp(dataset[ev.new+k] for k in range(K))),'value')
+      w.value = 0
+      return HBox((w,Label('+[0-{}]/ {}'.format(K-1,N),layout=Layout(align_self='center'))))
+    else: control(disp)
+
+#--------------------------------------------------------------------------------------------------
+  def __repr__(self):
+#--------------------------------------------------------------------------------------------------
+    if self.loaded:
+      r = ','.join(f'{k}:{len(getattr(self,k))}' for k in ('train','valid','test'))
+      return f'{self.name}<{r}>'
+    else:
+      return super().__repr__()
+
+#==================================================================================================
 @contextmanager
 def training(net,flag):
 #==================================================================================================
@@ -315,3 +375,8 @@ def compose(*L):
   if not L: return None
   if len(L)==1: return L[0]
   return lambda run,L=L: tuple(f(run) for f in L)
+
+#==================================================================================================
+def to(data,device):
+#==================================================================================================
+  for input,label in data: yield input.to(device),label.to(device)

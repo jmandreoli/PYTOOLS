@@ -60,8 +60,10 @@ Train runs emit messages during their execution, so can be controlled. Use metho
   ## set at execution
   progress: 'float'
   r"""[``train``] Between 0. and 1., stop when 1. is reached"""
-  time: 'Tuple[float,float]'
-  r"""[``train``\*] A pair of the walltime and processing time since beginning of run"""
+  walltime: 'float'
+  r"""[``train``\*] Wall time since beginning of run"""
+  proctime: 'float'
+  r"""[``train``\*] Process time since beginning of run"""
   step: 'int'
   r"""[``train``\*] Number of completed global steps"""
   epoch: 'int'
@@ -124,11 +126,11 @@ Executes a train run. Parameters passed as attributes. Emitted events: open, bat
     optimiser = self.optimiser(net.parameters())
     self.progress = 0.
     self.step = self.epoch = 0
-    self.time = 0.,0.
+    self.walltime = self.proctime = 0.
     with training(net,True):
       self.emit('open',self)
       try:
-        start = process_time(),time()
+        start = time(), process_time()
         while self.progress<1.:
           self.batch = 0; self.loss = 0.
           for inputs,labels in to(self.train_data,self.device):
@@ -138,7 +140,7 @@ Executes a train run. Parameters passed as attributes. Emitted events: open, bat
             optimiser.step()
             self.step += 1; self.batch += 1
             self.loss += (loss.item()-self.loss)/self.batch
-            self.time = process_time()-start[0],time()-start[1]
+            self.walltime,self.proctime = time()-start[0], process_time()-start[1]
             del inputs,labels,loss # free memory before emitting (not sure this works)
             self.emit('batch',self)
           self.epoch += 1
@@ -222,7 +224,7 @@ Instances of this class control basic classification runs.
   def __init__(self,max_epoch=int(1e9),max_time=float('inf'),period:'int'=None,vperiod:'int'=None,logger=None):
 #--------------------------------------------------------------------------------------------------
     periodic = lambda p: None if p is None else (lambda run: run.batch%p==0)
-    current = lambda run: (run.time[1],run.step,run.epoch,run.batch)
+    current = lambda run: (run.walltime,run.step,run.epoch,run.batch)
     header = 'TIME','STEP','EPO','BAT'
     current_fmt = '%6.1f %6d %3d/%4d '
     header_fmt =  '%6s %6s %3s/%4s '
@@ -240,7 +242,7 @@ Instances of this class control basic classification runs.
       def progress_info(run):
         logger.info(current_fmt+'PROGRESS: %s',*current(run),'{:.0%}'.format(run.progress))
 
-    def set_progress(run): run.progress = min(max(run.epoch/max_epoch,run.time[1]/max_time),1.)
+    def set_progress(run): run.progress = min(max(run.epoch/max_epoch,run.walltime/max_time),1.)
 
     self.on_open = header_info
     self.on_batch = abs(PROC(train_info)%periodic(period)+PROC(valid_info)%periodic(vperiod))
@@ -268,7 +270,7 @@ Instances of this class log information about classification runs into mlflow.
     from functools import partial
     periodic = lambda p: None if p is None else (lambda run: run.batch%p==0)
     def tperiodic_(run,p,a):
-      t = run.time[1]; r = t-getattr(run,a,0.)>p
+      t = run.walltime; r = t-getattr(run,a,0.)>p
       if r: setattr(run,a,t)
       return r
     tperiodic = lambda p,a: None if p is None else partial(tperiodic_,p=p,a=a)
@@ -379,7 +381,7 @@ def training(net,flag):
 #==================================================================================================
 class PROC:
   r"""
-Instances of this class are encapsulated callables which can be added (sequential composition) or divided by a callable (conditioning).
+Instances of this class are encapsulated callables or :const:`None` (void callable) which support operation `+` (sequential composition) and `%` with a callable (conditioning). All callables take a single argument.
   """
 #==================================================================================================
   def __init__(self,f=None): self.func = f
@@ -389,10 +391,7 @@ Instances of this class are encapsulated callables which can be added (sequentia
     return PROC(lambda u,f=self.func,c=other: f(u) if c(u) else None)
   def __add__(self,other):
     assert isinstance(other,PROC)
-    if self.func is None: return other
-    if other.func is None: return self
-    def F(u,f1=self.func,f2=other.func): f1(u); f2(u)
-    return PROC(F)
+    return other if self.func is None else self if other.func is None else PROC(lambda u,f1=self.func,f2=other.func: (f1(u),f2(u)))
   def __abs__(self): return self.func
 
 #==================================================================================================

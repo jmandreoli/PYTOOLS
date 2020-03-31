@@ -217,31 +217,41 @@ Instances of this class control basic classification runs.
 :type vperiod: :class:`int`
 :param logger: logger to use for logging information
 :type logger: :class:`logging.Logger`
+:param status: pair of a function returning the status of a run and corresponding headers
+:type status: :class:`Tuple[Callable[[Object],Tuple],Tuple]`
+:param status_fmt: pair of formats for the components of *status*
+:type status_fmt: :class:`Tuple[str,str]`
+:param itrain,ivalid,itest: function returning various info on a run
+:type itrain,ivalid,itest: :class:`Callable[[Object],Tuple]`
+:param itrain_fmt,ivalid_fmt,itest_fmt: formats for the results of the corresponding functions
+:type itrain_fmt,ivalid_fmt,itest_fmt: :class:`str`
   """
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,max_epoch=int(1e9),max_time=float('inf'),period:'int'=None,vperiod:'int'=None,logger=None):
+  def __init__(self,max_epoch=int(1e9),max_time=float('inf'),period:'int'=None,vperiod:'int'=None,logger=None,
+    status=(
+      ('TIME','STEP','EPO','BAT'),
+      (lambda run: (run.walltime,run.step,run.epoch,run.batch))
+    ),
+    status_fmt:'Tuple[str,str]'=('%6s %6s %3s/%4s ','%6.1f %6d %3d/%4d '),
+    itrain=(lambda run: (run.loss,)),
+    ivalid=(lambda run: run.eval_valid()),
+    itest= (lambda run: run.eval_test()),
+    itrain_fmt:'str'='TRAIN loss: %.3f',
+    ivalid_fmt:'str'='VALIDATION loss: %.3f, accuracy: %.3f',
+    itest_fmt:'str'= 'TEST loss: %.3f, accuracy: %.3f',
+  ):
 #--------------------------------------------------------------------------------------------------
-    periodic = lambda p: None if p is None else (lambda run: run.batch%p==0)
-    current = lambda run: (run.walltime,run.step,run.epoch,run.batch)
-    header = 'TIME','STEP','EPO','BAT'
-    current_fmt = '%6.1f %6d %3d/%4d '
-    header_fmt =  '%6s %6s %3s/%4s '
     if logger is None:
       header_info = train_info = valid_info = test_info = progress_info = None
     else:
-      def header_info(run):
-        logger.info(header_fmt,*header)
-      def train_info(run):
-        logger.info(current_fmt+'TRAIN loss: %.3f',*current(run),run.loss)
-      def valid_info(run):
-        logger.info(current_fmt+'VALIDATION loss: %.3f, accuracy: %.3f',*current(run),*run.eval_valid())
-      def test_info(run):
-        logger.info(current_fmt+'TEST loss: %.3f, accuracy: %.3f',*current(run),*run.eval_test())
-      def progress_info(run):
-        logger.info(current_fmt+'PROGRESS: %s',*current(run),'{:.0%}'.format(run.progress))
-
+      def header_info(run,fmt=status_fmt[0],s=status[0]): logger.info(fmt,*s)
+      def train_info(run,fmt=status_fmt[1]+itrain_fmt,s=status[1]): logger.info(fmt,*s(run),*itrain(run))
+      def valid_info(run,fmt=status_fmt[1]+ivalid_fmt,s=status[1]): logger.info(fmt,*s(run),*ivalid(run))
+      def test_info(run,fmt=status_fmt[1]+itest_fmt,s=status[1]): logger.info(fmt,*s(run),*itest(run))
+      def progress_info(run,fmt=status_fmt[1]+'PROGRESS: %s',s=status[1]):
+        logger.info(fmt,*s(run),'{:.0%}'.format(run.progress))
     def set_progress(run): run.progress = min(max(run.epoch/max_epoch,run.walltime/max_time),1.)
 
     self.on_open = header_info
@@ -264,45 +274,37 @@ Instances of this class log information about classification runs into mlflow.
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,uri:'str',exp:'str',period:'int'=None,vperiod:'int'=None,checkpoint_after:'float'=None):
+  def __init__(self,uri:'str',exp:'str',period:'int'=None,vperiod:'int'=None,checkpoint_after:'float'=None,
+    itrain=(('tloss',),(lambda run: (run.loss,))),
+    ivalid=(('vloss','vaccu'),(lambda run: run.eval_valid())),
+    itest =(('loss','accu'),(lambda run: run.eval_test())),
+  ):
 #--------------------------------------------------------------------------------------------------
     import mlflow, mlflow.pytorch
     from functools import partial
-    periodic = lambda p: None if p is None else (lambda run: run.batch%p==0)
-    def tperiodic_(run,p,a):
-      t = run.walltime; r = t-getattr(run,a,0.)>p
-      if r: setattr(run,a,t)
-      return r
-    tperiodic = lambda p,a: None if p is None else partial(tperiodic_,p=p,a=a)
 
+    content = lambda i,run: zip(i[0],i[1](run))
     mlflow.set_tracking_uri(uri)
     mlflow.set_experiment(exp)
     def train_info(run):
-      mlflow.log_metric('tloss',run.loss,run.step)
+      for key,val in content(itrain,run): mlflow.log_metric(key,val,run.step)
     def valid_info(run):
-      vloss,vaccu = run.eval_valid()
-      mlflow.log_metric('vloss',vloss,run.step)
-      mlflow.log_metric('vaccu',vaccu,run.step)
+      for key,val in content(ivalid,run): mlflow.log_metric(key,val,run.step)
     def test_info(run):
-      loss,accu = run.eval_test()
-      mlflow.set_tag('test-loss',loss)
-      mlflow.set_tag('test-accu',accu)
+      for key,val in content(itest,run): mlflow.set_tag(key,val)
+    def progress_info(run):
+      mlflow.set_tag('progress',run.progress)
     def checkpoint(run):
       mlflow.pytorch.log_model(run.tnet,'model_{:03d}'.format(run.epoch))
     def open_mlflow(run):
-      mlflow.start_run()
-      mlflow.log_params(run.params)
+      mlflow.start_run(); mlflow.log_params(run.params)
     def close_mlflow(run):
-      try:
-        valid_info(run)
-        test_info(run)
-        mlflow.pytorch.log_model(run.tnet,'model')
-      finally:
-        mlflow.end_run()
+      try: valid_info(run);test_info(run);progress_info(run);mlflow.pytorch.log_model(run.tnet,'model')
+      finally: mlflow.end_run()
 
     self.on_open = open_mlflow
     self.on_batch = abs(PROC(train_info)%periodic(period)+PROC(valid_info)%periodic(vperiod))
-    self.on_epoch = abs(PROC(checkpoint)%tperiodic(checkpoint_after,'checkpointed'))
+    self.on_epoch = abs(PROC(checkpoint)%periodic(checkpoint_after,'checkpointed')+PROC(progress_info))
     self.on_close = close_mlflow
 
   @staticmethod
@@ -314,9 +316,9 @@ Instances of this class log information about classification runs into mlflow.
     return mlflow.pytorch.load_model('runs:/{}/model'.format(run_id),**ka)
 
 #==================================================================================================
-class ClassificationDataset:
+class ClassificationDatasource:
   r"""
-Instances of this class are classification datasets.
+Instances of this class are classification datasources.
   """
 #==================================================================================================
   name = None
@@ -326,7 +328,7 @@ Instances of this class are classification datasets.
 
   loaded = False
 #--------------------------------------------------------------------------------------------------
-  def load(self,pcval,**dl):
+  def load(self,pcval):
 #--------------------------------------------------------------------------------------------------
     o = self.__class__()
     D = self.raw(train=True)
@@ -393,6 +395,25 @@ Instances of this class are encapsulated callables or :const:`None` (void callab
     assert isinstance(other,PROC)
     return other if self.func is None else self if other.func is None else PROC(lambda u,f1=self.func,f2=other.func: (f1(u),f2(u)))
   def __abs__(self): return self.func
+
+#==================================================================================================
+def periodic(p,a=None):
+  r"""
+Returns a callable which takes a run as input and returns a boolean flag. If *a* is :const:`None`, the returned flag holds whether the current :attr:`batch` attribute of the run is a multiple of *p* (of type :class:`int`). Otherwise, *a* must be the name of an attribute of the run storing the time of the last invocation of the callable returning :const:`True`, and the returned flag holds whether the elapsed time since that event exceeds *p* (of type :class:`float`, in seconds).
+
+:param p: period
+:type p: :class:`Union[NoneType,int,float]`
+:param a: attribute to hold the last successful event
+:type a: :class:`Union[NoneType,str]`
+  """
+#==================================================================================================
+  def F(run):
+    t = run.walltime; r = t-getattr(run,a,0.)>p
+    if r: setattr(run,a,t)
+    return r
+  if p is None: return None
+  if a is None: return lambda run: run.batch%p==0
+  return F
 
 #==================================================================================================
 def to(data,device):

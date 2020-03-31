@@ -95,7 +95,7 @@ Train runs emit messages during their execution, so can be controlled. Use metho
     self.accuracyF = lambda outputs,labels: torch.mean((torch.argmax(outputs,1)==labels).float())
     self.params = {}
     for k,v in ka.items():
-      if k not in ('net','optimiser','device'): self.params[k] = str(v)
+      if k not in ('net','optimiser','pin_memory'): self.params[k] = str(v)
       setattr(self,k,v)
     if hasattr(self,'data'):
       D = self.data
@@ -221,27 +221,31 @@ Instances of this class control basic classification runs.
 #--------------------------------------------------------------------------------------------------
   def __init__(self,max_epoch=int(1e9),max_time=float('inf'),period:'int'=None,vperiod:'int'=None,logger=None):
 #--------------------------------------------------------------------------------------------------
+    periodic = lambda p: None if p is None else (lambda run: run.batch%p==0)
     current = lambda run: (run.time[1],run.step,run.epoch,run.batch)
     header = 'TIME','STEP','EPO','BAT'
     current_fmt = '%6.1f %6d %3d/%4d '
     header_fmt =  '%6s %6s %3s/%4s '
-    def header_info(run): logger.info(header_fmt,*header)
-    def train_info(run):
-      if run.batch%period==0:
+    if logger is None:
+      header_info = train_info = valid_info = test_info = progress_info = None
+    else:
+      def header_info(run):
+        logger.info(header_fmt,*header)
+      def train_info(run):
         logger.info(current_fmt+'TRAIN loss: %.3f',*current(run),run.loss)
-    def valid_info(run):
-      if run.batch%vperiod==0:
+      def valid_info(run):
         logger.info(current_fmt+'VALIDATION loss: %.3f, accuracy: %.3f',*current(run),*run.eval_valid())
-    def test_info(run):
-      logger.info(current_fmt+'TEST loss: %.3f, accuracy: %.3f',*current(run),*run.eval_test())
-    def progress_info(run):
-      logger.info(current_fmt+'PROGRESS: %s',*current(run),'{:.0%}'.format(run.progress))
+      def test_info(run):
+        logger.info(current_fmt+'TEST loss: %.3f, accuracy: %.3f',*current(run),*run.eval_test())
+      def progress_info(run):
+        logger.info(current_fmt+'PROGRESS: %s',*current(run),'{:.0%}'.format(run.progress))
+
     def set_progress(run): run.progress = min(max(run.epoch/max_epoch,run.time[1]/max_time),1.)
-    on_open = None if logger is None else header_info
-    on_batch = None if logger is None else compose((None if period is None else train_info),(None if vperiod is None else valid_info))
-    on_epoch = compose(set_progress,(None if logger is None else progress_info))
-    on_close = None if logger is None else test_info
-    self.on_open,self.on_close,self.on_batch,self.on_epoch = on_open,on_close,on_batch,on_epoch
+
+    self.on_open = header_info
+    self.on_batch = abs(PROC(train_info)%periodic(period)+PROC(valid_info)%periodic(vperiod))
+    self.on_epoch = abs(PROC(set_progress)+PROC(progress_info))
+    self.on_close = test_info
 
 #==================================================================================================
 class RunMlflowListener:
@@ -261,39 +265,43 @@ Instances of this class log information about classification runs into mlflow.
   def __init__(self,uri:'str',exp:'str',period:'int'=None,vperiod:'int'=None,checkpoint_after:'float'=None):
 #--------------------------------------------------------------------------------------------------
     import mlflow, mlflow.pytorch
+    from functools import partial
+    periodic = lambda p: None if p is None else (lambda run: run.batch%p==0)
+    def tperiodic_(run,p,a):
+      t = run.time[1]; r = t-getattr(run,a,0.)>p
+      if r: setattr(run,a,t)
+      return r
+    tperiodic = lambda p,a: None if p is None else partial(tperiodic_,p=p,a=a)
+
     mlflow.set_tracking_uri(uri)
     mlflow.set_experiment(exp)
     def train_info(run):
-      if run.batch%period==0:
-        mlflow.log_metric('tloss',run.loss,run.step)
+      mlflow.log_metric('tloss',run.loss,run.step)
     def valid_info(run):
-      if run.batch%vperiod==0:
-        vloss,vaccu = run.eval_valid()
-        mlflow.log_metric('vloss',vloss,run.step)
-        mlflow.log_metric('vaccu',vaccu,run.step)
-    def on_open(run):
+      vloss,vaccu = run.eval_valid()
+      mlflow.log_metric('vloss',vloss,run.step)
+      mlflow.log_metric('vaccu',vaccu,run.step)
+    def test_info(run):
+      loss,accu = run.eval_test()
+      mlflow.set_tag('test-loss',loss)
+      mlflow.set_tag('test-accu',accu)
+    def checkpoint(run):
+      mlflow.pytorch.log_model(run.tnet,'model_{:03d}'.format(run.epoch))
+    def open_mlflow(run):
       mlflow.start_run()
       mlflow.log_params(run.params)
-      run.checkpointed = 0.
-    def on_close(run):
+    def close_mlflow(run):
       try:
-        vloss,vaccu = run.eval_valid()
-        mlflow.log_metric('vloss',vloss,run.step)
-        mlflow.log_metric('vaccu',vaccu,run.step)
-        loss,accu = run.eval_test()
-        mlflow.set_tag('test-loss',loss)
-        mlflow.set_tag('test-accu',accu)
+        valid_info(run)
+        test_info(run)
         mlflow.pytorch.log_model(run.tnet,'model')
       finally:
         mlflow.end_run()
-    on_batch = compose((None if period is None else train_info),(None if vperiod is None else valid_info))
-    def on_epoch(run):
-      t = run.time[1]
-      if t-run.checkpointed>checkpoint_after:
-        mlflow.pytorch.log_model(run.tnet,'model_{:03d}'.format(run.epoch))
-        run.checkpointed = t
-    if checkpoint_after is None: on_epoch = None
-    self.on_open,self.on_close,self.on_batch,self.on_epoch = on_open,on_close,on_batch,on_epoch
+
+    self.on_open = open_mlflow
+    self.on_batch = abs(PROC(train_info)%periodic(period)+PROC(valid_info)%periodic(vperiod))
+    self.on_epoch = abs(PROC(checkpoint)%tperiodic(checkpoint_after,'checkpointed'))
+    self.on_close = close_mlflow
 
   @staticmethod
   def load_model(uri:'str',exp:'str',run_id:'str'=None,**ka):
@@ -312,7 +320,7 @@ Instances of this class are classification datasets.
   name = None
   classes = None
   def raw(self,train=None): raise NotImplementedError()
-  def mpl(self,x): raise NotImplementedError()
+  def mpl(self,ax): raise NotImplementedError()
 
   loaded = False
 #--------------------------------------------------------------------------------------------------
@@ -357,7 +365,7 @@ Instances of this class are classification datasets.
       r = ','.join(f'{k}:{len(getattr(self,k))}' for k in ('train','valid','test'))
       return f'{self.name}<{r}>'
     else:
-      return super().__repr__()
+      return self.name
 
 #==================================================================================================
 @contextmanager
@@ -369,12 +377,23 @@ def training(net,flag):
   net.train(oflag)
 
 #==================================================================================================
-def compose(*L):
+class PROC:
+  r"""
+Instances of this class are encapsulated callables which can be added (sequential composition) or divided by a callable (conditioning).
+  """
 #==================================================================================================
-  L = [f for f in L if f is not None]
-  if not L: return None
-  if len(L)==1: return L[0]
-  return lambda run,L=L: tuple(f(run) for f in L)
+  def __init__(self,f=None): self.func = f
+  def __mod__(self,other):
+    if self.func is None or other is None: return PROC()
+    assert callable(other)
+    return PROC(lambda u,f=self.func,c=other: f(u) if c(u) else None)
+  def __add__(self,other):
+    assert isinstance(other,PROC)
+    if self.func is None: return other
+    if other.func is None: return self
+    def F(u,f1=self.func,f2=other.func): f1(u); f2(u)
+    return PROC(F)
+  def __abs__(self): return self.func
 
 #==================================================================================================
 def to(data,device):

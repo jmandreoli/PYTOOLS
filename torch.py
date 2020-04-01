@@ -227,7 +227,7 @@ Instances of this class control basic classification runs.
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,max_epoch=int(1e9),max_time=float('inf'),train_p:'int'=None,valid_p:'int'=None,logger=None,
+  def __init__(self,max_epoch=int(1e9),max_time=float('inf'),train_p=None,valid_p=None,logger=None,
     status=(
       ('TIME','STEP','EPO','BAT'),
       (lambda run: (run.walltime,run.step,run.epoch,run.batch))
@@ -251,11 +251,10 @@ Instances of this class control basic classification runs.
       def progress_info(run,fmt=status_fmt[1]+'PROGRESS: %s',s=status[1]):
         logger.info(fmt,*s(run),'{:.0%}'.format(run.progress))
     def set_progress(run): run.progress = min(max(run.epoch/max_epoch,run.walltime/max_time),1.)
-    def reset_clocks(run): run.clocks = {}
 
-    self.on_open = abs(PROC(header_info)+PROC(reset_clocks))
-    self.on_batch = abs(PROC(train_info)%train_p+PROC(valid_info)%valid_p)
-    self.on_epoch = abs(PROC(set_progress)+PROC(progress_info))
+    self.on_open = header_info
+    self.on_batch = abs(PROC(train_info)%train_p)
+    self.on_epoch = abs(PROC(set_progress)+PROC(progress_info)+PROC(valid_info)%valid_p)
     self.on_close = test_info
 
 #==================================================================================================
@@ -301,8 +300,8 @@ Instances of this class log information about classification runs into mlflow.
       finally: mlflow.end_run()
 
     self.on_open = open_mlflow
-    self.on_batch = abs(PROC(train_info)%train_p+PROC(valid_info)%valid_p)
-    self.on_epoch = abs(PROC(checkpoint)%checkpoint_p+PROC(progress_info))
+    self.on_batch = abs(PROC(train_info)%train_p)
+    self.on_epoch = abs(PROC(checkpoint)%checkpoint_p+PROC(progress_info)+PROC(valid_info)%valid_p)
     self.on_close = close_mlflow
 
   @staticmethod
@@ -381,17 +380,18 @@ def training(net,flag):
 #==================================================================================================
 class PROC:
   r"""
-Instances of this class are encapsulated callables or :const:`None` (void callable) which support operation `+` (paired invocation) and `%` with a callable (conditioning). All callables take a single argument.
+Instances of this class are encapsulated callables or :const:`None` (void callable) which support operation `+` (sequential invocation) and `%` with a callable (conditioning). All callables take a single argument.
   """
 #==================================================================================================
   def __init__(self,f=None): self.func = f
   def __mod__(self,other):
-    if self.func is None or other is None: return PROC()
+    if self.func is None or other is None or other is False: return PROC()
+    if other is True: return self
     assert callable(other)
     return PROC(lambda u,f=self.func,c=other: f(u) if c(u) else None)
   def __add__(self,other):
     assert isinstance(other,PROC)
-    return other if self.func is None else self if other.func is None else PROC(lambda u,f1=self.func,f2=other.func: (f1(u),f2(u)))
+    return other if self.func is None else self if other.func is None else PROC(lambda u,f1=self.func,f2=other.func: f1(u) is not None or f2(u) is not None or None)
   def __abs__(self): return self.func
 
 #==================================================================================================
@@ -409,12 +409,14 @@ Returns a run selector, i.e. a callable which takes a run as input and returns a
 * If *p* is of type :class:`float`, a run is selected unless the increase in the counter value since the last successful selection is lower than *p*. Default counter: :attr:`walltime` (in secs)
   """
 #==================================================================================================
-  def F(run,cid):
-    t = getattr(run,counter_); r = t-run.clocks.get(cid,0.)>p
-    if r: run.clocks[cid] = t
-    return r
+  class F:
+    def __init__(self,counter): self.current,self.counter = 0.,counter
+    def __call__(self,run):
+      t = getattr(run,self.counter); r = t-self.current>p
+      if r: self.current = t
+      return r
   counter_ = ('batch' if isinstance(p,int) else 'walltime') if counter is None else counter
-  return None if p is None else (lambda run: getattr(run,counter_)%p == 0) if isinstance(p,int) else partial(F,cid=object())
+  return None if p is None else (lambda run: getattr(run,counter_)%p == 0) if isinstance(p,int) else F(counter_)
 
 #==================================================================================================
 def to(data,device):

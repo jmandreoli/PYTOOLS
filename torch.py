@@ -15,6 +15,7 @@ Available types and functions
 """
 
 from contextlib import contextmanager
+from functools import partial
 from time import time, process_time
 from pydispatch import Dispatcher, Property
 import torch
@@ -99,14 +100,12 @@ Train runs emit messages during their execution, so can be controlled. Use metho
     for k,v in ka.items():
       if k not in ('net','optimiser','pin_memory'): self.params[k] = str(v)
       setattr(self,k,v)
-    if hasattr(self,'data'):
-      D = self.data
-      dl = dict(batch_size=self.batch_size,drop_last=True,pin_memory=self.pin_memory)
-      self.train_data,self.valid_data,self.test_data = (
-        torch.utils.data.DataLoader(D.train,shuffle=True,**dl),
-        torch.utils.data.DataLoader(D.valid,**dl),
-        torch.utils.data.DataLoader(D.test,**dl),
-      )
+    D = getattr(self,'data',None)
+    if D is None:
+      assert all(isinstance(getattr(self,c+'_data',None),torch.utils.data.DataLoader) for c in ('train','valid','test'))
+    else:
+      for c in 'train','valid','test':
+        setattr(self,c+'_data',torch.utils.data.DataLoader(getattr(D,c),batch_size=self.batch_size,drop_last=True,pin_memory=self.pin_memory,shuffle=c=='train'))
 
 #--------------------------------------------------------------------------------------------------
   def exec_train(self):
@@ -194,7 +193,7 @@ Evaluates a model on some data.
 Binds the set of *listeners* (objects) to the events. The list of listeners is processed sequentially. For each listener, the methods of that listener whose name match ``on_`` followed by the name of a supported event are bound to this dispatcher.
 
 :param listeners: list of listener objects
-:param type: :class:`List[object]`
+:param type: :class:`List[Any]`
     """
 #--------------------------------------------------------------------------------------------------
     for x in listeners:
@@ -210,26 +209,25 @@ Instances of this class control basic classification runs.
 :type max_epoch: :class:`int`
 :param max_time: maximum total wall time to run
 :type max_time: :class:`int`
-:param period: training metrics are logged after this number of batch iterations (repeatedly)
-:type period: :class:`int`
-:param vperiod: validation metrics are logged after this number of batch iterations (repeatedly)
-:type vperiod: :class:`int`
-:type vperiod: :class:`int`
+:param train_p: run selector for train info logging
+:type train_p: :class:`Callable[[Any],bool]`
+:param valid_p: run selector for validation info logging
+:type valid_p: :class:`Callable[[Any],bool]`
 :param logger: logger to use for logging information
 :type logger: :class:`logging.Logger`
 :param status: pair of a function returning the status of a run and corresponding headers
-:type status: :class:`Tuple[Callable[[Object],Tuple],Tuple]`
+:type status: :class:`Tuple[Callable[[Any],Tuple],Tuple]`
 :param status_fmt: pair of formats for the components of *status*
 :type status_fmt: :class:`Tuple[str,str]`
 :param itrain,ivalid,itest: function returning various info on a run
-:type itrain,ivalid,itest: :class:`Callable[[Object],Tuple]`
+:type itrain,ivalid,itest: :class:`Callable[[Any],Tuple]`
 :param itrain_fmt,ivalid_fmt,itest_fmt: formats for the results of the corresponding functions
 :type itrain_fmt,ivalid_fmt,itest_fmt: :class:`str`
   """
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,max_epoch=int(1e9),max_time=float('inf'),period:'int'=None,vperiod:'int'=None,logger=None,
+  def __init__(self,max_epoch=int(1e9),max_time=float('inf'),train_p:'int'=None,valid_p:'int'=None,logger=None,
     status=(
       ('TIME','STEP','EPO','BAT'),
       (lambda run: (run.walltime,run.step,run.epoch,run.batch))
@@ -253,9 +251,10 @@ Instances of this class control basic classification runs.
       def progress_info(run,fmt=status_fmt[1]+'PROGRESS: %s',s=status[1]):
         logger.info(fmt,*s(run),'{:.0%}'.format(run.progress))
     def set_progress(run): run.progress = min(max(run.epoch/max_epoch,run.walltime/max_time),1.)
+    def reset_clocks(run): run.clocks = {}
 
-    self.on_open = header_info
-    self.on_batch = abs(PROC(train_info)%periodic(period)+PROC(valid_info)%periodic(vperiod))
+    self.on_open = abs(PROC(header_info)+PROC(reset_clocks))
+    self.on_batch = abs(PROC(train_info)%train_p+PROC(valid_info)%valid_p)
     self.on_epoch = abs(PROC(set_progress)+PROC(progress_info))
     self.on_close = test_info
 
@@ -264,24 +263,23 @@ class RunMlflowListener:
   r"""
 Instances of this class log information about classification runs into mlflow.
 
-:param period: training metrics are logged after this number of batch iterations (repeatedly)
-:type period: :class:`int`
-:param vperiod: validation metrics are logged after this number of batch iterations (repeatedly)
-:type vperiod: :class:`int`
-:param checkpoint_after: the model is logged at the first epoch end after this number of seconds (repeatedly)
-:type checkpoint_after: :class:`float`
+:param train_p: run selector for train info logging
+:type train_p: :class:`Callable[[Any],bool]`
+:param valid_p: run selector for validation info logging
+:type valid_p: :class:`Callable[[Any],bool]`
+:param checkpoint_p: run selector for checkpointing
+:type checkpoint_p: :class:`Callable[[Any],bool]`
   """
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,uri:'str',exp:'str',period:'int'=None,vperiod:'int'=None,checkpoint_after:'float'=None,
+  def __init__(self,uri:'str',exp:'str',train_p=None,valid_p=None,checkpoint_p=None,
     itrain=(('tloss',),(lambda run: (run.loss,))),
     ivalid=(('vloss','vaccu'),(lambda run: run.eval_valid())),
     itest =(('loss','accu'),(lambda run: run.eval_test())),
   ):
 #--------------------------------------------------------------------------------------------------
     import mlflow, mlflow.pytorch
-    from functools import partial
 
     content = lambda i,run: zip(i[0],i[1](run))
     mlflow.set_tracking_uri(uri)
@@ -299,12 +297,12 @@ Instances of this class log information about classification runs into mlflow.
     def open_mlflow(run):
       mlflow.start_run(); mlflow.log_params(run.params)
     def close_mlflow(run):
-      try: valid_info(run);test_info(run);progress_info(run);mlflow.pytorch.log_model(run.tnet,'model')
+      try: valid_info(run); test_info(run); progress_info(run); mlflow.pytorch.log_model(run.tnet,'model')
       finally: mlflow.end_run()
 
     self.on_open = open_mlflow
-    self.on_batch = abs(PROC(train_info)%periodic(period)+PROC(valid_info)%periodic(vperiod))
-    self.on_epoch = abs(PROC(checkpoint)%periodic(checkpoint_after,'checkpointed')+PROC(progress_info))
+    self.on_batch = abs(PROC(train_info)%train_p+PROC(valid_info)%valid_p)
+    self.on_epoch = abs(PROC(checkpoint)%checkpoint_p+PROC(progress_info))
     self.on_close = close_mlflow
 
   @staticmethod
@@ -383,7 +381,7 @@ def training(net,flag):
 #==================================================================================================
 class PROC:
   r"""
-Instances of this class are encapsulated callables or :const:`None` (void callable) which support operation `+` (sequential composition) and `%` with a callable (conditioning). All callables take a single argument.
+Instances of this class are encapsulated callables or :const:`None` (void callable) which support operation `+` (paired invocation) and `%` with a callable (conditioning). All callables take a single argument.
   """
 #==================================================================================================
   def __init__(self,f=None): self.func = f
@@ -397,23 +395,26 @@ Instances of this class are encapsulated callables or :const:`None` (void callab
   def __abs__(self): return self.func
 
 #==================================================================================================
-def periodic(p,a=None):
+def periodic(p,counter=None):
   r"""
-Returns a callable which takes a run as input and returns a boolean flag. If *a* is :const:`None`, the returned flag holds whether the current :attr:`batch` attribute of the run is a multiple of *p* (of type :class:`int`). Otherwise, *a* must be the name of an attribute of the run storing the time of the last invocation of the callable returning :const:`True`, and the returned flag holds whether the elapsed time since that event exceeds *p* (of type :class:`float`, in seconds).
-
-:param p: period
+:param p: periodicity (in counter value)
 :type p: :class:`Union[NoneType,int,float]`
-:param a: attribute to hold the last successful event
-:type a: :class:`Union[NoneType,str]`
+:param counter: run attribute used as counter
+:type counter: :class:`str`
+:rtype: :class:`Callable[[Any],bool]`
+
+Returns a run selector, i.e. a callable which takes a run as input and returns a boolean.
+
+* If *p* is of type :class:`int`, a run is selected if the counter value is a multiple of *p*. Default counter: :attr:`batch`
+* If *p* is of type :class:`float`, a run is selected unless the increase in the counter value since the last successful selection is lower than *p*. Default counter: :attr:`walltime` (in secs)
   """
 #==================================================================================================
-  def F(run):
-    t = run.walltime; r = t-getattr(run,a,0.)>p
-    if r: setattr(run,a,t)
+  def F(run,cid):
+    t = getattr(run,counter_); r = t-run.clocks.get(cid,0.)>p
+    if r: run.clocks[cid] = t
     return r
-  if p is None: return None
-  if a is None: return lambda run: run.batch%p==0
-  return F
+  counter_ = ('batch' if isinstance(p,int) else 'walltime') if counter is None else counter
+  return None if p is None else (lambda run: getattr(run,counter_)%p == 0) if isinstance(p,int) else partial(F,cid=object())
 
 #==================================================================================================
 def to(data,device):

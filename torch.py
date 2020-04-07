@@ -16,7 +16,7 @@ Available types and functions
 
 from contextlib import contextmanager
 from functools import partial
-from time import time, process_time
+from time import time, ctime, process_time
 from pydispatch import Dispatcher, Property
 import torch
 
@@ -47,7 +47,7 @@ Attributes (\*) must be instantiated at creation time.
     self.visible = {}
     for k,v in ka.items():
       if k.startswith('_'): k = k[1:]
-      else: self.visible[k] = repr(v)
+      else: self.visible[k] = repr(v)[:80]
       setattr(self,k,v)
     self.tnet = self.net.to(self.device)
 
@@ -282,6 +282,7 @@ Instances of this class monitor basic supervised training runs. All the paramete
       self.iprogress = lambda run,fmt=status_fmt[1]+'PROGRESS: %s',s=status[1]: logger.info(fmt,*s(run),'{:.0%}'.format(run.progress))
       i_test = lambda run,fmt=status_fmt[1]+itest_fmt,s=status[1]: logger.info(fmt,*s(run),*itest(run))
       def i_header(run,fmt=status_fmt[0],s=status[0]):
+        logger.info('DATE %s',ctime())
         for k,v in run.visible.items(): logger.info('PARAM %10s= %s',k,v)
         logger.info(fmt,*s)
     def set_progress(run): run.progress = min(max(run.epoch/max_epoch,run.walltime/max_time),1.)

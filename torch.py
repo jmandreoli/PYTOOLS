@@ -74,7 +74,7 @@ Evaluates model :attr:`tnet` on *data* according to :attr:`measures`. Each input
       for n,(inputs,*args) in enumerate(data,1):
         outputs = self.tnet(inputs)
         avg += (torch.stack([m(outputs,*args) for m in self.measures])-avg)/n
-    return tuple(avg.detach().numpy())
+    return tuple(avg.to('cpu').numpy())
 
 #--------------------------------------------------------------------------------------------------
   def bind_listeners(self,*listeners):

@@ -23,9 +23,9 @@ import torch
 #==================================================================================================
 class Run (Dispatcher):
   r"""
-Instances of this class are callables, taking no argument and returning no value. The execution of a run only changes its attribute values. At the creation of the run, all the key-value pairs in *ka* are turned into attributes of the run. If the key starts with `_`, that character is removed from the added attribute, which is then marked as "non visible". The remaining attributes are gathered in a dictionary :attr:`visible`, meant to provide a human readable description of the run.
+Instances of this class are callables, taking no argument and returning no value. The execution of a run only changes its attribute values. At the creation of the run, all the key-value pairs in *ka* are turned into attributes of the run. If the key starts with `_`, that character is dropped from the added attribute name, which is then marked as "non visible". The remaining attributes are gathered in a dictionary :attr:`visible`, meant to provide a human readable description of the run.
 
-Runs may emit messages during their execution. Each message is passed a single argument, which is the run itself, so runs can be controlled by message listeners. Methods :meth:`Dispatcher.bind` (inherited) and :meth:`bind_listeners` can be used to bind callbacks to a run. Some methods, defined in subclasses, of the form :meth:`bind\*Listener` are also available to bind specific callbacks named by \*.
+Runs may emit messages during their execution. Each message is passed a single argument, which is the run itself, so runs can be controlled by message listeners. Methods :meth:`Dispatcher.bind` (inherited) and :meth:`bind_listeners` can be used to bind callbacks to a run. Some methods, defined in subclasses, of the form :meth:`bind<name>Listener` are also available to bind specific callbacks named by `<name>`.
 
 Attributes (\*) must be instantiated at creation time.
   """
@@ -39,6 +39,8 @@ Attributes (\*) must be instantiated at creation time.
   r"""(\*)The model"""
   tnet: 'torch.nn.Module'
   r"""The same model, located at :attr:`device`"""
+  clock: 'Clock'
+  r"""A clock to record walltime and process time"""
 
 #--------------------------------------------------------------------------------------------------
   def __init__(self,**ka):
@@ -47,9 +49,10 @@ Attributes (\*) must be instantiated at creation time.
     self.visible = {}
     for k,v in ka.items():
       if k.startswith('_'): k = k[1:]
-      else: self.visible[k] = repr(v)[:80]
+      else: r = ' '.join(repr(v).split()); self.visible[k] = r if len(r)<80 else r[:77]+'...'
       setattr(self,k,v)
     self.tnet = self.net.to(self.device)
+    self.clock = Clock()
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self):
@@ -94,7 +97,7 @@ Binds the set of *listeners* (any objects) to the events of this run. For each l
   @classmethod
   def listenerFactory(cls,name):
     r"""
-Used as decorator to attach a listener factory to a subclass *cls* of :class:`Run`, available as method :meth:`bind\*Listener` where *name* is used in place of \*.
+Used as decorator to attach a listener factory to a subclass *cls* of :class:`Run`, available as method :meth:`bind<name>Listener` using the provided *name*.
 
 :param name: short name for the factory
 :type name: :class:`str`
@@ -103,15 +106,17 @@ Used as decorator to attach a listener factory to a subclass *cls* of :class:`Ru
     def app(f):
       setattr(cls,'{}Listener'.format(name),f)
       F = lambda self,*a,**ka: self.bind_listeners(f(*a,**ka))
-      F.__doc__ = r"""Binds an event listener using factory :func:`{}Listener`""".format(name)
+      F.__doc__ = r"""Binds an event listener obtained by invoking factory :func:`{}Listener`""".format(name)
       setattr(cls,'bind{}Listener'.format(name),F)
       return f
     return app
 
+  def __repr__(self): return f'{self.__class__.__name__}<{self.clock.created}>'
+
 #==================================================================================================
 class SupervisedRun (Run):
   r"""
-Supervised runs operate on data in the form of instance-label pairs. Attributes (\*) must be instantiated at creation time. Attribute :attr:`measures` is also set to a reasonable default for classification (the pair of the loss function and accuracy).
+Supervised runs operate on data in the form of instance-label pairs. Attributes (\*) must be instantiated at creation time. Attribute :attr:`measures` is also set to a reasonable default for classification (the pair of the loss and accuracy functions).
   """
 #==================================================================================================
 
@@ -142,11 +147,7 @@ Runs of this type execute a simple supervised training loop. Attributes (\*) mus
   r"""(\*)The optimiser factory"""
   ## set at execution
   progress: 'float'
-  r"""Between 0. and 1., stop when 1. is reached"""
-  walltime: 'float'
-  r"""Wall time since beginning of run"""
-  proctime: 'float'
-  r"""Process time since beginning of run"""
+  r"""Between 0. and 1., stops the run when 1. is reached (must be updated by a listener)"""
   step: 'int'
   r"""Number of completed batches overall"""
   epoch: 'int'
@@ -175,11 +176,10 @@ Runs of this type execute a simple supervised training loop. Attributes (\*) mus
     optimiser = self.optimiser(net.parameters())
     self.progress = 0.
     self.step = self.epoch = 0
-    self.walltime = self.proctime = 0.
     with training(net,True):
+      self.clock.set()
       self.emit('open',self)
       try:
-        start = time(), process_time()
         while self.progress<1.:
           self.batch = 0; self.loss = 0.
           for inputs,labels in to(self.train_data,self.device):
@@ -189,7 +189,6 @@ Runs of this type execute a simple supervised training loop. Attributes (\*) mus
             optimiser.step()
             self.step += 1; self.batch += 1
             self.loss += (loss.item()-self.loss)/self.batch
-            self.walltime,self.proctime = time()-start[0], process_time()-start[1]
             del inputs,labels,loss # free memory before emitting (not sure this works)
             self.emit('batch',self)
           self.epoch += 1
@@ -205,7 +204,7 @@ Runs of this type attempt to inverse the model at a sample of labels. Attributes
 #==================================================================================================
   nepoch: 'int'
   r"""(\*)Number of epochs to run"""
-  labels: 'Sequence[Any]'
+  labels: 'Sequence[int]'
   r"""(\*)List of labels (pure value, not tensor) to process (or range if integer type)"""
   init: 'torch.tensor'
   r"""(\*)Initial instance"""
@@ -223,6 +222,7 @@ Runs of this type attempt to inverse the model at a sample of labels. Attributes
     self.protos = torch.repeat_interleave(self.init[None,...],len(self.labels),0)
     net = self.tnet
     with training(net,True):
+      self.clock.set()
       for proto,label in zip(self.protos,self.labels):
         param = torch.nn.Parameter(proto[None,...]).to(self.device)
         optimiser = self.optimiser([param])
@@ -238,7 +238,7 @@ Runs of this type attempt to inverse the model at a sample of labels. Attributes
 @SupervisedTrainRun.listenerFactory('Base')
 class SupervisedTrainRunListener:
   r"""
-Instances of this class monitor basic supervised training runs. All the parameters below are initialised with reasonable values, except *config* passed to :meth:`configure`.
+Instances of this class monitor basic supervised training runs. All the parameters below are initialised with reasonable values, except *config* passed to :meth:`configure`. By default, train, validation and test info are logged, respectively, on batch end, epoch end and run end.
 
 :param max_epoch: maximum number of epochs to run
 :type max_epoch: :class:`int`
@@ -247,11 +247,11 @@ Instances of this class monitor basic supervised training runs. All the paramete
 :param logger: logger to use for logging information
 :type logger: :class:`logging.Logger`
 :param status: pair of a list of headers and a function returning the status of a run as a tuple matching those headers
-:type status: :class:`Tuple[Callable[[Any],Tuple],Tuple]`
+:type status: :class:`Tuple[Callable[[Run],Tuple],Tuple]`
 :param status_fmt: pair of format strings for the components of *status*
 :type status_fmt: :class:`Tuple[str,str]`
 :param itrain,ivalid,itest: function returning various info on a run
-:type itrain,ivalid,itest: :class:`Callable[[Any],Tuple]`
+:type itrain,ivalid,itest: :class:`Callable[[Run],Tuple]`
 :param itrain_fmt,ivalid_fmt,itest_fmt: format strings for the results of the corresponding functions
 :type itrain_fmt,ivalid_fmt,itest_fmt: :class:`str`
 :param config: passed as keyword arguments to method :meth:`configure`
@@ -262,7 +262,7 @@ Instances of this class monitor basic supervised training runs. All the paramete
   def __init__(self,max_epoch=int(1e9),max_time=float('inf'),logger=None,
     status=(
       ('TIME','STEP','EPO','BAT'),
-      (lambda run: (run.walltime,run.step,run.epoch,run.batch))
+      (lambda run: (run.clock.walltime,run.step,run.epoch,run.batch))
     ),
     status_fmt:'Tuple[str,str]'=('%6s %6s %3s/%4s ','%6.1f %6d %3d/%4d '),
     itrain=(lambda run: (run.loss,)),
@@ -282,10 +282,10 @@ Instances of this class monitor basic supervised training runs. All the paramete
       self.iprogress = lambda run,fmt=status_fmt[1]+'PROGRESS: %s',s=status[1]: logger.info(fmt,*s(run),'{:.0%}'.format(run.progress))
       i_test = lambda run,fmt=status_fmt[1]+itest_fmt,s=status[1]: logger.info(fmt,*s(run),*itest(run))
       def i_header(run,fmt=status_fmt[0],s=status[0]):
-        logger.info('DATE %s',ctime())
+        logger.info('RUN %s',run)
         for k,v in run.visible.items(): logger.info('PARAM %10s= %s',k,v)
         logger.info(fmt,*s)
-    def set_progress(run): run.progress = min(max(run.epoch/max_epoch,run.walltime/max_time),1.)
+    def set_progress(run): run.progress = min(max(run.epoch/max_epoch,run.clock.walltime/max_time),1.)
     self.set_progress = set_progress
     self.on_open = i_header
     self.on_close = i_test
@@ -299,9 +299,9 @@ Instances of this class monitor basic supervised training runs. All the paramete
 This method is meant to initialise attributes :attr:`on_batch` and :attr:`on_epoch` of this listener. This implementation assigns reasonable defaults, using the following run selectors.
 
 :param train_p: run selector for train info logging at each batch
-:type train_p: :class:`Union[Callable[[Any],bool],bool]`
+:type train_p: :class:`Union[Callable[[Run],bool],bool]`
 :param valid_p: run selector for validation info logging at each epoch
-:type valid_p: :class:`Union[Callable[[Any],bool],bool]`
+:type valid_p: :class:`Union[Callable[[Run],bool],bool]`
     """
 #--------------------------------------------------------------------------------------------------
     self.on_batch = abs(PROC(self.on_batch)+PROC(self.itrain)%train_p)
@@ -311,16 +311,16 @@ This method is meant to initialise attributes :attr:`on_batch` and :attr:`on_epo
 @SupervisedTrainRun.listenerFactory('Mlflow')
 class SupervisedTrainRunMlflowListener:
   r"""
-Instances of this class provide mlflow logging of supervised training runs. All the parameters below are initialised with reasonable values, except *config* passed to :meth:`configure`.
+Instances of this class provide mlflow logging of supervised training runs. All the parameters below are initialised with reasonable values, except *config* passed to :meth:`configure`. By default, train, validation and test info are logged, respectively, on batch end, epoch end and run end.
 
 :param uri: mlflow tracking uri
 :type uri: :class:`str`
 :param exp: experiment name
 :type exp: :class:`str`
 :param itrain,ivalid,itest: function returning various info on a run
-:type itrain,ivalid,itest: :class:`Callable[[Any],Tuple]`
+:type itrain,ivalid,itest: :class:`Callable[[Run],Tuple]`
 :param itrain_labels,ivalid_labels,itest_labels: labels for the results of the corresponding functions
-:type itrain_labels,ivalid_labels,itest_labels: :class:`Iterable[str]`
+:type itrain_labels,ivalid_labels,itest_labels: :class:`Sequence[str]`
 :param config: passed as keyword arguments to method :meth:`configure`
   """
 #==================================================================================================
@@ -370,11 +370,11 @@ Instances of this class provide mlflow logging of supervised training runs. All 
 This method is meant to initialise attributes :attr:`on_batch` and :attr:`on_epoch` of this listener. This implementation assigns reasonable defaults, using the following run selectors.
 
 :param train_p: run selector for train info logging at each batch
-:type train_p: :class:`Union[Callable[[Any],bool],bool]`
+:type train_p: :class:`Union[Callable[[Run],bool],bool]`
 :param valid_p: run selector for validation info logging at each epoch
-:type valid_p: :class:`Union[Callable[[Any],bool],bool]`
+:type valid_p: :class:`Union[Callable[[Run],bool],bool]`
 :param checkpoint_p: run selector for checkpointing at each epoch
-:type checkpoint_p: :class:`Union[Callable[[Any],bool],bool]`
+:type checkpoint_p: :class:`Union[Callable[[Run],bool],bool]`
     """
 #--------------------------------------------------------------------------------------------------
     self.on_batch = abs(PROC(self.on_batch)+PROC(self.itrain)%train_p)
@@ -402,7 +402,7 @@ Instances of this class are data sources for classification training. Attributes
   name: 'str'
   r"""(\*)Descriptive name of the datasource"""
   classes: 'Iterable[str]'
-  r"""(\*)Descriptive name of the classes"""
+  r"""(\*)Descriptive names for the classes"""
   train: 'torch.utils.data.Dataset'
   r"""(\*)The train split of the data source"""
   test: 'torch.utils.data.Dataset'
@@ -411,9 +411,9 @@ Instances of this class are data sources for classification training. Attributes
 #--------------------------------------------------------------------------------------------------
   def mpl(self,ax):
     r"""
-Returns a callable, which, when passed a data instance, refreshes *ax* accordingly (its label is used as title of *ax*). This implementation raises a :class:`NotImplementedError`.
+Returns a callable, which, when passed a data instance, displays it on *ax* (its label is also used as title of *ax*). This implementation raises a :class:`NotImplementedError`.
 
-:param ax: a display area for a data instance (its label is displayed as a string above *ax*)
+:param ax: a display area for a data instance
 :type ax: :class:`matplotlib.Axes`
 :rtype: :class:`Callable[[Tensor],NoneType]`
     """
@@ -437,48 +437,74 @@ Returns a dictionary which can be passed as keyword arguments to the :class:`Sup
     n = len(D); nvalid = int(pcval*n); ntrain = n-nvalid
     train,valid = torch.utils.data.random_split(D,(ntrain,nvalid))
     test = self.test
-    r = ','.join(f'{k}:{len(l)}' for k,l in zip(('train','valid','test'),(train,valid,test)))
+    r = ','.join(f'{c}:{len(split)}' for c,split in zip(('train','valid','test'),(train,valid,test)))
     r = f'{self.name}<{r}>'
     params = dict(data=r,**ka)
     ka = dict(((k[1:] if k.startswith('_') else k),v) for k,v in ka.items())
-    for c,part in zip(('train','valid','test'),(train,valid,test)):
-      params['_'+c+'_data'] = torch.utils.data.DataLoader(part,shuffle=c=='train',**ka)
+    for c,split in zip(('train','valid','test'),(train,valid,test)):
+      params['_'+c+'_data'] = torch.utils.data.DataLoader(split,shuffle=c=='train',**ka)
     return params
 
 #--------------------------------------------------------------------------------------------------
-  def display(self,rowspec,colspec,control=None,**ka):
+  def display(self,rowspec,colspec,dataset=None,**ka):
     r"""
-Displays a slice of the test data in a grid. The displayed slice can be controlled by a slider. The specification of the rows (resp. cols) of the grid consists of three numbers:
+Displays a set of labelled data instances *dataset* in a grid. The specification of the rows (resp. cols) of the grid consists of three numbers:
 
-* number of rows (resp. cols)
-* height (resp. width) of the cells in a row (resp. col)
-* additional space in each row (resp. col)
+* height (resp. width) of the cells; required
+* number of rows (resp. cols); if -1 it is adjusted so the the whole dataset fits in the grid; default: 1
+* additional space in the row (resp. col) dimension; default: 0.
+
+At most one of the number of rows or columns can be -1. When both are positive and the dataset does not fit in the grid, a slider is created to allow page browsing through the dataset.
 
 :param rowspec,colspec: specification of the rows/cols of the grid
-:type rowspec,colspec: :class:`Union[int,Tuple[int,int],Tuple[int,int,int]]`
+:type rowspec,colspec: :class:`Union[float,Tuple[int,float],Tuple[int,float,float]]`
+:param dataset: the data to display
+:type dataset: :class:`Iterable[Tuple[Any,int]]`
 :param ka: keyword arguments passed to :func:`matplotlib.pyplot.subplots` to create the grid
     """
 #--------------------------------------------------------------------------------------------------
-    def widget_control(disp,K):
+    def disp(sample):
+      for (value,label),(ax,update) in zip(pad(sample),updates):
+        visible = value is not None
+        ax.set(visible=visible)
+        if visible:
+          update(value)
+          ax.set_title(self.classes[label],fontsize='xx-small',pad=1)
+    def widget_control(dataset,K,disp):
       from ipywidgets import IntSlider,Layout,Label,HBox
-      dataset = self.test
       N = len(dataset)
-      w = IntSlider(value=1,min=0,step=K,max=(N//K-1)*K,layout=Layout(width='10cm'))
-      w.observe((lambda ev: disp(dataset[ev.new+k] for k in range(K))),'value')
+      w = IntSlider(value=1,min=0,step=K,max=(adj(N,K)-1)*K,layout=Layout(width='10cm'))
+      w.observe((lambda ev: disp([dataset[k] for k in range(ev.new,min(ev.new+K,N))])),'value')
       w.value = 0
       return HBox((w,Label('+[0-{}]/ {}'.format(K-1,N),layout=Layout(align_self='center'))))
+    def pad(it):
+      for x in it: yield x
+      while True: yield None,None
+    def adj(N,K):
+      from math import ceil
+      return int(ceil(N/K))
+    def parsespec(spec):
+      def fmt(sz,n=None,pad=None):
+        assert isinstance(sz,(int,float)) and sz>0.
+        if n is None: n = 1
+        else: assert isinstance(n,int) and (n==-1 or n>=1)
+        if pad is None: pad = 0.
+        else: assert isinstance(pad,(int,float)) and pad>=0.
+        return sz,n,pad
+      return (spec,1,0.) if isinstance(spec,(int,float)) else fmt(*spec)
     from matplotlib.pyplot import subplots
-    parsespec = lambda spec: (spec if len(spec)==3 else spec+(0.,)) if isinstance(spec,tuple) else (1,spec,0.)
-    nrow,rowsz,rowp = parsespec(rowspec)
-    ncol,colsz,colp = parsespec(colspec)
-    fig,axes = subplots(nrow,ncol,squeeze=False,figsize=(ncol*colsz+rowp,nrow*rowsz+colp),**ka)
+    if dataset is None: dataset = self.test
+    try: N = len(dataset)
+    except: dataset = list(dataset); N = len(dataset)
+    rowsz,nrow,rowp = parsespec(rowspec)
+    colsz,ncol,colp = parsespec(colspec)
+    if ncol == -1: assert nrow>0; ncol = adj(N,nrow)
+    elif nrow == -1: assert ncol>0; nrow = adj(N,ncol)
+    K = nrow*ncol
+    fig,axes = subplots(nrow,ncol,squeeze=False,figsize=(ncol*colsz+colp,nrow*rowsz+rowp),**ka)
     updates = [(ax,self.mpl(ax)) for axr in axes for ax in axr]
-    def disp(sample):
-      for (value,label),(ax,update) in zip(sample,updates):
-        update(value)
-        ax.set_title(self.classes[label],fontsize='xx-small',pad=1)
-    if control is None: control = widget_control
-    return control(disp,len(updates))
+    if N<=K: disp(dataset)
+    else: return widget_control(dataset,K,disp)
 
 #==================================================================================================
 # Miscellaneous utilities
@@ -496,14 +522,13 @@ def training(net,flag):
 #--------------------------------------------------------------------------------------------------
 class PROC:
   r"""
-Each instance of this class encapsulates a callable or :const:`None` (void callable). All callables take a single argument (typically a run). This class supports three operations.
+This class is meant to facilitate writing flexible pipelines of callable invocations. An instance of this class encapsulates a callable or :const:`None` (void callable). All callables take a single argument (typically a run). Generic function :func:`abs` (absolute value) returns the encapsulated callable. This class supports two operations.
 
-* Function :func:`abs` (absolute value) which returns the encapsulated callable.
-* Operation `+` (sequential invocation). The two operands must be instances of :class:`PROC` and so is the result. They satisfy::
+* Operation `+` (sequential invocation). The two operands must be instances of :class:`PROC` and so is the result. If any of the two operands is void, the result is the other operand, otherwise it is defined by::
 
    abs(x+y) == lambda u,X=abs(x),Y=abs(y): X(u) is not None or Y(u) is not None or None
 
-* Operation `%` (conditioning). The first operand must be an instance of :class:`PROC` and so is the result. The second operand must be a selector (a function with one input and a boolean output), or a boolean value (taken to be the corresponding constant function). They satisfy::
+* Operation `%` (conditioning). The first operand must be an instance of :class:`PROC` and so is the result. The second operand must be a selector (a function with one input and a boolean output), or a boolean value. If the first operand is void, so is the result; if the second operand is :const:`False`, the result is also void; if the second operand is :const:`True`, the result is the first operand; otherwise it is defined by::
 
    abs(x%y) == lambda u,X=abs(x): X(u) if y(u) else None
   """
@@ -512,36 +537,54 @@ Each instance of this class encapsulates a callable or :const:`None` (void calla
   def __mod__(self,other):
     if self.func is None or other is False: return PROC()
     if other is True: return self
-    assert callable(other)
     return PROC(lambda u,f=self.func,c=other: f(u) if c(u) else None)
   def __add__(self,other):
-    assert isinstance(other,PROC)
+    if not isinstance(other,PROC): return NotImplemented
     return other if self.func is None else self if other.func is None else PROC(lambda u,f1=self.func,f2=other.func: f1(u) is not None or f2(u) is not None or None)
   def __abs__(self): return self.func
 
 #--------------------------------------------------------------------------------------------------
 def periodic(p,counter=None):
   r"""
-Returns a run selector, i.e. a callable which takes a run as input and returns a boolean. The selection is based on the value of the attribute named *counter*.
+Returns a run selector, i.e. a callable which takes a run as input and returns a boolean. The selection is based on the value of a counter specified by *counter*, which can be a string (name of attribute of the run used as counter) or an explicit callable which takes as input the run and returns the value of the counter.
 
-* If *p* is of type :class:`int`, a run is selected if the counter value is a multiple of *p*. Default counter: :attr:`batch`
-* If *p* is of type :class:`float`, a run is selected unless the increase in the counter value since the last successful selection is lower than *p*. Default counter: :attr:`walltime` (in secs)
+* If *p* is of type :class:`int`, a run is selected if the counter value is a multiple of *p*. Default counter: batch number in current epoch
+* If *p* is of type :class:`float`, a run is selected unless the increase in the counter value since the last successful selection is lower than *p*. Default counter: walltime since run start (in secs)
 
 :param p: periodicity (in counter value)
 :type p: :class:`Union[NoneType,int,float]`
-:param counter: run attribute used as counter
-:type counter: :class:`str`
-:rtype: :class:`Union[Callable[[Any],bool],NoneType]`
+:param counter: run feature to use as counter
+:type counter: :class:`Union[Callable[[Run],int],Callable[[Run],float],str,NoneType]`
+:rtype: :class:`Union[Callable[[Run],bool],NoneType]`
   """
 #--------------------------------------------------------------------------------------------------
-  class F:
-    def __init__(self,counter): self.current,self.counter = 0.,counter
-    def __call__(self,run):
-      t = getattr(run,self.counter); r = t-self.current>p
-      if r: self.current = t
-      return r
-  counter_ = ('batch' if isinstance(p,int) else 'walltime') if counter is None else counter
-  return None if p is None else (lambda run: getattr(run,counter_)%p == 0) if isinstance(p,int) else F(counter_)
+  if p is None: return None
+  if isinstance(p,int):
+    if counter is None: return lambda run: run.batch%p == 0
+    if isinstance(counter,str): return lambda run,a=counter: getattr(run,a)%p == 0
+    if not callable(counter): raise TypeError('counter[expected: callable|str|NoneType; found: {}]'.format(type(counter)))
+    return lambda run: counter(run)%p == 0
+  if not isinstance(p,float): raise TypeError('p[expected: int|float|NoneType; found: {}]'.format(type(p)))
+  if counter is None: counter = lambda run: run.clock.walltime
+  elif isinstance(counter,str): counter = lambda run,a=counter: getattr(run,a)
+  elif not callable(counter): raise TypeError('counter[expected: callable|str|NoneType; found: {}]'.format(type(counter)))
+  current = 0.
+  def F(run):
+    nonlocal current
+    c = counter(run); r = c-current>p
+    if r: current = c
+    return r
+  return F
+
+#--------------------------------------------------------------------------------------------------
+class Clock:
+#--------------------------------------------------------------------------------------------------
+  def __init__(self): self.created = ctime(); self.start = None
+  def set(self): self.start = time(),process_time()
+  @property
+  def walltime(self): return time()-self.start[0]
+  @property
+  def proctime(self): return process_time()-self.start[1]
 
 #--------------------------------------------------------------------------------------------------
 def to(data,device):

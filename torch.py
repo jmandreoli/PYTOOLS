@@ -39,20 +39,24 @@ Attributes (\*) must be instantiated at creation time.
   r"""(\*)The model"""
   tnet: 'torch.nn.Module'
   r"""The same model, located at :attr:`device`"""
-  clock: 'Clock'
-  r"""A clock to record walltime and process time"""
+  walltime: 'float'
+  r"""Wall time elapsed (in sec) between last invocation of :meth:`settime` and last invocation of :meth:`rectime`"""
+  proctime: 'float'
+  r"""Process time elapsed (in sec) between last invocation of :meth:`settime` and last invocation of :meth:`rectime`"""
+  step: 'int'
+  r"""Number of invocations of :meth:`rectime` since last invocation of :meth:`settime`"""
 
 #--------------------------------------------------------------------------------------------------
   def __init__(self,**ka):
 #--------------------------------------------------------------------------------------------------
-    self.listeners = []
     self.visible = {}
     for k,v in ka.items():
       if k.startswith('_'): k = k[1:]
       else: r = ' '.join(repr(v).split()); self.visible[k] = r if len(r)<80 else r[:77]+'...'
       setattr(self,k,v)
     self.tnet = self.net.to(self.device)
-    self.clock = Clock()
+    self.listeners = [] # to hold the list of listeners, otherwise they may be garbage collected
+    self.created = ctime() # to keep track of time
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self):
@@ -111,7 +115,10 @@ Used as decorator to attach a listener factory to a subclass *cls* of :class:`Ru
       return f
     return app
 
-  def __repr__(self): return f'{self.__class__.__name__}<{self.clock.created}>'
+  def settime(self): self.started = time(),process_time(); self.step = 0
+  def rectime(self): self.walltime,self.proctime = time()-self.started[0],process_time()-self.started[1]; self.step += 1
+
+  def __repr__(self): return f'{self.__class__.__name__}<{self.created}>'
 
 #==================================================================================================
 class SupervisedRun (Run):
@@ -130,26 +137,24 @@ Supervised runs operate on data in the form of instance-label pairs. Attributes 
 #==================================================================================================
 class SupervisedTrainRun (SupervisedRun):
   r"""
-Runs of this type execute a simple supervised training loop. Attributes (\*) must be instantiated at creation time. All the other attributes are initialised and updated by the run execution, except :attr:`progress` which is initialised (to 0.) by the run execution, but needs to be updated by some listener.
+Runs of this type execute a simple supervised training loop. Attributes (\*) must be instantiated at creation time. All the other attributes are initialised and updated by the run execution, except :attr:`progress` which is initialised (to 0.) by the run execution, but needs to be updated by some listener. :meth:`settime` and :meth:`rectime` are invoked at the beginning of the training loop and at the end of each batch, respectively.
   """
 #==================================================================================================
 
   _events_ = ['open','batch','epoch','close']
 
   ## set at instantiation
-  train_data: 'Iterable[Tuple[Tensor,Tensor]]'
+  train_data: 'Iterable[Tuple[torch.tensor,torch.tensor]]'
   r"""(\*)Iterable of batches. Each batch is a pair of a tensor of inputs and a tensor of labels (first dim = size of batch)"""
-  valid_data: 'Iterable[Tuple[Tensor,Tensor]]'
+  valid_data: 'Iterable[Tuple[torch.tensor,torch.tensor]]'
   r"""(\*)Same format as :attr:`train_data`"""
-  test_data: 'Iterable[Tuple[Tensor,Tensor]]'
+  test_data: 'Iterable[Tuple[torch.tensor,torch.tensor]]'
   r"""(\*)Same format as :attr:`train_data`"""
-  optimiser: 'Callable[[List[torch.nn.Parameter]],torch.optim.Optimizer]'
+  optimiser: 'Callable[[Sequence[torch.nn.Parameter]],torch.optim.Optimizer]'
   r"""(\*)The optimiser factory"""
   ## set at execution
   progress: 'float'
   r"""Between 0. and 1., stops the run when 1. is reached (must be updated by a listener)"""
-  step: 'int'
-  r"""Number of completed batches overall"""
   epoch: 'int'
   r"""Number of completed epochs"""
   batch: 'int'
@@ -174,10 +179,9 @@ Runs of this type execute a simple supervised training loop. Attributes (\*) mus
     net = self.tnet
     self.eval_valid,self.eval_test = eval_cache(self.valid_data),eval_cache(self.test_data)
     optimiser = self.optimiser(net.parameters())
-    self.progress = 0.
-    self.step = self.epoch = 0
     with training(net,True):
-      self.clock.set()
+      self.settime()
+      self.progress = 0.; self.epoch = 0
       self.emit('open',self)
       try:
         while self.progress<1.:
@@ -187,9 +191,10 @@ Runs of this type execute a simple supervised training loop. Attributes (\*) mus
             loss = self.lossF(net(inputs),labels)
             loss.backward()
             optimiser.step()
-            self.step += 1; self.batch += 1
+            self.batch += 1
             self.loss += (loss.item()-self.loss)/self.batch
             del inputs,labels,loss # free memory before emitting (not sure this works)
+            self.rectime()
             self.emit('batch',self)
           self.epoch += 1
           self.emit('epoch',self)
@@ -199,7 +204,7 @@ Runs of this type execute a simple supervised training loop. Attributes (\*) mus
 #==================================================================================================
 class SupervisedInvRun (SupervisedRun):
   r"""
-Runs of this type attempt to inverse the model at a sample of labels. Attributes (\*) must be instantiated at creation time. All the other attributes are initialised and updated by the run execution.
+Runs of this type attempt to inverse the model at a sample of labels. Attributes (\*) must be instantiated at creation time. All the other attributes are initialised and updated by the run execution. :meth:`settime` and :meth:`rectime` are invoked at the beginning of the training loop and at the end of each batch, respectively.
   """
 #==================================================================================================
   nepoch: 'int'
@@ -212,7 +217,7 @@ Runs of this type attempt to inverse the model at a sample of labels. Attributes
   r"""(\*)Called after each optimiser step to re-project instances within domain range"""
   optimiser: 'Callable[[List[torch.nn.Parameter]],torch.optim.Optimizer]'
   r"""(\*)The optimiser factory"""
-  protos: 'Sequence[Tensor]'
+  protos: 'Sequence[torch.tensor]'
   r"""The estimated inverse image of :attr:`labels`"""
 
 #--------------------------------------------------------------------------------------------------
@@ -222,7 +227,7 @@ Runs of this type attempt to inverse the model at a sample of labels. Attributes
     self.protos = torch.repeat_interleave(self.init[None,...],len(self.labels),0)
     net = self.tnet
     with training(net,True):
-      self.clock.set()
+      self.settime()
       for proto,label in zip(self.protos,self.labels):
         param = torch.nn.Parameter(proto[None,...]).to(self.device)
         optimiser = self.optimiser([param])
@@ -233,25 +238,26 @@ Runs of this type attempt to inverse the model at a sample of labels. Attributes
           loss.backward()
           optimiser.step()
           projection(param.data[0])
+          self.rectime()
 
 #==================================================================================================
 @SupervisedTrainRun.listenerFactory('Base')
 class SupervisedTrainRunListener:
   r"""
-Instances of this class monitor basic supervised training runs. All the parameters below are initialised with reasonable values, except *config* passed to :meth:`configure`. By default, train, validation and test info are logged, respectively, on batch end, epoch end and run end.
+Instances of this class monitor basic supervised training runs. By default, train, validation and test info are logged, respectively, on batch end, epoch end and run end. At least one of *max_epoch* or *max_time* must be set, or the run never ends.
 
-:param max_epoch: maximum number of epochs to run
+:param max_epoch: maximum number of epochs to run; default: no limit
 :type max_epoch: :class:`int`
-:param max_time: maximum total wall time to run
-:type max_time: :class:`int`
+:param max_time: maximum total wall time to run; default: no limit
+:type max_time: :class:`float`
 :param logger: logger to use for logging information
 :type logger: :class:`logging.Logger`
-:param status: pair of a list of headers and a function returning the status of a run as a tuple matching those headers
-:type status: :class:`Tuple[Callable[[Run],Tuple],Tuple]`
+:param status: pair of a tuple of headers and a function returning the status of a run as a tuple matching those headers
+:type status: :class:`Tuple[Tuple[str,...],Callable[[Run],Tuple[Any,...]]]`
 :param status_fmt: pair of format strings for the components of *status*
 :type status_fmt: :class:`Tuple[str,str]`
 :param itrain,ivalid,itest: function returning various info on a run
-:type itrain,ivalid,itest: :class:`Callable[[Run],Tuple]`
+:type itrain,ivalid,itest: :class:`Callable[[Run],Tuple[Any,...]]`
 :param itrain_fmt,ivalid_fmt,itest_fmt: format strings for the results of the corresponding functions
 :type itrain_fmt,ivalid_fmt,itest_fmt: :class:`str`
 :param config: passed as keyword arguments to method :meth:`configure`
@@ -259,12 +265,12 @@ Instances of this class monitor basic supervised training runs. All the paramete
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,max_epoch=int(1e9),max_time=float('inf'),logger=None,
+  def __init__(self,max_epoch=None,max_time=None,logger=None,
     status=(
       ('TIME','STEP','EPO','BAT'),
-      (lambda run: (run.clock.walltime,run.step,run.epoch,run.batch))
+      (lambda run: (run.walltime,run.step,run.epoch,run.batch))
     ),
-    status_fmt:'Tuple[str,str]'=('%6s %6s %3s/%4s ','%6.1f %6d %3d/%4d '),
+    status_fmt=('%6s %6s %3s/%4s ','%6.1f %6d %3d/%4d '),
     itrain=(lambda run: (run.loss,)),
     ivalid=(lambda run: run.eval_valid()),
     itest =(lambda run: run.eval_test()),
@@ -274,29 +280,29 @@ Instances of this class monitor basic supervised training runs. All the paramete
     **config
   ):
 #--------------------------------------------------------------------------------------------------
+    assert max_epoch is not None or max_time is not None
     if logger is None:
-      self.itrain = self.ivalid = self.iprogress = i_test = i_header = None
+      self.itrain = self.ivalid = self.iprogress = self.itest = self.iheader = None
     else:
       self.itrain = lambda run,fmt=status_fmt[1]+itrain_fmt,s=status[1]: logger.info(fmt,*s(run),*itrain(run))
       self.ivalid = lambda run,fmt=status_fmt[1]+ivalid_fmt,s=status[1]: logger.info(fmt,*s(run),*ivalid(run))
       self.iprogress = lambda run,fmt=status_fmt[1]+'PROGRESS: %s',s=status[1]: logger.info(fmt,*s(run),'{:.0%}'.format(run.progress))
-      i_test = lambda run,fmt=status_fmt[1]+itest_fmt,s=status[1]: logger.info(fmt,*s(run),*itest(run))
+      self.itest = lambda run,fmt=status_fmt[1]+itest_fmt,s=status[1]: logger.info(fmt,*s(run),*itest(run))
       def i_header(run,fmt=status_fmt[0],s=status[0]):
         logger.info('RUN %s',run)
         for k,v in run.visible.items(): logger.info('PARAM %10s= %s',k,v)
         logger.info(fmt,*s)
-    def set_progress(run): run.progress = min(max(run.epoch/max_epoch,run.clock.walltime/max_time),1.)
+      self.iheader = i_header
+    if max_epoch is None: max_epoch = float('inf')
+    if max_time is None: max_time = float('inf')
+    def set_progress(run): run.progress = min(max(run.epoch/max_epoch,run.walltime/max_time),1.)
     self.set_progress = set_progress
-    self.on_open = i_header
-    self.on_close = i_test
-    self.on_batch = None
-    self.on_epoch = abs(PROC(set_progress)+PROC(self.iprogress))
     self.configure(**config)
 
 #--------------------------------------------------------------------------------------------------
   def configure(self,train_p=False,valid_p=False):
     r"""
-This method is meant to initialise attributes :attr:`on_batch` and :attr:`on_epoch` of this listener. This implementation assigns reasonable defaults, using the following run selectors.
+This method, called at the end of the constructor, configures the callback methods of this listener. This implementation assigns reasonable defaults, using the run selectors passed in arguments, and can be refined in subclasses.
 
 :param train_p: run selector for train info logging at each batch
 :type train_p: :class:`Union[Callable[[Run],bool],bool]`
@@ -304,23 +310,25 @@ This method is meant to initialise attributes :attr:`on_batch` and :attr:`on_epo
 :type valid_p: :class:`Union[Callable[[Run],bool],bool]`
     """
 #--------------------------------------------------------------------------------------------------
-    self.on_batch = abs(PROC(self.on_batch)+PROC(self.itrain)%train_p)
-    self.on_epoch = abs(PROC(self.on_epoch)+PROC(self.ivalid)%valid_p)
+    self.on_open = self.iheader
+    self.on_close = self.itest
+    self.on_batch = abs(PROC(self.itrain)%train_p)
+    self.on_epoch = abs(PROC(self.set_progress)+PROC(self.iprogress)+PROC(self.ivalid)%valid_p)
 
 #==================================================================================================
 @SupervisedTrainRun.listenerFactory('Mlflow')
 class SupervisedTrainRunMlflowListener:
   r"""
-Instances of this class provide mlflow logging of supervised training runs. All the parameters below are initialised with reasonable values, except *config* passed to :meth:`configure`. By default, train, validation and test info are logged, respectively, on batch end, epoch end and run end.
+Instances of this class provide mlflow logging of supervised training runs. By default, train, validation and test info are logged, respectively, on batch end, epoch end and run end.
 
 :param uri: mlflow tracking uri
 :type uri: :class:`str`
 :param exp: experiment name
 :type exp: :class:`str`
 :param itrain,ivalid,itest: function returning various info on a run
-:type itrain,ivalid,itest: :class:`Callable[[Run],Tuple]`
+:type itrain,ivalid,itest: :class:`Callable[[Run],Tuple[Any,...]]`
 :param itrain_labels,ivalid_labels,itest_labels: labels for the results of the corresponding functions
-:type itrain_labels,ivalid_labels,itest_labels: :class:`Sequence[str]`
+:type itrain_labels,ivalid_labels,itest_labels: :class:`Tuple[str,...]`
 :param config: passed as keyword arguments to method :meth:`configure`
   """
 #==================================================================================================
@@ -350,24 +358,20 @@ Instances of this class provide mlflow logging of supervised training runs. All 
     def i_test(run):
       for key,val in zip(itest_labels,itest(run)): mlflow.set_tag(key,val)
     self.checkpoint = lambda run: mlflow.pytorch.log_model(run.tnet,'model_{:03d}'.format(run.epoch))
-    def open_mlflow(run):
-      mlflow.start_run(); mlflow.log_params(run.visible)
+    def open_mlflow(run): mlflow.start_run(); mlflow.log_params(run.visible)
+    self.open_mlflow = open_mlflow
     def close_mlflow(run):
       try:
         i_valid(run); i_progress(run); i_test(run)
         mlflow.pytorch.log_model(run.tnet,'model')
       finally: mlflow.end_run()
-
-    self.on_open = open_mlflow
-    self.on_close = close_mlflow
-    self.on_batch = None
-    self.on_epoch = i_progress
+    self.close_mlflow = close_mlflow
     self.configure(**config)
 
 #--------------------------------------------------------------------------------------------------
   def configure(self,train_p=False,valid_p=False,checkpoint_p=False):
     r"""
-This method is meant to initialise attributes :attr:`on_batch` and :attr:`on_epoch` of this listener. This implementation assigns reasonable defaults, using the following run selectors.
+This method, called at the end of the constructor, configures the callback methods of this listener. This implementation assigns reasonable defaults, using the run selectors passed in arguments, and can be refined in subclasses.
 
 :param train_p: run selector for train info logging at each batch
 :type train_p: :class:`Union[Callable[[Run],bool],bool]`
@@ -377,8 +381,10 @@ This method is meant to initialise attributes :attr:`on_batch` and :attr:`on_epo
 :type checkpoint_p: :class:`Union[Callable[[Run],bool],bool]`
     """
 #--------------------------------------------------------------------------------------------------
-    self.on_batch = abs(PROC(self.on_batch)+PROC(self.itrain)%train_p)
-    self.on_epoch = abs(PROC(self.on_epoch)+PROC(self.ivalid)%valid_p+PROC(self.checkpoint)%checkpoint_p)
+    self.on_open = self.open_mlflow
+    self.on_close = self.close_mlflow
+    self.on_batch = abs(PROC(self.itrain)%train_p)
+    self.on_epoch = abs(PROC(self.iprogress)+PROC(self.ivalid)%valid_p+PROC(self.checkpoint)%checkpoint_p)
 
 #--------------------------------------------------------------------------------------------------
   @staticmethod
@@ -415,7 +421,7 @@ Returns a callable, which, when passed a data instance, displays it on *ax* (its
 
 :param ax: a display area for a data instance
 :type ax: :class:`matplotlib.Axes`
-:rtype: :class:`Callable[[Tensor],NoneType]`
+:rtype: :class:`Callable[[torch.tensor],NoneType]`
     """
 #--------------------------------------------------------------------------------------------------
     raise NotImplementedError()
@@ -425,9 +431,9 @@ Returns a callable, which, when passed a data instance, displays it on *ax* (its
     r"""
 Returns a dictionary which can be passed as keyword arguments to the :class:`SupervisedTrainRun` constructor to initialise its required attributes:
 
-* the invisible attributes :attr:`train_data`, :attr:`valid_data`, :attr:`test_data`, obtained by calling :class:`torch.utils.data.DataLoader` on the corresponding split and key-word parameters *ka* (with prefix `_` removed from keys);
-* visible attributes :attr:`data` holding a description of the datasource and :attr:`pcval` referring to the portion of the train split used for validation;
-* all the attributes (visible or invisible) defined in *ka*.
+* invisible attributes :attr:`train_data`, :attr:`valid_data`, :attr:`test_data`, obtained by calling :class:`torch.utils.data.DataLoader` on the corresponding split with key-word parameters *ka* (with prefix `_` removed from keys);
+* a visible attribute :attr:`data` holding a description of the datasource;
+* all the attributes (visible and invisible) in *ka*, so they appear as attributes of the run.
 
 :param pcval: proportion (between 0. and 1.) of instances from the train split to use for validation.
 :type pcval: :class:`float`
@@ -457,7 +463,7 @@ Displays a set of labelled data instances *dataset* in a grid. The specification
 At most one of the number of rows or columns can be -1. When both are positive and the dataset does not fit in the grid, a slider is created to allow page browsing through the dataset.
 
 :param rowspec,colspec: specification of the rows/cols of the grid
-:type rowspec,colspec: :class:`Union[float,Tuple[int,float],Tuple[int,float,float]]`
+:type rowspec,colspec: :class:`Union[float,Tuple[float,int],Tuple[float,int,float]]`
 :param dataset: the data to display
 :type dataset: :class:`Iterable[Tuple[Any,int]]`
 :param ka: keyword arguments passed to :func:`matplotlib.pyplot.subplots` to create the grid
@@ -522,13 +528,13 @@ def training(net,flag):
 #--------------------------------------------------------------------------------------------------
 class PROC:
   r"""
-This class is meant to facilitate writing flexible pipelines of callable invocations. An instance of this class encapsulates a callable or :const:`None` (void callable). All callables take a single argument (typically a run). Generic function :func:`abs` (absolute value) returns the encapsulated callable. This class supports two operations.
+This class is meant to facilitate writing flexible pipelines of callable invocations. An instance of this class encapsulates a callable or :const:`None` (void instance). All callables take a single argument (typically a run). Generic function :func:`abs` (absolute value) returns the encapsulated callable. This class supports two operations.
 
 * Operation `+` (sequential invocation). The two operands must be instances of :class:`PROC` and so is the result. If any of the two operands is void, the result is the other operand, otherwise it is defined by::
 
    abs(x+y) == lambda u,X=abs(x),Y=abs(y): X(u) is not None or Y(u) is not None or None
 
-* Operation `%` (conditioning). The first operand must be an instance of :class:`PROC` and so is the result. The second operand must be a selector (a function with one input and a boolean output), or a boolean value. If the first operand is void, so is the result; if the second operand is :const:`False`, the result is also void; if the second operand is :const:`True`, the result is the first operand; otherwise it is defined by::
+* Operation `%` (conditioning). The first operand must be an instance of :class:`PROC` and so is the result. The second operand must be a selector (a function with one input and a boolean output), or a boolean value (equivalent to the constant selector returning that value). If the first operand is void, so is the result; if the second operand is :const:`False`, the result is also void; if the second operand is :const:`True`, the result is the first operand; otherwise it is defined by::
 
    abs(x%y) == lambda u,X=abs(x): X(u) if y(u) else None
   """
@@ -546,45 +552,32 @@ This class is meant to facilitate writing flexible pipelines of callable invocat
 #--------------------------------------------------------------------------------------------------
 def periodic(p,counter=None):
   r"""
-Returns a run selector, i.e. a callable which takes a run as input and returns a boolean. The selection is based on the value of a counter specified by *counter*, which can be a string (name of attribute of the run used as counter) or an explicit callable which takes as input the run and returns the value of the counter.
+Returns a run selector, i.e. a callable which takes a run as input and returns a boolean. The selection is based on the value of a counter held by attribute *counter*.
 
-* If *p* is of type :class:`int`, a run is selected if the counter value is a multiple of *p*. Default counter: batch number in current epoch
-* If *p* is of type :class:`float`, a run is selected unless the increase in the counter value since the last successful selection is lower than *p*. Default counter: walltime since run start (in secs)
+* If *p* is of type :class:`int`, a run is selected if the counter value is a multiple of *p*. Default counter: :attr:`Run.step`.
+* If *p* is of type :class:`float`, a run is selected if the increase in the counter value since the last successful selection is greater than *p*. Default counter: :attr:`Run.walltime`.
 
 :param p: periodicity (in counter value)
 :type p: :class:`Union[NoneType,int,float]`
 :param counter: run feature to use as counter
-:type counter: :class:`Union[Callable[[Run],int],Callable[[Run],float],str,NoneType]`
+:type counter: :class:`Union[str,NoneType]`
 :rtype: :class:`Union[Callable[[Run],bool],NoneType]`
   """
 #--------------------------------------------------------------------------------------------------
   if p is None: return None
   if isinstance(p,int):
-    if counter is None: return lambda run: run.batch%p == 0
-    if isinstance(counter,str): return lambda run,a=counter: getattr(run,a)%p == 0
-    if not callable(counter): raise TypeError('counter[expected: callable|str|NoneType; found: {}]'.format(type(counter)))
-    return lambda run: counter(run)%p == 0
-  if not isinstance(p,float): raise TypeError('p[expected: int|float|NoneType; found: {}]'.format(type(p)))
-  if counter is None: counter = lambda run: run.clock.walltime
-  elif isinstance(counter,str): counter = lambda run,a=counter: getattr(run,a)
-  elif not callable(counter): raise TypeError('counter[expected: callable|str|NoneType; found: {}]'.format(type(counter)))
-  current = 0.
-  def F(run):
-    nonlocal current
-    c = counter(run); r = c-current>p
-    if r: current = c
-    return r
-  return F
-
-#--------------------------------------------------------------------------------------------------
-class Clock:
-#--------------------------------------------------------------------------------------------------
-  def __init__(self): self.created = ctime(); self.start = None
-  def set(self): self.start = time(),process_time()
-  @property
-  def walltime(self): return time()-self.start[0]
-  @property
-  def proctime(self): return process_time()-self.start[1]
+    if counter is None: counter = 'step'
+    return lambda run,a=counter: getattr(run,a)%p == 0
+  elif isinstance(p,float):
+    if counter is None: counter = 'walltime'
+    current = 0.
+    def F(run,a=counter):
+      nonlocal current
+      c = getattr(run,a); r = c-current>p
+      if r: current = c
+      return r
+    return F
+  raise TypeError('p[expected: int|float|NoneType; found: {}]'.format(type(p)))
 
 #--------------------------------------------------------------------------------------------------
 def to(data,device):

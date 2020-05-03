@@ -14,6 +14,10 @@ Available types and functions
 -----------------------------
 """
 
+from __future__ import annotations
+from typing import Any, Union, Callable, Iterable, Mapping, Tuple
+import logging; logger = logging.getLogger(__name__)
+
 from contextlib import contextmanager
 from functools import partial
 from time import time, ctime, process_time
@@ -67,13 +71,11 @@ Executes the run. This implementation raises a :class:`NotImplementedError`.
     raise NotImplementedError()
 
 #--------------------------------------------------------------------------------------------------
-  def eval(self,data):
+  def eval(self,data:Iterable[Tuple[torch.tensor,Any,...]])->Tuple[float,...]:
     r"""
 Evaluates model :attr:`tnet` on *data* according to :attr:`measures`. Each input item in *data* consists of a tuple of an input tensor on which the model is executed, followed by any number of extra parameters for the measures. For each input item, an evaluation consists in applying the model to the first tensor, then estimating each measure on the output tensor with the extra parameters. The returned value is a tuple of length equal to the number of measures, holding averages (as floats) over the whole *data* sequence.
 
 :param data: a list of input items
-:type data: :class:`Iterable[Tuple[torch.tensor,Any,...]]`
-:rtype: :class:`Tuple[float,...]`
     """
 #--------------------------------------------------------------------------------------------------
     avg = 0.
@@ -89,7 +91,6 @@ Evaluates model :attr:`tnet` on *data* according to :attr:`measures`. Each input
 Binds the set of *listeners* (any objects) to the events of this run. For each listener, the methods of that listener whose name match ``on_`` followed by the name of a supported event are bound as callback to this run. These methods are usually specified as attributes of type :class:`PROC`, so as to easily be configurable.
 
 :param listeners: list of listener objects
-:param type: :class:`Iterable[Any]`
     """
 #--------------------------------------------------------------------------------------------------
     for x in listeners:
@@ -99,12 +100,11 @@ Binds the set of *listeners* (any objects) to the events of this run. For each l
 
 #--------------------------------------------------------------------------------------------------
   @classmethod
-  def listenerFactory(cls,name):
+  def listenerFactory(cls,name:str):
     r"""
 Used as decorator to attach a listener factory to a subclass *cls* of :class:`Run`, available as method :meth:`bind<name>Listener` using the provided *name*.
 
 :param name: short name for the factory
-:type name: :class:`str`
     """
 #--------------------------------------------------------------------------------------------------
     def app(f):
@@ -247,36 +247,29 @@ class SupervisedTrainRunListener:
 Instances of this class monitor basic supervised training runs. By default, train, validation and test info are logged, respectively, on batch end, epoch end and run end. At least one of *max_epoch* or *max_time* must be set, or the run never ends.
 
 :param max_epoch: maximum number of epochs to run; default: no limit
-:type max_epoch: :class:`int`
 :param max_time: maximum total wall time to run; default: no limit
-:type max_time: :class:`float`
 :param logger: logger to use for logging information
-:type logger: :class:`logging.Logger`
 :param status: pair of a tuple of headers and a function returning the status of a run as a tuple matching those headers
-:type status: :class:`Tuple[Tuple[str,...],Callable[[Run],Tuple[Any,...]]]`
 :param status_fmt: pair of format strings for the components of *status*
-:type status_fmt: :class:`Tuple[str,str]`
 :param itrain,ivalid,itest: function returning various info on a run
-:type itrain,ivalid,itest: :class:`Callable[[Run],Tuple[Any,...]]`
 :param itrain_fmt,ivalid_fmt,itest_fmt: format strings for the results of the corresponding functions
-:type itrain_fmt,ivalid_fmt,itest_fmt: :class:`str`
 :param config: passed as keyword arguments to method :meth:`configure`
   """
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,max_epoch=None,max_time=None,logger=None,
-    status=(
+  def __init__(self,max_epoch:int=None,max_time:float=None,logger:logging.Logger=None,
+    status:Tuple[Tuple[str,...],Callable[[Run],Tuple[Any,...]]]=(
       ('TIME','STEP','EPO','BAT'),
       (lambda run: (run.walltime,run.step,run.epoch,run.batch))
     ),
-    status_fmt=('%6s %6s %3s/%4s ','%6.1f %6d %3d/%4d '),
-    itrain=(lambda run: (run.loss,)),
-    ivalid=(lambda run: run.eval_valid()),
-    itest =(lambda run: run.eval_test()),
-    itrain_fmt:'str'='TRAIN loss: %.3f',
-    ivalid_fmt:'str'='VALIDATION loss: %.3f, accuracy: %.3f',
-    itest_fmt:'str'= 'TEST loss: %.3f, accuracy: %.3f',
+    status_fmt:Tuple[str,str]=('%6s %6s %3s/%4s ','%6.1f %6d %3d/%4d '),
+    itrain:Callable[[Run],Tuple[Any,...]]=(lambda run: (run.loss,)),
+    ivalid:Callable[[Run],Tuple[Any,...]]=(lambda run: run.eval_valid()),
+    itest:Callable[[Run],Tuple[Any,...]] =(lambda run: run.eval_test()),
+    itrain_fmt:str='TRAIN loss: %.3f',
+    ivalid_fmt:str='VALIDATION loss: %.3f, accuracy: %.3f',
+    itest_fmt:str= 'TEST loss: %.3f, accuracy: %.3f',
     **config
   ):
 #--------------------------------------------------------------------------------------------------
@@ -300,14 +293,12 @@ Instances of this class monitor basic supervised training runs. By default, trai
     self.configure(**config)
 
 #--------------------------------------------------------------------------------------------------
-  def configure(self,train_p=False,valid_p=False):
+  def configure(self,train_p:Union[Callable[[Run],bool],bool]=False,valid_p:Union[Callable[[Run],bool],bool]=False):
     r"""
 This method, called at the end of the constructor, configures the callback methods of this listener. This implementation assigns reasonable defaults, using the run selectors passed in arguments, and can be refined in subclasses.
 
 :param train_p: run selector for train info logging at each batch
-:type train_p: :class:`Union[Callable[[Run],bool],bool]`
 :param valid_p: run selector for validation info logging at each epoch
-:type valid_p: :class:`Union[Callable[[Run],bool],bool]`
     """
 #--------------------------------------------------------------------------------------------------
     self.on_open = self.iheader
@@ -322,25 +313,21 @@ class SupervisedTrainRunMlflowListener:
 Instances of this class provide mlflow logging of supervised training runs. By default, train, validation and test info are logged, respectively, on batch end, epoch end and run end.
 
 :param uri: mlflow tracking uri
-:type uri: :class:`str`
 :param exp: experiment name
-:type exp: :class:`str`
 :param itrain,ivalid,itest: function returning various info on a run
-:type itrain,ivalid,itest: :class:`Callable[[Run],Tuple[Any,...]]`
 :param itrain_labels,ivalid_labels,itest_labels: labels for the results of the corresponding functions
-:type itrain_labels,ivalid_labels,itest_labels: :class:`Tuple[str,...]`
 :param config: passed as keyword arguments to method :meth:`configure`
   """
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,uri:'str',exp:'str',
-    itrain=(lambda run: (run.loss,)),
-    ivalid=(lambda run: run.eval_valid()),
-    itest =(lambda run: run.eval_test()),
-    itrain_labels = ('tloss',),
-    ivalid_labels = ('vloss','vaccu'),
-    itest_labels = ('loss','accu'),
+  def __init__(self,uri:str,exp:str,
+    itrain:Callable[[Run],Tuple[Any,...]]=(lambda run: (run.loss,)),
+    ivalid:Callable[[Run],Tuple[Any,...]]=(lambda run: run.eval_valid()),
+    itest:Callable[[Run],Tuple[Any,...]] =(lambda run: run.eval_test()),
+    itrain_labels:Tuple[str,...] = ('tloss',),
+    ivalid_labels:Tuple[str,...] = ('vloss','vaccu'),
+    itest_labels:Tuple[str,...] = ('loss','accu'),
     **config
   ):
 #--------------------------------------------------------------------------------------------------
@@ -369,16 +356,17 @@ Instances of this class provide mlflow logging of supervised training runs. By d
     self.configure(**config)
 
 #--------------------------------------------------------------------------------------------------
-  def configure(self,train_p=False,valid_p=False,checkpoint_p=False):
+  def configure(self,
+    train_p:Union[Callable[[Run],bool],bool]=False,
+    valid_p:Union[Callable[[Run],bool],bool]=False,
+    checkpoint_p:Union[Callable[[Run],bool],bool]=False,
+    ):
     r"""
 This method, called at the end of the constructor, configures the callback methods of this listener. This implementation assigns reasonable defaults, using the run selectors passed in arguments, and can be refined in subclasses.
 
 :param train_p: run selector for train info logging at each batch
-:type train_p: :class:`Union[Callable[[Run],bool],bool]`
 :param valid_p: run selector for validation info logging at each epoch
-:type valid_p: :class:`Union[Callable[[Run],bool],bool]`
 :param checkpoint_p: run selector for checkpointing at each epoch
-:type checkpoint_p: :class:`Union[Callable[[Run],bool],bool]`
     """
 #--------------------------------------------------------------------------------------------------
     self.on_open = self.open_mlflow
@@ -415,19 +403,17 @@ Instances of this class are data sources for classification training. Attributes
   r"""(\*)The test split of the data source"""
 
 #--------------------------------------------------------------------------------------------------
-  def mpl(self,ax):
+  def mpl(self,ax:matplotlib.Axes)->Callable[[torch.tensor],None]:
     r"""
 Returns a callable, which, when passed a data instance, displays it on *ax* (its label is also used as title of *ax*). This implementation raises a :class:`NotImplementedError`.
 
 :param ax: a display area for a data instance
-:type ax: :class:`matplotlib.Axes`
-:rtype: :class:`Callable[[torch.tensor],NoneType]`
     """
 #--------------------------------------------------------------------------------------------------
     raise NotImplementedError()
 
 #--------------------------------------------------------------------------------------------------
-  def loaders(self,pcval,**ka):
+  def loaders(self,pcval:float,**ka):
     r"""
 Returns a dictionary which can be passed as keyword arguments to the :class:`SupervisedTrainRun` constructor to initialise its required attributes:
 
@@ -436,7 +422,6 @@ Returns a dictionary which can be passed as keyword arguments to the :class:`Sup
 * all the attributes (visible and invisible) in *ka*, so they appear as attributes of the run.
 
 :param pcval: proportion (between 0. and 1.) of instances from the train split to use for validation.
-:type pcval: :class:`float`
     """
 #--------------------------------------------------------------------------------------------------
     D = self.train
@@ -452,7 +437,12 @@ Returns a dictionary which can be passed as keyword arguments to the :class:`Sup
     return params
 
 #--------------------------------------------------------------------------------------------------
-  def display(self,rowspec,colspec,dataset=None,**ka):
+  def display(self,
+    rowspec:Union[float,Tuple[float,int],Tuple[float,int,float]],
+    colspec:Union[float,Tuple[float,int],Tuple[float,int,float]],
+    dataset:Iterable[Tuple[Any,int]]=None,
+    **ka
+    ):
     r"""
 Displays a set of labelled data instances *dataset* in a grid. The specification of the rows (resp. cols) of the grid consists of three numbers:
 
@@ -463,9 +453,7 @@ Displays a set of labelled data instances *dataset* in a grid. The specification
 At most one of the number of rows or columns can be -1. When both are positive and the dataset does not fit in the grid, a slider is created to allow page browsing through the dataset.
 
 :param rowspec,colspec: specification of the rows/cols of the grid
-:type rowspec,colspec: :class:`Union[float,Tuple[float,int],Tuple[float,int,float]]`
 :param dataset: the data to display
-:type dataset: :class:`Iterable[Tuple[Any,int]]`
 :param ka: keyword arguments passed to :func:`matplotlib.pyplot.subplots` to create the grid
     """
 #--------------------------------------------------------------------------------------------------
@@ -550,7 +538,7 @@ This class is meant to facilitate writing flexible pipelines of callable invocat
   def __abs__(self): return self.func
 
 #--------------------------------------------------------------------------------------------------
-def periodic(p,counter=None):
+def periodic(p:Union[int,float],counter:str=None)->Union[Callable[[Run],bool],None]:
   r"""
 Returns a run selector, i.e. a callable which takes a run as input and returns a boolean. The selection is based on the value of a counter held by attribute *counter*.
 
@@ -558,10 +546,7 @@ Returns a run selector, i.e. a callable which takes a run as input and returns a
 * If *p* is of type :class:`float`, a run is selected if the increase in the counter value since the last successful selection is greater than *p*. Default counter: :attr:`Run.walltime`.
 
 :param p: periodicity (in counter value)
-:type p: :class:`Union[NoneType,int,float]`
 :param counter: run feature to use as counter
-:type counter: :class:`Union[str,NoneType]`
-:rtype: :class:`Union[Callable[[Run],bool],NoneType]`
   """
 #--------------------------------------------------------------------------------------------------
   if p is None: return None

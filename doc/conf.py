@@ -30,6 +30,7 @@ sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent.parent.parent))
 # ones.
 extensions = [
     'sphinx.ext.autodoc',
+    'sphinx_autodoc_typehints',
     'sphinx.ext.mathjax',
     'sphinx.ext.viewcode',
 ]

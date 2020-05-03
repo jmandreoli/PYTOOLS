@@ -81,8 +81,9 @@ Available types and functions
 -----------------------------
 """
 
-import logging
-logger = logging.getLogger(__name__)
+from __future__ import annotations
+from typing import Any, Union, Callable, Iterable, Mapping, Tuple
+import logging; logger = logging.getLogger(__name__)
 
 import os, sqlite3, pickle, inspect, threading, abc
 from pathlib import Path
@@ -178,12 +179,11 @@ Methods:
 
   timeout = 120.
 
-  def __new__(cls,spec,listing={},lock=threading.Lock()):
+  def __new__(cls,spec:Union[CacheDB,Path,str],listing={},lock=threading.Lock()):
     r"""
 Generates a :class:`CacheDB` object.
 
 :param spec: specification of the cache folder
-:type spec: :class:`Union[CacheDB,pathlib.Path,str]`
 
 * If *spec* is a :class:`CacheDB` instance, that instance is returned
 * If *spec* is a path to a directory, returns a :class:`CacheDB` instance whose storage is an instance of :class:`DefaultStorage` pointing to that directory
@@ -264,7 +264,7 @@ Clears all the blocks which are obsolete.
       conn.execute('DELETE FROM Block WHERE oid=?',(block,))
       if not conn.total_changes: raise KeyError(block)
 
-  def __setitem__(self,block,v):
+  def __setitem__(self,block:str,v:Any):
     raise Exception('Direct create/update not permitted on Block')
 
   def __iter__(self):
@@ -303,11 +303,8 @@ class CacheBlock (MutableMapping,HtmlPlugin):
 Instances of this class implements blocks of cells sharing the same functor.
 
 :param db: specification of the cache repository where the block resides
-:type db: :class:`Union[CacheDB,pathlib.Path,str]`
 :param functor: functor of the block
-:type functor: :class:`AbstractFunctor`
 :param cacheonly: if :const:`True`, cell creation is disallowed
-:type cacheonly: :class:`bool`
 
 A :class:`CacheBlock` instance is callable, and calls take a single argument. Method :meth:`__call__` implements the cross-process cacheing mechanism which produces and reuses cache cells. It also implements a weak cache for local calls (within its process).
 
@@ -343,7 +340,7 @@ Methods:
   """
 #==================================================================================================
 
-  def __init__(self,db=None,functor=None,block=None,cacheonly=False):
+  def __init__(self,db:Union[CacheDB,Path,str]=None,functor:AbstractFunctor=None,block=None,cacheonly:bool=False):
     self.db = db = CacheDB(db)
     self.functor = functor
     self.block = db.getblock(functor) if block is None else block
@@ -353,7 +350,7 @@ Methods:
   def __hash__(self): return hash((self.db,self.block))
   def __eq__(self,other): return isinstance(other,CacheBlock) and self.db is other.db and self.block == other.block
 
-  def clear_error(self,dry_run=False):
+  def clear_error(self,dry_run:bool=False):
     r"""
 Clears all the cells from this block which cache an exception.
     """
@@ -364,7 +361,7 @@ Clears all the cells from this block which cache an exception.
     if deleted>0: logger.info('%s DELETED(%s)',self,deleted)
     return deleted
 
-  def clear_overflow(self,n,dry_run=False):
+  def clear_overflow(self,n:int,dry_run:bool=False):
     r"""
 Clears all the cells from this block except the *n* most recent (lru policy).
     """
@@ -387,7 +384,7 @@ Returns information about this block. Available attributes:
     return typ((hits or 0),sum(ncell.values()),*(ncell.get(k,0) for k in ('error','pending')))
 
 #--------------------------------------------------------------------------------------------------
-  def __call__(self,arg):
+  def __call__(self,arg:Any):
     """
 :param arg: argument of the call
 
@@ -518,7 +515,7 @@ Returns the result of calling this functor with argument *arg*.
     raise NotImplementedError()
 
   @abc.abstractmethod
-  def html(self,ckey,_):
+  def html(self,ckey:bytes,_):
     r"""
 :param ckey: a byte string as returned by invocation of method :meth:`getkey`
 
@@ -534,34 +531,29 @@ An instance of this class stores cached values on a persistent support.
 #==================================================================================================
 
   @abc.abstractmethod
-  def insert(self,cell):
+  def insert(self,cell:int)->Callable[[Any],int]:
     r"""
 :param cell: the identifier of a cell
-:type cell: :class:`int`
 
 Returns the function to call to set a cell value. This method is called inside the transaction which inserts a new cell into a cache index, hence exactly once overall for a given cell. The returned function is then called, but outside the transaction. It is passed the computed value and must return the size in bytes of its storage. The cell may have disappeared from the cache when called, or may disappear while executing, so the assignment may have to later be rolled back.
     """
     raise NotImplementedError()
 
   @abc.abstractmethod
-  def lookup(self,cell,wait):
+  def lookup(self,cell:int,wait:bool)->Callable[[],Any]:
     r"""
 :param cell: the identifier of a cell
-:type cell: :class:`int`
 :param wait: whether the cell value is currently being computed by a concurrent thread/process
-:type wait: :class:`bool`
 
 Returns the function to call to get a cell value. This method is called inside the transaction which looks up a cell from a cache index, which may happens multiple times in possibly concurrent threads/processes for a given cell. The returned function is then called, but outside the transaction.
     """
     raise NotImplementedError()
 
   @abc.abstractmethod
-  def remove(self,cell,size):
+  def remove(self,cell:int,size:int):
     r"""
 :param cell: the identifier of a cell
-:type cell: :class:`int`
 :param size: size of the cell
-:type size: :class:`int`
 
 Frees the storage resources associated with a cell. This method is called inside the transaction which deletes a cell from a cache index.
     """
@@ -586,7 +578,7 @@ Methods:
 
   __slots__ = 'config', 'sig', 'func'
 
-  def __new__(cls,spec,fromfunc=True):
+  def __new__(cls,spec,fromfunc:bool=True):
     r"""
 Generates a functor.
 
@@ -615,7 +607,7 @@ Generates a functor.
     class Unpickler (pickle.Unpickler):
       def persistent_load(self,pid): return pid
 
-  def getkey(self,arg):
+  def getkey(self,arg:Tuple[Iterable[Any,...],Mapping[str,Any]]):
 #--------------------------------------------------------------------------------------------------
     r"""
 Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are normalised against the signature of the functor and the pickled value of the result is returned. The pickling of versioned function objects is modified to embed their version.
@@ -624,7 +616,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
     a,ka = self.norm(arg)
     return self.fpickle.dumps((a,sorted(ka.items())))
 
-  def getval(self,arg):
+  def getval(self,arg:Tuple[Iterable[Any,...],Mapping[str,Any]]):
 #--------------------------------------------------------------------------------------------------
     r"""
 Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. Returns the value of calling attribute :attr:`func` with that positional argument list and keyword argument dict.
@@ -634,12 +626,12 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
     return self.func(*a,**ka)
 
 #--------------------------------------------------------------------------------------------------
-  def html(self,ckey,_):
+  def html(self,ckey:bytes,_):
 #--------------------------------------------------------------------------------------------------
     a,ka = self.fpickle.loads(ckey)
     return html_parlist(_,a,ka)
 
-  def norm(self,arg):
+  def norm(self,arg:Tuple[Iterable[Any,...],Mapping[str,Any]]):
     a,ka = arg
     b = self.sig.bind(*a,**ka)
     return b.args, b.kwargs
@@ -655,7 +647,6 @@ class FileStorage (AbstractStorage):
 Instances of this class manage the persistent storage of cached values using a filesystem directory.
 
 :param path: the directory to store cached values
-:type path: :class:`pathlib.Path`
 
 The storage for a cell consists of a content file which contains the value of the cell in pickled format and a cross process mechanism to synchronise access to the content file between writer and possibly multiple readers. The path of the content file as well as that of the file underlying the synch lock are built from the cell id, so as to be unique to that cell. They inherit the access rights of the :attr:`path` directory.
 
@@ -669,12 +660,12 @@ Methods:
   """
 #==================================================================================================
 
-  def __init__(self,path):
+  def __init__(self,path:Path):
     self.path = path
     self.mode = path.stat().st_mode
 
 #--------------------------------------------------------------------------------------------------
-  def insert(self,cell):
+  def insert(self,cell:int):
     r"""
 Opens the content file path for *cell* in write mode, acquires the corresponding synch lock, then returns a setter function which pickle-dumps its argument into the content file, closes it and releases the synch lock.
     """
@@ -695,7 +686,7 @@ Opens the content file path for *cell* in write mode, acquires the corresponding
     return setval
 
 #--------------------------------------------------------------------------------------------------
-  def lookup(self,cell,wait):
+  def lookup(self,cell:int,wait:Callable):
     r"""
 Opens the content file path for *cell* in read mode, then returns a getter function which waits for the corresponding synch lock to be released (if *wait* is True), then pickle-loads the content file and returns the obtained value.
     """
@@ -710,7 +701,7 @@ Opens the content file path for *cell* in read mode, then returns a getter funct
     return getval
 
 #--------------------------------------------------------------------------------------------------
-  def remove(self,cell,size):
+  def remove(self,cell:int,size:int):
     r"""
 Removes the content file path for *cell* as well as the corresponding synch lock.
     """
@@ -720,7 +711,7 @@ Removes the content file path for *cell* as well as the corresponding synch lock
     except: pass
 
 #--------------------------------------------------------------------------------------------------
-  def getpath(self,cell,masks=[(5*n,31*32**n) for n in range(5)]):
+  def getpath(self,cell:int,masks=[(5*n,31*32**n) for n in range(5)]):
     r"""
 Returns the content file path (as a :class:`pathlib.Path` instance) associated to *cell* (of type :class:`int`). It is composed of two parts (a directory name and a file name), joined to the main :attr:`path` attribute. The directory is created if it does not already exist. The concatenation of the directory name (without its prefix ``X``) and the file name (without its suffix ``.pck``) is the representation of *cell* in base 32 (digits are 0-9A-V). This mapping of cells to paths ensures that no sub-directory holds more than 1024 cells. It assumes that cells are created sequentially (which is what AUTOINCREMENT in sqlite3 does), so the number of sub-directories grows slowly.
     """
@@ -735,7 +726,7 @@ Returns the content file path (as a :class:`pathlib.Path` instance) associated t
 #--------------------------------------------------------------------------------------------------
 
   @staticmethod
-  def insert_synch(vpath):
+  def insert_synch(vpath:Path)->Callable:
     tpath = vpath.with_suffix('.tmp')
     tpath.touch()
     tpath.chmod(vpath.stat().st_mode)
@@ -744,7 +735,7 @@ Returns the content file path (as a :class:`pathlib.Path` instance) associated t
     return synch.close
 
   @staticmethod
-  def lookup_synch(vpath,timeout=600.):
+  def lookup_synch(vpath:Path,timeout:float=600.)->Callable:
     tpath = vpath.with_suffix('.tmp')
     synch = sqlite3.connect(str(tpath),timeout=timeout)
     def wait():
@@ -759,7 +750,7 @@ Returns the content file path (as a :class:`pathlib.Path` instance) associated t
     return wait
 
   @staticmethod
-  def remove_synch(vpath):
+  def remove_synch(vpath:Path):
     tpath = vpath.with_suffix('.tmp')
     tpath.unlink()
 
@@ -775,7 +766,7 @@ Attributes:
    The :class:`pathlib.Path` to the sqlite database holding the index
   """
 #==================================================================================================
-  def __init__(self,path):
+  def __init__(self,path:Path):
     super().__init__(path)
     self.dbpath = path/'index.db'
     if not self.dbpath.exists():
@@ -788,7 +779,7 @@ Attributes:
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-def persistent_cache(f,factory=CacheBlock,**ka):
+def persistent_cache(f:Callable,factory=CacheBlock,**ka):
   r"""
 A decorator which makes a function persistently cached. The cached function behaves as the original function except that its invocations are cached and reused when possible. The original function must be defined at the top-level of its module, to be compatible with :class:`Functor`. If it does not have a version already, it is assigned version :const:`None`.
   """

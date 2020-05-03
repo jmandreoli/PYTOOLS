@@ -1,5 +1,5 @@
 PYTHON :=
-TARGET := cache.out monitor.out mplext.out quickui.out perfmgr.out polling.out
+TARGET := cache.out polling.out
 
 all: ${TARGET}
 

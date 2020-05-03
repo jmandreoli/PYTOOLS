@@ -14,19 +14,20 @@ Available types and functions
 -----------------------------
 """
 
+from __future__ import annotations
+from typing import Sequence,Any, Union, Callable, Iterable, Mapping, Tuple
+import logging; logger = logging.getLogger(__name__)
+
 import traitlets
 from ipywidgets import Label, IntSlider, FloatSlider, Text, HTML, IntText, FloatText, BoundedIntText, BoundedFloatText, Checkbox, Dropdown, Select, SelectMultiple, FloatProgress, Button, Output, Tab, Accordion, VBox, HBox, Box, Layout, Valid
 from . import ondemand, unid
 
 #==================================================================================================
-def seq_browser(D,start=1,pgsize=10):
+def seq_browser(D:Sequence,start:int=1,pgsize:int=10):
   r"""
 :param D: a sequence object
-:type D: :class:`Sequence`
 :param start: the index of the initial page
-:type start: :class:`int`
 :param pgsize: the size of the pages
-:type pgsize: :class:`int`
 
 Returns an :class:`ipywidgets.Widget` to browse a sequence object *D* page per page in IPython.
   """
@@ -48,18 +49,13 @@ Returns an :class:`ipywidgets.Widget` to browse a sequence object *D* page per p
   return w_main
 
 #==================================================================================================
-def file_browser(path,start=None,step=50,track=True,context=(10,5),**ka):
+def file_browser(path:Union[str,pathlib.Path],start:Union[int,float]=None,step:int=50,track:bool=True,context:Tuple[int,int]=(10,5),**ka):
   r"""
 :param path: a path to an existing file
-:type path: :class:`Union[str,pathlib.Path]`
 :param start: index of start pointed
-:type start: :class:`Union[int,float]`
 :param step: step size in bytes
-:type step: :class:`int`
 :param track: whether to track changes in the file
-:type track: :class:`bool`
 :param context: pair of number of lines before and after to display around current position
-:type context: :class:`Tuple[int,int]`
 
 Returns an :class:`ipywidgets.Widget` to browse the file at *path*, possibly while it expands. If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
   """
@@ -150,10 +146,9 @@ Returns an :class:`ipywidgets.Widget` to browse the file at *path*, possibly whi
   return w_main
 
 #==================================================================================================
-def db_browser(spec):
+def db_browser(spec:Union[str,sqlalchemy.Engine,sqlalchemy.MetaData]):
   r"""
 :param spec: an sqlalchemy url or engine or metadata structure, defining the database to explore
-:type spec: :class:`Union[str,sqlalchemy.engine.Engine,sqlalchemy.sql.schema.MetaData]`
 
 Returns an :class:`ipywidgets.Widget` to explore a database specified by *spec*. If a metadata structure is specified, it must be bound to an existing engine and reflected.
   """
@@ -292,13 +287,11 @@ def db_browser_initconfig(tables):
   return dict((name,Tconf(t,schemag=schema_rows)) for name,t in tables.items())
 
 #==================================================================================================
-def hastrait_editor(target,default_trait_layout=dict(width='15cm'),**ka):
+def hastrait_editor(target:traitlets.HasTraits,default_trait_layout:Mapping[str,str]=dict(width='15cm'),**ka):
 #==================================================================================================
   r"""
 :param target: a structure with traits
-:type target: :class:`traitlets.HasTraits`
 :param default_trait_layout: a dictionary of layout items
-:type default_trait_layout: :class:`Dict[str,str]`
 
 Returns an :class:`ipywidgets.Widget` to edit a traitlets structure. The construction of the widget is directed by metadata which must be associated to each editable trait in *target* under the key ``widget``. This is either a callable, which produces a widget for that trait, or a :class:`dict`, passed as keyword arguments to a widget guesser. Guessing is based on the trait class. Each property in *default_trait_layout* is applied to all the trait widget layouts which assign a :const:`None` value to that property. The overall editor widget can be further customised using the following attributes:
 
@@ -373,13 +366,11 @@ Returns an :class:`ipywidgets.Widget` to edit a traitlets structure. The constru
   return w_main
 
 #==================================================================================================
-def progress_reporter(progress,interval=None,maxerror=3):
+def progress_reporter(progress:Callable[[],float],interval:float=None,maxerror:int=3):
 #==================================================================================================
   """
 :param progress: returns the progress value (between 0. and 1.) when invoked
-:type progress: :class:`Callable[[],float]`
 :param interval: duration in seconds between two progress reports
-:type interval: :class:`float`
 
 Returns a :class:`ipywidgets.Widget` reporting on the progress of some activity. The *progress* callable can, in addition to returning the current progress value, display information about the progress, using functions :func:`print` and :func:`IPython.display.display`.
   """
@@ -460,10 +451,9 @@ An instance of this class is a widget toolbar of buttons.
     self.b_layout = {}
     super().__init__(**ka)
 
-  def add(self,callback,**ka):
+  def add(self,callback:Callable[Tuple,Any],**ka):
     r"""
 :param callback: a function to call when the button is clicked
-:type callback: :class:`Callable[Tuple[],Any]`
 
 Adds a new button to the toolbar. If keyword arguments are present, they are passed to the button constructor. The button widget is returned.
     """

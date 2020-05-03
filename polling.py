@@ -27,27 +27,27 @@ Available types and functions
 -----------------------------
 """
 
-import os,socket,logging,sqlite3,time,threading,traceback
+from __future__ import annotations
+from typing import Any, Union, Callable, Iterable, Mapping, Tuple
+import logging; logger = logging.getLogger(__name__)
+
+import os,socket,sqlite3,time,threading,traceback
 from datetime import datetime
 from pathlib import Path
-logger = logging.getLogger(__name__)
 
 class PollingThread (threading.Thread):
   """
 Objects of this class are python contexts which can be used to encapsulate any piece of code into a monitor executing on a separate thread. The monitor polls the code at regular intervals and stores a report. Only one report is stored at all time (any new report replaces the previous one).
 
 :param path: location of the monitor reporting file
-:type param: :class:`Union[str,pathlib.Path]`
 :param interval: polling rate in seconds
-:type interval: :class:`float`
 :param maxerror: maximum number of consecutive errors before giving up
-:type maxerror: :class:`int`
 :param fields: list of field descriptors (see below) specifying what to record at each polling
 :param staticfields: dictionary of static values specifying what to record initially
 
 Each field descriptor is a pair of an sql column specification and a function with no input which returns a value compatible with the column type. An optional third component can specify an other function to be used in case of error.
   """
-  def __init__(self,path,*fields,interval=1.,maxerror=3,**staticfields):
+  def __init__(self,path:Union[str,Path],*fields,interval:float=1.,maxerror:int=3,**staticfields):
     def open_():
       nonlocal conn
       if path.exists(): path.unlink()

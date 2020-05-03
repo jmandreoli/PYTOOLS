@@ -12,16 +12,8 @@ Welcome to PYTOOLS's documentation!
 
    mod_cache.rst
    mod_ipywidgets.rst
-   mod_project.rst
-   mod_quickui.rst
-   mod_mplext.rst
    mod_polling.rst
-   mod_monitor.rst
-   mod_tensorflow.rst
    mod_torch.rst
-   mod_perfmgr.rst
-   mod_cpuinfomgr.rst
-   mod_taskmanager.rst
 
 Available types and functions
 -----------------------------

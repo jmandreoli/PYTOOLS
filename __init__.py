@@ -5,8 +5,11 @@
 # Purpose:              Some utilities in Python
 #
 
-import os, re, collections, logging
-logger = logging.getLogger(__name__)
+from __future__ import annotations
+from typing import Any, Union, Callable, Iterable, Mapping, Tuple
+import logging; logger = logging.getLogger(__name__)
+
+import os, re, collections
 
 #==================================================================================================
 class ondemand:
@@ -32,7 +35,7 @@ A decorator to declare, in a class, a computable attribute which is computed onl
 
   __slots__ = 'get',
 
-  def __init__(self,get):
+  def __init__(self,get:Callable[[Any],None]):
     from inspect import signature
     L = list(signature(get).parameters.values())
     if len(L)==0 or any(p.default==p.empty for p in L[1:]):
@@ -53,7 +56,6 @@ class odict:
 Objects of this class present an attribute oriented interface to an underlying proxy mapping object.
 
 :param __proxy__: a mapping object used as proxy
-:type __proxy__: :class:`Dict[str,object]`
 
 Keys in the proxy are turned into attributes of this instance. If *__proxy__* is :const:`None`, the proxy is a new empty dictionary, otherwise *__proxy__* must be a mapping object, and *__proxy__* (or its proxy if it is itself of class :class:`odict`) is taken as proxy. The proxy is first updated with the keyword arguments *ka*. Example::
 
@@ -68,7 +70,7 @@ Keys in the proxy are turned into attributes of this instance. If *__proxy__* is
   """
 #==================================================================================================
   __slot__ = '__proxy__',
-  def __init__(self,__proxy__=None,**ka):
+  def __init__(self,__proxy__:Mapping[str,Any]=None,**ka):
     r = __proxy__
     if r is None: r = dict(ka)
     else:
@@ -118,12 +120,10 @@ This object allows to name callable members of module/packages without loading t
 forward = forward()
 
 #==================================================================================================
-def config_xdg(rsc,dflt=None):
+def config_xdg(rsc:str,dflt:Any=None):
   r"""
 :param rsc: the name of an XDG resource
-:type rsc: :class:`str`
 :param dflt: a default value
-:type dflt: :class:`object`
 
 Returns the content of the XDG resource named *rsc* or *dflt* if the resource is not found.
   """
@@ -135,14 +135,11 @@ Returns the content of the XDG resource named *rsc* or *dflt* if the resource is
   with open(p) as u: return u.read()
 
 #==================================================================================================
-def config_env(name,dflt=None,asfile=False):
+def config_env(name:str,dflt:str=None,asfile:bool=False):
   r"""
 :param name: the name of an environment variable
-:type name: :class:`str`
 :param dflt: a default value
-:type dflt: :class:`object`
 :param asfile: whether to treat the value of the environment variable as a path to a file
-:type asfile: :class:`bool`
 
 Returns the string value of an environment variable (or the content of the file pointed by it if *asfile* is set) or *dflt* if the environment variable is not assigned.
   """
@@ -154,16 +151,12 @@ Returns the string value of an environment variable (or the content of the file 
   return x
 
 #==================================================================================================
-def autoconfig(module,name,dflt=None,asfile=False):
+def autoconfig(module:str,name:str,dflt:Any=None,asfile:bool=False):
   r"""
 :param module: the name of a module
-:type module: :class:`str`
 :param name: the name of a configuration parameter for that module
-:type name: :class:`str`
 :param dflt: a default value for the configuration parameter
-:type dflt: :class:`object`
 :param asfile: whether to treat the value of the environment variable as a path to a file
-:type asfile: :class:`bool`
 
 Returns an object obtained from an environment variable whose name is derived from *module* and *name*. For example, if *module* is ``mypackage.mymodule`` and *name* is ``myparam`` then the environment variable is ``MYPACKAGE_MYMODULE_MYPARAM``. The value of that variable (or the content of the file pointed by it if *asfile* is set) is executed in an empty dictionary and the value attached to key *name* is returned. If the variable is not assigned, *dflt* is returned.
   """
@@ -303,7 +296,7 @@ Caveat: function *func* should be defined at the top-level of its module, and th
   """
 #==================================================================================================
 
-  def __init__(self,func,*a,**ka):
+  def __init__(self,func:Callable,*a,**ka):
     assert callable(func)
     self.reset()
     self.config = [func,a,ka]
@@ -317,7 +310,7 @@ Updates the config arguments of this instance: *a* is appended to the list of po
     self.config[1] += a
     self.config[2].update(ka)
 
-  def refunc(self,f):
+  def refunc(self,f:Callable):
     r"""
 Set *f* as the config function of this instance. Raises an error if the instance is frozen.
     """
@@ -382,15 +375,13 @@ Symbolic expressions of this class are also callables, and trigger incarnation o
   def __call__(self,*a,**ka): self.incarnate(); return self.value(*a,**ka)
 
 #==================================================================================================
-def html_parlist(html,La,Lka,opening=(),closing=(),style='padding: 5px'):
+def html_parlist(html:Callable[[Any],lxml.html.Element],La:Iterable[Any],Lka:Iterable[Tuple[str,Any]],opening:Iterable[lxml.html.Element]=(),closing:Iterable[lxml.html.Element]=(),style:str='padding: 5px')->lxml.html.HtmlElement:
   r"""
-:param html: callable to use on components to get their HTML represenatation
+:param html: callable to use on components to get their HTML representation
 :param La: anonymous components
-:type La: :class:`Iterable[object]`
 :param Lka: named components
-:type Lka: :class:`Iterable[Tuple[str,object]]`
-:param opening,closing: lists of HTML elements
-:type opening,closing: :class:`Iterable[lxml.html.Element]`
+:param opening: lists of HTML elements used as prolog
+:param closing: lists of HTML elements used as epilog
 
 Returns a default HTML representation of a compound object, where *La,Lka* are the lists of unnamed and named components.The representation consists of the HTML elements in *opening* followed by the representation of the components in *La* and *Lka* (the latter are prefixed with their names in bold), followed by the HTML elements in *closing*.
   """
@@ -402,18 +393,14 @@ Returns a default HTML representation of a compound object, where *La,Lka* are t
   return E.div(*opening,*content(),*closing,style='padding:0')
 
 #==================================================================================================
-def html_table(irows,fmts,hdrs=None,opening=None,closing=None,encoding=None):
+def html_table(irows:Iterable[Tuple[object,Tuple[Any,...]]],fmts:Tuple[Callable[[Any],str],...],hdrs:Tuple[str,...]=None,opening:str=None,closing:str=None,encoding:Union[type,str]=None)->Union[str,lxml.html.HtmlElement]:
   r"""
 :param irows: a generator of pairs of an object (key) and a tuple of objects (value)
-:type irows: :class:`Iterator[Tuple[object,Tuple[object,...]]]`
 :param fmts: a tuple of format functions matching the length of the value tuples
-:type fmts: :class:`Tuple[Callable[[object],str],...]`
 :param hdrs: a tuple of strings matching the length of the value tuples
-:type hdrs: :class:`Tuple[str,...]`
-:param opening,closing: strings at head and foot of table
-:type opening,closing: :class:`str`
+:param opening: lists of HTML elements used as head of table
+:param closing: lists of HTML elements used as foot of table
 :param encoding: encoding of the result
-:type encoding: :class:`Union[type,str]`
 
 Returns an HTML table object (as understood by :mod:`lxml`) with one row for each pair generated from *irow*. The key of each pair is in a column of its own with no header, and the value must be a tuple whose length matches the number of columns. The format functions in *fmts*, one for each column, are expected to return HTML objects. *hdrs* may specify headers as a tuple of strings, one for each column. If *encoding* is :const:`None`, the result is returned as an :mod:`lxml.html` object, otherwise it is returned as a string with the specified encoding.
   """
@@ -474,12 +461,10 @@ prints pairs *school*, *L* where *L* is a list of pairs *age*, *height*.
     return SQliteStack.contents.pop
 
 #==================================================================================================
-def SQliteNew(path,schema):
+def SQliteNew(path:str,schema:Union[str,Iterable[str]]):
   r"""
 :param path: a path to an sqlite database
-:type path: :class:`str`
 :param schema: the schema specification as a list of SQL queries (possibly joined by ``\n\n``)
-:type schema: :class:`Union[str,List[str]]`
 
 Makes sure the file at *path* is a SQlite3 database with schema exactly equal to *schema*.
   """
@@ -494,10 +479,9 @@ Makes sure the file at *path* is a SQlite3 database with schema exactly equal to
       for sql in schema: conn.execute(sql)
 
 #==================================================================================================
-def gitcheck(path):
+def gitcheck(path:str):
   r"""
 :param path: a path to a git repository
-:type path: :class:`str`
 
 Assumes that *path* denotes a git repository (target) which is a passive copy of another repository (source) on the same file system. If that is not the case, returns :const:`None`. Checks that the target repository is up-to-date, and updates it if needed using the git pull operation. Use the ``GIT_PYTHON_GIT_EXECUTABLE`` environment variable to set the Git executable if it is not the default ``/usr/bin/git``.
   """
@@ -517,10 +501,9 @@ Assumes that *path* denotes a git repository (target) which is a passive copy of
 class GitException (Exception): pass
 
 #==================================================================================================
-def gitcheck_package(pkgname):
+def gitcheck_package(pkgname:str):
   r"""
 :param pkgname: full name of a package
-:type pkgname: :class:`str`
 
 Assumes that *pkgname* is the name of a python regular (non namespace) package and invokes :meth:`gitcheck` on its path. Reloads the package if git update was performed.
   """
@@ -536,12 +519,10 @@ Assumes that *pkgname* is the name of a python regular (non namespace) package a
     return True
 
 #==================================================================================================
-def SQLinit(engine,meta):
+def SQLinit(engine:Union[str,sqlalchemy.Engine],meta:sqlalchemy.MetaData)->sqlalchemy.Engine:
   r"""
 :param engine: a sqlalchemy engine (or its url)
-:type engine: :class:`Union[str,sqlalchemy.engine.Engine]`
 :param meta: a sqlalchemy metadata structure
-:type meta: :class:`sqlalchemy.sql.schema.MetaData`
 
 * When the database is empty, a ``Metainfo`` table with a single row matching exactly the :attr:`info` attribute of *meta* is created, then the database is populated using *meta*.
 
@@ -588,14 +569,12 @@ class SQLinitMetainfoException (Exception): pass
 class SQLHandler (logging.Handler):
   r"""
 :param engine: a sqlalchemy engine (or its url)
-:type engine: :class:`Union[str,sqlalchemy.engine.Engine]`
 :param label: a text label
-:type label: :class:`str`
 
 A logging handler class which writes the log messages into a database.
   """
 #==================================================================================================
-  def __init__(self,engine,label,*a,**ka):
+  def __init__(self,engine:Union[str,sqlalchemy.Engine],label:str,*a,**ka):
     from datetime import datetime
     from sqlalchemy.sql import select, insert, update, delete, and_
     meta = SQLHandlerMetadata()
@@ -619,7 +598,7 @@ A logging handler class which writes the log messages into a database.
     self.dbrecord(rec)
 
 #--------------------------------------------------------------------------------------------------
-def SQLHandlerMetadata(info=dict(origin=__name__+'.SQLHandler',version=1)):
+def SQLHandlerMetadata(info:Mapping[str,Any]=dict(origin=__name__+'.SQLHandler',version=1))->sqlalchemy.MetaData:
 #--------------------------------------------------------------------------------------------------
   from sqlalchemy import Table, Column, ForeignKey, MetaData
   from sqlalchemy.types import DateTime, Text, Integer
@@ -803,7 +782,8 @@ Instances of this class maintain basic statistics about a group of values.
 :param var: weighted variance of the group
   """
 #==================================================================================================
-  def __init__(self,weight=0.,avg=0.,var=0.): self.weight = weight; self.avg = avg; self.var = var
+  def __init__(self,weight:Union[int,float,complex]=1.,avg:Union[int,float,complex]=0.,var:Union[int,float,complex]=0.):
+    self.weight = weight; self.avg = avg; self.var = var
   def __add__(self,other):
     w,a,v = (other.weight,other.avg,other.var) if isinstance(other,basic_stats) else (1.,other,0.)
     W = self.weight+w; r_self = self.weight/W; r_other = w/W; d = a-self.avg
@@ -820,10 +800,9 @@ Instances of this class maintain basic statistics about a group of values.
     return sqrt(self.var)
 
 #==================================================================================================
-def iso2date(iso):
+def iso2date(iso:Tuple[int,int,int])->datetime.date:
   r"""
 :param iso: triple as returned by :meth:`datetime.date.isocalendar`
-:type iso: :class:`Tuple[int,int,int]`
 
 Returns the :class:`datetime.date` instance for which the :meth:`datetime.date.isocalendar` method returns *iso*::
 
@@ -838,14 +817,11 @@ Returns the :class:`datetime.date` instance for which the :meth:`datetime.date.i
   return iso1+timedelta(days=isoday-1,weeks=isoweek-1)
 
 #==================================================================================================
-def size_fmt(size,binary=True,precision=4,suffix='B'):
+def size_fmt(size:int,binary:bool=True,precision:int=4,suffix:str='B')->str:
   r"""
 :param size: a positive number representing a size
-:type size: :class:`int`
 :param binary: whether to use IEC binary or decimal convention
-:type binary: :class:`bool`
 :param precision: number of digits displayed (at least 4)
-:type precision: :class:`int`
 
 Returns the representation of *size* with IEC prefix. Each prefix is *K* times the previous one for some constant *K* which depends on the convention: *K* =1024 with the binary convention (marked with an ``i`` after the prefix); *K* =1000 with the decimal convention. Example::
 
@@ -863,12 +839,10 @@ Returns the representation of *size* with IEC prefix. Each prefix is *K* times t
   return fmt(size,'Y') # :-)
 
 #==================================================================================================
-def time_fmt(time,precision=2):
+def time_fmt(time:Union[int,float],precision:int=2)->str:
   r"""
 :param time: a number representing a time in seconds
-:type time: :class:`Union[int,float]`
 :param precision: number of digits displayed
-:type precision: :class:`int`
 
 Returns the representation of *time* in one of days,hours,minutes,seconds,milli-seconds (depending on magnitude). Example::
 
@@ -887,7 +861,7 @@ Returns the representation of *time* in one of days,hours,minutes,seconds,milli-
   return '{}day'.format(fmt(time))
 
 #==================================================================================================
-def versioned(v):
+def versioned(v)->Callable[[Callable],Callable]:
   r"""
 A decorator which assigns attribute :attr:`version` of the target function to *v*. The function must be defined at the toplevel of its module. The version must be a simple value.
   """
@@ -903,7 +877,7 @@ A decorator which assigns attribute :attr:`version` of the target function to *v
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-def unid(post='',pre=__name__):
+def unid(post:str='',pre:str=__name__)->str:
   r"""
 Returns a "unique" id for miscellanous uses.
   """
@@ -912,10 +886,9 @@ Returns a "unique" id for miscellanous uses.
   return (pre+str(time())+post).replace('.','_')
 
 #--------------------------------------------------------------------------------------------------
-def printast(x):
+def printast(x:Union[str,ast.AST]):
   r"""
 :param x: an AST or string (parsed into an AST)
-:type x: :class:`Union[str,ast.AST]`
 
 Pretty-prints the AST object (python abstract syntax tree).
   """
@@ -957,7 +930,7 @@ This namespace class defines class methods :meth:`load`, :meth:`loads`, :meth:`d
     with BytesIO(s) as u: return cls.Unpickler(u).load()
 
 #--------------------------------------------------------------------------------------------------
-def einsum_nd(sgn,*a,pat=re.compile(r'(\w+)\.?')):
+def einsum_nd(sgn:str,*a,pat=re.compile(r'(\w+)\.?')):
   r"""
 Equivalent of numpy.einsum with named dimensions (limited to 26 like the original!). Dimension names must be words in the sense of the :mod:`re` module (unicode allowed) and must be separated by '.' in operand shapes.
   """

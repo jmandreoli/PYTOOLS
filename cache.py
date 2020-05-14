@@ -340,7 +340,7 @@ Methods:
   """
 #==================================================================================================
 
-  def __init__(self,db:Union[CacheDB,Path,str]=None,functor:AbstractFunctor=None,block=None,cacheonly:bool=False):
+  def __init__(self,db:Union[CacheDB,Path,str]=None,functor:AbstractFunctor=None,block:int=None,cacheonly:bool=False):
     self.db = db = CacheDB(db)
     self.functor = functor
     self.block = db.getblock(functor) if block is None else block
@@ -665,7 +665,7 @@ Methods:
     self.mode = path.stat().st_mode
 
 #--------------------------------------------------------------------------------------------------
-  def insert(self,cell:int):
+  def insert(self,cell:int)->Callable[[Any],int]:
     r"""
 Opens the content file path for *cell* in write mode, acquires the corresponding synch lock, then returns a setter function which pickle-dumps its argument into the content file, closes it and releases the synch lock.
     """
@@ -686,7 +686,7 @@ Opens the content file path for *cell* in write mode, acquires the corresponding
     return setval
 
 #--------------------------------------------------------------------------------------------------
-  def lookup(self,cell:int,wait:Callable):
+  def lookup(self,cell:int,wait:bool)->Callable[[],Any]:
     r"""
 Opens the content file path for *cell* in read mode, then returns a getter function which waits for the corresponding synch lock to be released (if *wait* is True), then pickle-loads the content file and returns the obtained value.
     """
@@ -726,7 +726,7 @@ Returns the content file path (as a :class:`pathlib.Path` instance) associated t
 #--------------------------------------------------------------------------------------------------
 
   @staticmethod
-  def insert_synch(vpath:Path)->Callable:
+  def insert_synch(vpath:Path)->Callable[[],None]:
     tpath = vpath.with_suffix('.tmp')
     tpath.touch()
     tpath.chmod(vpath.stat().st_mode)
@@ -735,7 +735,7 @@ Returns the content file path (as a :class:`pathlib.Path` instance) associated t
     return synch.close
 
   @staticmethod
-  def lookup_synch(vpath:Path,timeout:float=600.)->Callable:
+  def lookup_synch(vpath:Path,timeout:float=600.)->Callable[[],None]:
     tpath = vpath.with_suffix('.tmp')
     synch = sqlite3.connect(str(tpath),timeout=timeout)
     def wait():

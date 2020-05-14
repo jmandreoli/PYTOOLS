@@ -15,7 +15,7 @@ Available types and functions
 """
 
 from __future__ import annotations
-from typing import Any, Union, Callable, Iterable, Mapping, Tuple
+from typing import Sequence, Any, Union, Callable, Iterable, Mapping, Tuple
 import logging; logger = logging.getLogger(__name__)
 
 from contextlib import contextmanager
@@ -35,19 +35,19 @@ Attributes (\*) must be instantiated at creation time.
   """
 #==================================================================================================
 
-  measures: 'Sequence[Callable[[torch.tensor,...],torch.tensor]]'
+  measures: Sequence[Callable[[torch.tensor,...],torch.tensor]]
   r"""(\*)List of measures, each returning a scalar (0-D) tensor"""
-  device: 'torch.device'
+  device: torch.device
   r"""(\*)The device on which to execute the run"""
-  net: 'torch.nn.Module'
+  net: torch.nn.Module
   r"""(\*)The model"""
-  tnet: 'torch.nn.Module'
+  tnet: torch.nn.Module
   r"""The same model, located at :attr:`device`"""
-  walltime: 'float'
+  walltime: float
   r"""Wall time elapsed (in sec) between last invocation of :meth:`settime` and last invocation of :meth:`rectime`"""
-  proctime: 'float'
+  proctime: float
   r"""Process time elapsed (in sec) between last invocation of :meth:`settime` and last invocation of :meth:`rectime`"""
-  step: 'int'
+  step: int
   r"""Number of invocations of :meth:`rectime` since last invocation of :meth:`settime`"""
 
 #--------------------------------------------------------------------------------------------------
@@ -100,7 +100,7 @@ Binds the set of *listeners* (any objects) to the events of this run. For each l
 
 #--------------------------------------------------------------------------------------------------
   @classmethod
-  def listenerFactory(cls,name:str):
+  def listenerFactory(cls,name:str)->Callable[[Callable],Callable]:
     r"""
 Used as decorator to attach a listener factory to a subclass *cls* of :class:`Run`, available as method :meth:`bind<name>Listener` using the provided *name*.
 
@@ -127,7 +127,7 @@ Supervised runs operate on data in the form of instance-label pairs. Attributes 
   """
 #==================================================================================================
 
-  lossF: 'Callable[[torch.tensor,torch.tensor],float]'
+  lossF: Callable[[torch.tensor,torch.tensor],float]
   r"""(\*)Loss function (defaults to cross-entropy loss for classification)"""
 
   # Default values for classification runs (override in subclasses)
@@ -144,26 +144,26 @@ Runs of this type execute a simple supervised training loop. Attributes (\*) mus
   _events_ = ['open','batch','epoch','close']
 
   ## set at instantiation
-  train_data: 'Iterable[Tuple[torch.tensor,torch.tensor]]'
+  train_data: Iterable[Tuple[torch.tensor,torch.tensor]]
   r"""(\*)Iterable of batches. Each batch is a pair of a tensor of inputs and a tensor of labels (first dim = size of batch)"""
-  valid_data: 'Iterable[Tuple[torch.tensor,torch.tensor]]'
+  valid_data: Iterable[Tuple[torch.tensor,torch.tensor]]
   r"""(\*)Same format as :attr:`train_data`"""
-  test_data: 'Iterable[Tuple[torch.tensor,torch.tensor]]'
+  test_data: Iterable[Tuple[torch.tensor,torch.tensor]]
   r"""(\*)Same format as :attr:`train_data`"""
-  optimiser: 'Callable[[Sequence[torch.nn.Parameter]],torch.optim.Optimizer]'
+  optimiser: Callable[[Sequence[torch.nn.Parameter]],torch.optim.Optimizer]
   r"""(\*)The optimiser factory"""
   ## set at execution
-  progress: 'float'
+  progress: float
   r"""Between 0. and 1., stops the run when 1. is reached (must be updated by a listener)"""
-  epoch: 'int'
+  epoch: int
   r"""Number of completed epochs"""
-  batch: 'int'
+  batch: int
   r"""Number of completed batches within current epoch"""
-  loss: 'float'
+  loss: float
   r"""Average loss since beginning of current epoch"""
-  eval_valid: 'Callable[[],Tuple[float,float]]'
+  eval_valid: Callable[[],Tuple[float,float]]
   r"""Function returning the validation performance at the end of the last completed step (cached)"""
-  eval_test: 'Callable[[],Tuple[float,float]]'
+  eval_test: Callable[[],Tuple[float,float]]
   r"""Function returning the test performance at the end of the last completed step (cached)"""
 
 #--------------------------------------------------------------------------------------------------
@@ -207,17 +207,17 @@ class SupervisedInvRun (SupervisedRun):
 Runs of this type attempt to inverse the model at a sample of labels. Attributes (\*) must be instantiated at creation time. All the other attributes are initialised and updated by the run execution. :meth:`settime` and :meth:`rectime` are invoked at the beginning of the training loop and at the end of each batch, respectively.
   """
 #==================================================================================================
-  nepoch: 'int'
+  nepoch: int
   r"""(\*)Number of epochs to run"""
-  labels: 'Sequence[int]'
+  labels: Sequence[int]
   r"""(\*)List of labels (pure value, not tensor) to process (or range if integer type)"""
-  init: 'torch.tensor'
+  init: torch.tensor
   r"""(\*)Initial instance"""
-  projection: 'Callable[[torch.tensor],NoneType]'
+  projection: Callable[[torch.tensor],NoneType]
   r"""(\*)Called after each optimiser step to re-project instances within domain range"""
-  optimiser: 'Callable[[List[torch.nn.Parameter]],torch.optim.Optimizer]'
+  optimiser: Callable[[List[torch.nn.Parameter]],torch.optim.Optimizer]
   r"""(\*)The optimiser factory"""
-  protos: 'Sequence[torch.tensor]'
+  protos: Sequence[torch.tensor]
   r"""The estimated inverse image of :attr:`labels`"""
 
 #--------------------------------------------------------------------------------------------------
@@ -293,7 +293,10 @@ Instances of this class monitor basic supervised training runs. By default, trai
     self.configure(**config)
 
 #--------------------------------------------------------------------------------------------------
-  def configure(self,train_p:Union[Callable[[Run],bool],bool]=False,valid_p:Union[Callable[[Run],bool],bool]=False):
+  def configure(self,
+    train_p:Union[Callable[[Run],bool],bool]=False,
+    valid_p:Union[Callable[[Run],bool],bool]=False
+  ):
     r"""
 This method, called at the end of the constructor, configures the callback methods of this listener. This implementation assigns reasonable defaults, using the run selectors passed in arguments, and can be refined in subclasses.
 
@@ -360,7 +363,7 @@ Instances of this class provide mlflow logging of supervised training runs. By d
     train_p:Union[Callable[[Run],bool],bool]=False,
     valid_p:Union[Callable[[Run],bool],bool]=False,
     checkpoint_p:Union[Callable[[Run],bool],bool]=False,
-    ):
+  ):
     r"""
 This method, called at the end of the constructor, configures the callback methods of this listener. This implementation assigns reasonable defaults, using the run selectors passed in arguments, and can be refined in subclasses.
 
@@ -393,13 +396,13 @@ class ClassificationDatasource:
 Instances of this class are data sources for classification training. Attributes (\*) must be instantiated at creation time.
   """
 #==================================================================================================
-  name: 'str'
+  name: str
   r"""(\*)Descriptive name of the datasource"""
-  classes: 'Iterable[str]'
+  classes: Iterable[str]
   r"""(\*)Descriptive names for the classes"""
-  train: 'torch.utils.data.Dataset'
+  train: torch.utils.data.Dataset
   r"""(\*)The train split of the data source"""
-  test: 'torch.utils.data.Dataset'
+  test: torch.utils.data.Dataset
   r"""(\*)The test split of the data source"""
 
 #--------------------------------------------------------------------------------------------------

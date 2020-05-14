@@ -375,7 +375,10 @@ Symbolic expressions of this class are also callables, and trigger incarnation o
   def __call__(self,*a,**ka): self.incarnate(); return self.value(*a,**ka)
 
 #==================================================================================================
-def html_parlist(html:Callable[[Any],lxml.html.Element],La:Iterable[Any],Lka:Iterable[Tuple[str,Any]],opening:Iterable[lxml.html.Element]=(),closing:Iterable[lxml.html.Element]=(),style:str='padding: 5px')->lxml.html.HtmlElement:
+def html_parlist(
+  html:Callable[[Any],lxml.html.Element],La:Iterable[Any],Lka:Iterable[Tuple[str,Any]],
+  opening:Iterable[lxml.html.Element]=(),closing:Iterable[lxml.html.Element]=(),style:str='padding: 5px'
+  )->lxml.html.HtmlElement:
   r"""
 :param html: callable to use on components to get their HTML representation
 :param La: anonymous components
@@ -393,7 +396,10 @@ Returns a default HTML representation of a compound object, where *La,Lka* are t
   return E.div(*opening,*content(),*closing,style='padding:0')
 
 #==================================================================================================
-def html_table(irows:Iterable[Tuple[object,Tuple[Any,...]]],fmts:Tuple[Callable[[Any],str],...],hdrs:Tuple[str,...]=None,opening:str=None,closing:str=None,encoding:Union[type,str]=None)->Union[str,lxml.html.HtmlElement]:
+def html_table(
+  irows:Iterable[Tuple[Any,Tuple[Any,...]]],fmts:Tuple[Callable[[Any],str],...],
+  hdrs:Tuple[str,...]=None,opening:str=None,closing:str=None,encoding:Union[type,str]=None
+  )->Union[str,lxml.html.HtmlElement]:
   r"""
 :param irows: a generator of pairs of an object (key) and a tuple of objects (value)
 :param fmts: a tuple of format functions matching the length of the value tuples

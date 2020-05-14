@@ -23,7 +23,7 @@ from ipywidgets import Label, IntSlider, FloatSlider, Text, HTML, IntText, Float
 from . import ondemand, unid
 
 #==================================================================================================
-def seq_browser(D:Sequence,start:int=1,pgsize:int=10):
+def seq_browser(D:Sequence,start:int=1,pgsize:int=10)->VBox:
   r"""
 :param D: a sequence object
 :param start: the index of the initial page
@@ -49,7 +49,7 @@ Returns an :class:`ipywidgets.Widget` to browse a sequence object *D* page per p
   return w_main
 
 #==================================================================================================
-def file_browser(path:Union[str,pathlib.Path],start:Union[int,float]=None,step:int=50,track:bool=True,context:Tuple[int,int]=(10,5),**ka):
+def file_browser(path:Union[str,pathlib.Path],start:Union[int,float]=None,step:int=50,track:bool=True,context:Tuple[int,int]=(10,5),**ka)->VBox:
   r"""
 :param path: a path to an existing file
 :param start: index of start pointed
@@ -146,7 +146,7 @@ Returns an :class:`ipywidgets.Widget` to browse the file at *path*, possibly whi
   return w_main
 
 #==================================================================================================
-def db_browser(spec:Union[str,sqlalchemy.Engine,sqlalchemy.MetaData]):
+def db_browser(spec:Union[str,sqlalchemy.Engine,sqlalchemy.MetaData])->VBox:
   r"""
 :param spec: an sqlalchemy url or engine or metadata structure, defining the database to explore
 
@@ -287,7 +287,7 @@ def db_browser_initconfig(tables):
   return dict((name,Tconf(t,schemag=schema_rows)) for name,t in tables.items())
 
 #==================================================================================================
-def hastrait_editor(target:traitlets.HasTraits,default_trait_layout:Mapping[str,str]=dict(width='15cm'),**ka):
+def hastrait_editor(target:traitlets.HasTraits,default_trait_layout:Mapping[str,str]=dict(width='15cm'),**ka)->VBox:
 #==================================================================================================
   r"""
 :param target: a structure with traits
@@ -366,7 +366,7 @@ Returns an :class:`ipywidgets.Widget` to edit a traitlets structure. The constru
   return w_main
 
 #==================================================================================================
-def progress_reporter(progress:Callable[[],float],interval:float=None,maxerror:int=3):
+def progress_reporter(progress:Callable[[],float],interval:float=None,maxerror:int=3)->VBox:
 #==================================================================================================
   """
 :param progress: returns the progress value (between 0. and 1.) when invoked

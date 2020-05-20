@@ -1,4 +1,4 @@
-# File:                 ptutil.py
+# File:                 torch.py
 # Creation date:        2020-01-15
 # Contributors:         Jean-Marc Andreoli
 # Language:             python
@@ -21,6 +21,7 @@ import logging; logger = logging.getLogger(__name__)
 from contextlib import contextmanager
 from functools import partial
 from time import time, ctime, process_time
+from socket import getfqdn
 from pydispatch import Dispatcher, Property
 import torch
 
@@ -60,7 +61,7 @@ Attributes (\*) must be instantiated at creation time.
       setattr(self,k,v)
     self.tnet = self.net.to(self.device)
     self.listeners = [] # to hold the list of listeners, otherwise they may be garbage collected
-    self.created = ctime() # to keep track of time
+    self.created = getfqdn(),ctime() # to keep track of time
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self):
@@ -102,7 +103,7 @@ Binds the set of *listeners* (any objects) to the events of this run. For each l
   @classmethod
   def listenerFactory(cls,name:str)->Callable[[Callable],Callable]:
     r"""
-Used as decorator to attach a listener factory to a subclass *cls* of :class:`Run`, available as method :meth:`bind<name>Listener` using the provided *name*.
+Used as decorator to attach a listener factory to a subclass *cls* of this class. The factory is available as method :meth:`bind<name>Listener` using the provided *name*.
 
 :param name: short name for the factory
     """
@@ -118,7 +119,7 @@ Used as decorator to attach a listener factory to a subclass *cls* of :class:`Ru
   def settime(self): self.started = time(),process_time(); self.step = 0
   def rectime(self): self.walltime,self.proctime = time()-self.started[0],process_time()-self.started[1]; self.step += 1
 
-  def __repr__(self): return f'{self.__class__.__name__}<{self.created}>'
+  def __repr__(self): return f'{self.__class__.__name__}<{self.created[0]}|{self.created[1]}>'
 
 #==================================================================================================
 class SupervisedRun (Run):

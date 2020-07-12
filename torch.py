@@ -44,12 +44,14 @@ Attributes (\*) must be instantiated at creation time.
   r"""(\*)The model"""
   tnet: torch.nn.Module
   r"""The same model, located at :attr:`device`"""
+  stepper: Stepper
+  r"""Time and step keeper"""
   walltime: float
-  r"""Wall time elapsed (in sec) between last invocation of :meth:`settime` and last invocation of :meth:`rectime`"""
+  r"""Wall time elapsed (in sec) between last invocation of :meth:`reset` and last invocation of :meth:`tick` on :attr:`stepper`"""
   proctime: float
-  r"""Process time elapsed (in sec) between last invocation of :meth:`settime` and last invocation of :meth:`rectime`"""
+  r"""Process time elapsed (in sec) between last invocation of :meth:`reset` and last invocation of :meth:`tick` on :attr:`stepper`"""
   step: int
-  r"""Number of invocations of :meth:`rectime` since last invocation of :meth:`settime`"""
+  r"""Number of invocations of :meth:`tick` since last invocation of :meth:`reset` on :attr:`stepper`"""
 
 #--------------------------------------------------------------------------------------------------
   def __init__(self,**ka):
@@ -61,7 +63,7 @@ Attributes (\*) must be instantiated at creation time.
       setattr(self,k,v)
     self.tnet = self.net.to(self.device)
     self.listeners = [] # to hold the list of listeners, otherwise they may be garbage collected
-    self.created = getfqdn(),ctime() # to keep track of time
+    self.stepper = Stepper(self)
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self):
@@ -116,9 +118,6 @@ Used as decorator to attach a listener factory to a subclass *cls* of this class
       return f
     return app
 
-  def settime(self): self.started = time(),process_time(); self.step = 0
-  def rectime(self): self.walltime,self.proctime = time()-self.started[0],process_time()-self.started[1]; self.step += 1
-
   def __repr__(self): return f'{self.__class__.__name__}<{self.created[0]}|{self.created[1]}>'
 
 #==================================================================================================
@@ -130,15 +129,17 @@ Supervised runs operate on data in the form of instance-label pairs. Attributes 
 
   lossF: Callable[[torch.tensor,torch.tensor],float]
   r"""(\*)Loss function (defaults to cross-entropy loss for classification)"""
+  @property
+  def measures(self): return (self.lossF,)+self.omeasures
 
   # Default values for classification runs (override in subclasses)
   lossF = torch.nn.CrossEntropyLoss()
-  measures = lossF,(lambda outputs,labels: torch.mean((torch.argmax(outputs,1)==labels).float()))
+  omeasures = (lambda outputs,labels: torch.mean((torch.argmax(outputs,1)==labels).float())),
 
 #==================================================================================================
 class SupervisedTrainRun (SupervisedRun):
   r"""
-Runs of this type execute a simple supervised training loop. Attributes (\*) must be instantiated at creation time. All the other attributes are initialised and updated by the run execution, except :attr:`progress` which is initialised (to 0.) by the run execution, but needs to be updated by some listener. :meth:`settime` and :meth:`rectime` are invoked at the beginning of the training loop and at the end of each batch, respectively.
+Runs of this type execute a simple supervised training loop. Attributes (\*) must be instantiated at creation time. All the other attributes are initialised and updated by the run execution, except :attr:`progress` which is initialised (to 0.) by the run execution, but needs to be updated by some listener.
   """
 #==================================================================================================
 
@@ -181,7 +182,7 @@ Runs of this type execute a simple supervised training loop. Attributes (\*) mus
     self.eval_valid,self.eval_test = eval_cache(self.valid_data),eval_cache(self.test_data)
     optimiser = self.optimiser(net.parameters())
     with training(net,True):
-      self.settime()
+      self.stepper.reset()
       self.progress = 0.; self.epoch = 0
       self.emit('open',self)
       try:
@@ -195,7 +196,7 @@ Runs of this type execute a simple supervised training loop. Attributes (\*) mus
             self.batch += 1
             self.loss += (loss.item()-self.loss)/self.batch
             del inputs,labels,loss # free memory before emitting (not sure this works)
-            self.rectime()
+            self.stepper.tick()
             self.emit('batch',self)
           self.epoch += 1
           self.emit('epoch',self)
@@ -205,7 +206,7 @@ Runs of this type execute a simple supervised training loop. Attributes (\*) mus
 #==================================================================================================
 class SupervisedInvRun (SupervisedRun):
   r"""
-Runs of this type attempt to inverse the model at a sample of labels. Attributes (\*) must be instantiated at creation time. All the other attributes are initialised and updated by the run execution. :meth:`settime` and :meth:`rectime` are invoked at the beginning of the training loop and at the end of each batch, respectively.
+Runs of this type attempt to inverse the model at a sample of labels. Attributes (\*) must be instantiated at creation time. All the other attributes are initialised and updated by the run execution.
   """
 #==================================================================================================
   nepoch: int
@@ -228,7 +229,7 @@ Runs of this type attempt to inverse the model at a sample of labels. Attributes
     self.protos = torch.repeat_interleave(self.init[None,...],len(self.labels),0)
     net = self.tnet
     with training(net,True):
-      self.settime()
+      self.stepper.reset()
       for proto,label in zip(self.protos,self.labels):
         param = torch.nn.Parameter(proto[None,...]).to(self.device)
         optimiser = self.optimiser([param])
@@ -239,7 +240,7 @@ Runs of this type attempt to inverse the model at a sample of labels. Attributes
           loss.backward()
           optimiser.step()
           projection(param.data[0])
-          self.rectime()
+          self.stepper.tick()
 
 #==================================================================================================
 @SupervisedTrainRun.listenerFactory('Base')
@@ -284,7 +285,8 @@ Instances of this class monitor basic supervised training runs. By default, trai
       self.itest = lambda run,fmt=status_fmt[1]+itest_fmt,s=status[1]: logger.info(fmt,*s(run),*itest(run))
       def i_header(run,fmt=status_fmt[0],s=status[0]):
         logger.info('RUN %s',run)
-        for k,v in run.visible.items(): logger.info('PARAM %10s= %s',k,v)
+        fmtp = 'PARAM %{}s= %s'.format(max(list(map(len,run.visible.keys()))))
+        for k,v in run.visible.items(): logger.info(fmtp,k,v)
         logger.info(fmt,*s)
       self.iheader = i_header
     if max_epoch is None: max_epoch = float('inf')
@@ -567,6 +569,22 @@ Returns a run selector, i.e. a callable which takes a run as input and returns a
       return r
     return F
   raise TypeError('p[expected: int|float|NoneType; found: {}]'.format(type(p)))
+
+#--------------------------------------------------------------------------------------------------
+class Stepper:
+#--------------------------------------------------------------------------------------------------
+  def __init__(self,run):
+    started = None
+    run.created = getfqdn(),ctime()
+    def reset():
+      nonlocal started
+      started = time(),process_time()
+      run.walltime = run.proctime = 0.
+      run.step = 0
+    def tick():
+      run.walltime,run.proctime = time()-started[0],process_time()-started[1]
+      run.step += 1
+    self.reset,self.tick = reset,tick
 
 #--------------------------------------------------------------------------------------------------
 def to(data,device):

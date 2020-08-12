@@ -111,10 +111,10 @@ Used as decorator to attach a listener factory to a subclass *cls* of this class
     """
 #--------------------------------------------------------------------------------------------------
     def app(f):
-      setattr(cls,'{}Listener'.format(name),f)
+      setattr(cls,f'{name}Listener',f)
       F = lambda self,*a,**ka: self.bind_listeners(f(*a,**ka))
-      F.__doc__ = r"""Binds an event listener obtained by invoking factory :func:`{}Listener`""".format(name)
-      setattr(cls,'bind{}Listener'.format(name),F)
+      F.__doc__ = f'Binds an event listener obtained by invoking factory :func:`{name}Listener`'
+      setattr(cls,f'bind{name}Listener',F)
       return f
     return app
 
@@ -350,7 +350,7 @@ Instances of this class provide mlflow logging of supervised training runs. By d
     self.iprogress = i_progress
     def i_test(run):
       for key,val in zip(itest_labels,itest(run)): mlflow.set_tag(key,val)
-    self.checkpoint = lambda run: mlflow.pytorch.log_model(run.tnet,'model_{:03d}'.format(run.epoch))
+    self.checkpoint = lambda run: mlflow.pytorch.log_model(run.tnet,f'model_{run.epoch:03d}')
     def open_mlflow(run): mlflow.start_run(); mlflow.log_params(run.visible)
     self.open_mlflow = open_mlflow
     def close_mlflow(run):
@@ -391,7 +391,7 @@ Returns a model saved in a run.
     mlflow.set_tracking_uri(uri)
     mlflow.set_experiment(exp)
     if run_id is None: run_id = mlflow.search_runs().run_id[0] # most recent run
-    return mlflow.pytorch.load_model('runs:/{}/model{}'.format(run_id,('' if epoch is None else '_{:03d}'.format(epoch))),**ka)
+    return mlflow.pytorch.load_model('runs:/{}/model{}'.format(run_id,('' if epoch is None else f'_{epoch:03d}')),**ka)
 
 #==================================================================================================
 class ClassificationDatasource:
@@ -471,12 +471,16 @@ At most one of the number of rows or columns can be -1. When both are positive a
           update(value)
           ax.set_title(self.classes[label],fontsize='xx-small',pad=1)
     def widget_control(dataset,K,disp):
-      from ipywidgets import IntSlider,Layout,Label,HBox
+      from ipywidgets import IntSlider,Label,HBox,Button
+      disp_ = lambda: disp([dataset[k] for k in range(w_sel.value,min(w_sel.value+K,N))])
       N = len(dataset)
-      w = IntSlider(value=1,min=0,step=K,max=(adj(N,K)-1)*K,layout=Layout(width='10cm'))
-      w.observe((lambda ev: disp([dataset[k] for k in range(ev.new,min(ev.new+K,N))])),'value')
-      w.value = 0
-      return HBox((w,Label('+[0-{}]/ {}'.format(K-1,N),layout=Layout(align_self='center'))))
+      w_closeb = Button(icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0'))
+      w_sel = IntSlider(value=0,min=0,step=K,max=(adj(N,K)-1)*K,layout=dict(width='10cm'))
+      w_main = HBox((w_sel,Label(f'+[0-{K-1}]/ {N}',layout=dict(align_self='center')),w_closeb))
+      w_closeb.on_click(lambda ev: (close(fig),w_main.close()))
+      w_sel.observe((lambda ev: disp_()),'value')
+      disp_()
+      return w_main
     def pad(it):
       for x in it: yield x
       while True: yield None,None
@@ -492,7 +496,7 @@ At most one of the number of rows or columns can be -1. When both are positive a
         else: assert isinstance(pad,(int,float)) and pad>=0.
         return sz,n,pad
       return (spec,1,0.) if isinstance(spec,(int,float)) else fmt(*spec)
-    from matplotlib.pyplot import subplots
+    from matplotlib.pyplot import subplots, close
     if dataset is None: dataset = self.test
     try: N = len(dataset)
     except: dataset = list(dataset); N = len(dataset)
@@ -552,7 +556,7 @@ Returns a run selector, i.e. a callable which takes a run as input and returns a
 * If *p* is of type :class:`float`, a run is selected if the increase in the counter value since the last successful selection is greater than *p*. Default counter: :attr:`Run.walltime`.
 
 :param p: periodicity (in counter value)
-:param counter: run feature to use as counter
+:param counter: run attribute to use as counter
   """
 #--------------------------------------------------------------------------------------------------
   if p is None: return None
@@ -568,7 +572,7 @@ Returns a run selector, i.e. a callable which takes a run as input and returns a
       if r: current = c
       return r
     return F
-  raise TypeError('p[expected: int|float|NoneType; found: {}]'.format(type(p)))
+  raise TypeError(f'p[expected: int|float|NoneType; found: {type(p)}]')
 
 #--------------------------------------------------------------------------------------------------
 class Stepper:

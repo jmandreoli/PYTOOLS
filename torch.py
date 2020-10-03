@@ -32,18 +32,16 @@ Instances of this class are callables, taking no argument and returning no value
 
 Runs may emit messages during their execution. Each message is passed a single argument, which is the run itself, so runs can be controlled by message listeners. Methods :meth:`Dispatcher.bind` (inherited) and :meth:`bind_listeners` can be used to bind callbacks to a run. Some methods, defined in subclasses, of the form :meth:`bind<name>Listener` are also available to bind specific callbacks named by `<name>`.
 
-Attributes (\*) must be instantiated at creation time.
+Attributes (\*) must be instantiated at creation time (with attribute :attr:`device`, if present, at the end).
   """
 #==================================================================================================
 
+  net: torch.nn.Module
+  r"""(\*)The model"""
   measures: Sequence[Callable[[torch.tensor,...],torch.tensor]]
   r"""(\*)List of measures, each returning a scalar (0-D) tensor"""
   device: torch.device
-  r"""(\*)The device on which to execute the run"""
-  net: torch.nn.Module
-  r"""(\*)The model"""
-  tnet: torch.nn.Module
-  r"""The same model, located at :attr:`device`"""
+  r"""The device on which to execute the run"""
   stepper: Stepper
   r"""Time and step keeper"""
   walltime: float
@@ -56,14 +54,27 @@ Attributes (\*) must be instantiated at creation time.
 #--------------------------------------------------------------------------------------------------
   def __init__(self,**ka):
 #--------------------------------------------------------------------------------------------------
-    self.visible = {}
+    self.visible = dict(device='default')
+    self.device_ = None
     for k,v in ka.items():
       if k.startswith('_'): k = k[1:]
       else: r = ' '.join(repr(v).split()); self.visible[k] = r if len(r)<80 else r[:77]+'...'
       setattr(self,k,v)
-    self.tnet = self.net.to(self.device)
     self.listeners = [] # to hold the list of listeners, otherwise they may be garbage collected
     self.stepper = Stepper(self)
+
+  @property
+  def device(self): return self.device_
+  @device.setter
+  def device(self,v): self.visible['device'] = self.device_ = v; self.to(v)
+
+#--------------------------------------------------------------------------------------------------
+  def to(self,device):
+    r"""
+Moves run to *device*. This implementation moves :attr:`net` (the model) to *device*. May be refined in subclasses.
+    """
+#--------------------------------------------------------------------------------------------------
+    self.net = self.net.to(device)
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self):
@@ -74,19 +85,34 @@ Executes the run. This implementation raises a :class:`NotImplementedError`.
     raise NotImplementedError()
 
 #--------------------------------------------------------------------------------------------------
-  def eval(self,data:Iterable[Tuple[torch.tensor,Any,...]])->Tuple[float,...]:
+  def eval(self,data:Iterable[Tuple[float,Tuple[torch.tensor,...],Tuple[torch.tensor,...]]])->Tuple[float,...]:
     r"""
-Evaluates model :attr:`tnet` on *data* according to :attr:`measures`. Each input item in *data* consists of a tuple of an input tensor on which the model is executed, followed by any number of extra parameters for the measures. For each input item, an evaluation consists in applying the model to the first tensor, then estimating each measure on the output tensor with the extra parameters. The returned value is a tuple of length equal to the number of measures, holding averages (as floats) over the whole *data* sequence.
+Evaluates model :attr:`net` on *data* according to :attr:`measures`. Each entry in *data* is a tuple whose first item is a weight, second item is a tuple of input tensors on which the model is executed, followed by any number of extra parameters for the measures. For each data entry, an evaluation consists in applying the model with the first item as list of arguments, then estimating each measure on the resulting tensor with the remaining items as list of arguments. The returned value is a tuple of length equal to the number of measures, holding weighted averages (as floats) over the whole *data* sequence.
 
-:param data: a list of input items
+:param data: a list of data entries
     """
 #--------------------------------------------------------------------------------------------------
     avg = 0.
-    with training(self.tnet,False),torch.no_grad():
-      for n,(inputs,*args) in enumerate(data,1):
-        outputs = self.tnet(inputs)
-        avg += (torch.stack([m(outputs,*args) for m in self.measures])-avg)/n
+    weight = 0.
+    with training(self.net,False),torch.no_grad():
+      for w,inputs,args in data:
+        outputs = self.net(*to(inputs,self.device))
+        weight += w
+        avg += (torch.stack([m(outputs,*to(args,self.device)) for m in self.measures])-avg)*(w/weight)
     return tuple(avg.to('cpu').numpy())
+
+#--------------------------------------------------------------------------------------------------
+  def eval_cache(self,data):
+    r"""
+Returns a cached version of :meth:`eval` on *data*. The cache is cleared at each tick of the :attr:`stepper`.
+    """
+#--------------------------------------------------------------------------------------------------
+    current = None,-1
+    def cache():
+      nonlocal current
+      if current[1] != self.step: current = self.eval(data),self.step
+      return current[0]
+    return cache
 
 #--------------------------------------------------------------------------------------------------
   def bind_listeners(self,*listeners):
@@ -132,6 +158,10 @@ Supervised runs operate on data in the form of instance-label pairs. Attributes 
   @property
   def measures(self): return (self.lossF,)+self.omeasures
 
+  def eval(self,data:Iterable[Tuple[torch.tensor,torch.tensor]]):
+    r"""Adapts the data format"""
+    return super().eval((1.,(inputs,),label) for inputs,label in data)
+
   # Default values for classification runs (override in subclasses)
   lossF = torch.nn.CrossEntropyLoss()
   omeasures = (lambda outputs,labels: torch.mean((torch.argmax(outputs,1)==labels).float())),
@@ -171,15 +201,8 @@ Runs of this type execute a simple supervised training loop. Attributes (\*) mus
 #--------------------------------------------------------------------------------------------------
   def __call__(self):
 #--------------------------------------------------------------------------------------------------
-    def eval_cache(data): # returns a cached version of self.eval
-      current = None,-1
-      def cache():
-        nonlocal current
-        if current[1] != self.step: current = self.eval(to(data,self.device)),self.step
-        return current[0]
-      return cache
-    net = self.tnet
-    self.eval_valid,self.eval_test = eval_cache(self.valid_data),eval_cache(self.test_data)
+    net = self.net
+    self.eval_valid,self.eval_test = map(self.eval_cache,(self.valid_data,self.test_data))
     optimiser = self.optimiser(net.parameters())
     with training(net,True):
       self.stepper.reset()
@@ -227,7 +250,7 @@ Runs of this type attempt to inverse the model at a sample of labels. Attributes
 #--------------------------------------------------------------------------------------------------
     projection = (lambda a: None) if self.projection is None else self.projection
     self.protos = torch.repeat_interleave(self.init[None,...],len(self.labels),0)
-    net = self.tnet
+    net = self.net
     with training(net,True):
       self.stepper.reset()
       for proto,label in zip(self.protos,self.labels):
@@ -350,13 +373,13 @@ Instances of this class provide mlflow logging of supervised training runs. By d
     self.iprogress = i_progress
     def i_test(run):
       for key,val in zip(itest_labels,itest(run)): mlflow.set_tag(key,val)
-    self.checkpoint = lambda run: mlflow.pytorch.log_model(run.tnet,f'model_{run.epoch:03d}')
+    self.checkpoint = lambda run: mlflow.pytorch.log_model(run.net,f'model_{run.epoch:03d}')
     def open_mlflow(run): mlflow.start_run(); mlflow.log_params(run.visible)
     self.open_mlflow = open_mlflow
     def close_mlflow(run):
       try:
         i_valid(run); i_progress(run); i_test(run)
-        mlflow.pytorch.log_model(run.tnet,'model')
+        mlflow.pytorch.log_model(run.net,'model')
       finally: mlflow.end_run()
     self.close_mlflow = close_mlflow
     self.configure(**config)
@@ -593,4 +616,4 @@ class Stepper:
 #--------------------------------------------------------------------------------------------------
 def to(data,device):
 #--------------------------------------------------------------------------------------------------
-  for input,label in data: yield input.to(device),label.to(device)
+  for x in data: yield ((t.to(device) if isinstance(t,torch.Tensor) else t) for t in x)

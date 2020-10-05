@@ -20,6 +20,7 @@ import logging; logger = logging.getLogger(__name__)
 
 from contextlib import contextmanager
 from functools import partial
+from copy import deepcopy
 from time import time, ctime, process_time
 from socket import getfqdn
 from pydispatch import Dispatcher, Property
@@ -28,20 +29,22 @@ import torch
 #==================================================================================================
 class Run (Dispatcher):
   r"""
-Instances of this class are callables, taking no argument and returning no value. The execution of a run only changes its attribute values. At the creation of the run, all the key-value pairs in *ka* are turned into attributes of the run. If the key starts with `_`, that character is dropped from the added attribute name, which is then marked as "non visible". The remaining attributes are gathered in a dictionary :attr:`visible`, meant to provide a human readable description of the run.
+Instances of this class are callables, taking no argument and returning no value. The execution of a run only changes its attribute values. All the keyword arguments of the constructor are passed to method :meth:`set`.
 
 Runs may emit messages during their execution. Each message is passed a single argument, which is the run itself, so runs can be controlled by message listeners. Methods :meth:`Dispatcher.bind` (inherited) and :meth:`bind_listeners` can be used to bind callbacks to a run. Some methods, defined in subclasses, of the form :meth:`bind<name>Listener` are also available to bind specific callbacks named by `<name>`.
 
-Attributes (\*) must be instantiated at creation time (with attribute :attr:`device`, if present, at the end).
+Attributes (\*) must be instantiated at creation time.
+
+.. attribute:: net
+   (\*)The model
+
+.. attribute:: device
+   (\*)The device on which to run the model
   """
 #==================================================================================================
 
-  net: torch.nn.Module
-  r"""(\*)The model"""
   measures: Sequence[Callable[[torch.tensor,...],torch.tensor]]
   r"""(\*)List of measures, each returning a scalar (0-D) tensor"""
-  device: torch.device
-  r"""The device on which to execute the run"""
   stepper: Stepper
   r"""Time and step keeper"""
   walltime: float
@@ -50,36 +53,60 @@ Attributes (\*) must be instantiated at creation time (with attribute :attr:`dev
   r"""Process time elapsed (in sec) between last invocation of :meth:`reset` and last invocation of :meth:`tick` on :attr:`stepper`"""
   step: int
   r"""Number of invocations of :meth:`tick` since last invocation of :meth:`reset` on :attr:`stepper`"""
+  visible: Sequence[str]
+  r"""List of visible attributes, for a human readable representation of the run"""
 
 #--------------------------------------------------------------------------------------------------
   def __init__(self,**ka):
 #--------------------------------------------------------------------------------------------------
-    self.visible = dict(device='default')
-    self.device_ = None
-    for k,v in ka.items():
-      if k.startswith('_'): k = k[1:]
-      else: r = ' '.join(repr(v).split()); self.visible[k] = r if len(r)<80 else r[:77]+'...'
-      setattr(self,k,v)
+    self._device = None
+    self._net = None
+    self.visible = []
     self.listeners = [] # to hold the list of listeners, otherwise they may be garbage collected
     self.stepper = Stepper(self)
+    self.set(**ka)
 
   @property
-  def device(self): return self.device_
+  def device(self): return self._device
   @device.setter
-  def device(self,v): self.visible['device'] = self.device_ = v; self.to(v)
+  def device(self,v): self._set_device(v)
+  def _set_device(self,v):
+    if self._net is not None: self._net = self._net.to(v)
+    self._device = v
+
+  @property
+  def net(self): return self._net
+  @net.setter
+  def net(self,v): self._set_net(v)
+  def _set_net(self,v):
+    if self._device is not None: v = v.to(self._device)
+    self._net = v
 
 #--------------------------------------------------------------------------------------------------
-  def to(self,device):
+  def set(self,**ka):
+#--------------------------------------------------------------------------------------------------
     r"""
-Moves run to *device*. This implementation moves :attr:`net` (the model) to *device*. May be refined in subclasses.
+All the key-value pairs in *ka* are turned into attributes of the run. If a key starts with `_`, that character is dropped from the added attribute name, otherwise, the attribute is marked as visible.
+    """
+    for k,v in ka.items():
+      if k.startswith('_'): k = k[1:]
+      else: self.visible.append(k)
+      setattr(self,k,v)
+
+#--------------------------------------------------------------------------------------------------
+  def getvisible(self):
+    r"""
+Returns an iterator of pairs of visible attributes and their values.
     """
 #--------------------------------------------------------------------------------------------------
-    self.net = self.net.to(device)
+    for k in self.visible:
+      r = ' '.join(repr(getattr(self,k)).split())
+      yield k, (r if len(r)<80 else r[:77]+'...')
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self):
     r"""
-Executes the run. This implementation raises a :class:`NotImplementedError`.
+Executes the run. Must be defined in subclasses. This implementation raises an error.
     """
 #--------------------------------------------------------------------------------------------------
     raise NotImplementedError()
@@ -160,7 +187,7 @@ Supervised runs operate on data in the form of instance-label pairs. Attributes 
 
   def eval(self,data:Iterable[Tuple[torch.tensor,torch.tensor]]):
     r"""Adapts the data format"""
-    return super().eval((1.,(inputs,),label) for inputs,label in data)
+    return super().eval((1.,(inputs,),(labels,)) for inputs,labels in data)
 
   # Default values for classification runs (override in subclasses)
   lossF = torch.nn.CrossEntropyLoss()
@@ -308,8 +335,8 @@ Instances of this class monitor basic supervised training runs. By default, trai
       self.itest = lambda run,fmt=status_fmt[1]+itest_fmt,s=status[1]: logger.info(fmt,*s(run),*itest(run))
       def i_header(run,fmt=status_fmt[0],s=status[0]):
         logger.info('RUN %s',run)
-        fmtp = 'PARAM %{}s= %s'.format(max(list(map(len,run.visible.keys()))))
-        for k,v in run.visible.items(): logger.info(fmtp,k,v)
+        fmtp = 'PARAM %{}s= %s'.format(max(list(map(len,run.visible))))
+        for k,v in run.getvisible(): logger.info(fmtp,k,v)
         logger.info(fmt,*s)
       self.iheader = i_header
     if max_epoch is None: max_epoch = float('inf')
@@ -374,7 +401,7 @@ Instances of this class provide mlflow logging of supervised training runs. By d
     def i_test(run):
       for key,val in zip(itest_labels,itest(run)): mlflow.set_tag(key,val)
     self.checkpoint = lambda run: mlflow.pytorch.log_model(run.net,f'model_{run.epoch:03d}')
-    def open_mlflow(run): mlflow.start_run(); mlflow.log_params(run.visible)
+    def open_mlflow(run): mlflow.start_run(); mlflow.log_params(dict(run.getvisible()))
     self.open_mlflow = open_mlflow
     def close_mlflow(run):
       try:
@@ -614,6 +641,15 @@ class Stepper:
     self.reset,self.tick = reset,tick
 
 #--------------------------------------------------------------------------------------------------
-def to(data,device):
+def clone_module(m,out=None):
+  r"""
+Clones a :class:`torch.Module` *m* into another one *out* or a new one if *out* is :const:`None`.
+  """
 #--------------------------------------------------------------------------------------------------
-  for x in data: yield ((t.to(device) if isinstance(t,torch.Tensor) else t) for t in x)
+  if out is None: out = deepcopy(m)
+  out.load_state_dict(m.state_dict())
+  return out
+
+#--------------------------------------------------------------------------------------------------
+def to(L,device): return ((t.to(device) if isinstance(t,torch.Tensor) else t) for t in L)
+#--------------------------------------------------------------------------------------------------

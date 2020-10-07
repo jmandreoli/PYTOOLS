@@ -18,13 +18,18 @@ from __future__ import annotations
 from typing import Sequence, Any, Union, Callable, Iterable, Mapping, Tuple
 import logging; logger = logging.getLogger(__name__)
 
+from collections import namedtuple
 from contextlib import contextmanager
 from functools import partial
 from copy import deepcopy
-from time import time, ctime, process_time
-from socket import getfqdn
 from pydispatch import Dispatcher, Property
 import torch
+from . import odict, fmtdict
+
+@contextmanager
+def training(obj,v): oldv = obj.training; obj.train(v); yield; obj.train(oldv)
+
+ProcessInfo = namedtuple('ProcessInfo','host pid started')
 
 #==================================================================================================
 class Run (Dispatcher):
@@ -43,6 +48,8 @@ Attributes (\*) must be instantiated at creation time.
   """
 #==================================================================================================
 
+  _events_ = ()
+
   measures: Sequence[Callable[[torch.tensor,...],torch.tensor]]
   r"""(\*)List of measures, each returning a scalar (0-D) tensor"""
   stepper: Stepper
@@ -53,18 +60,16 @@ Attributes (\*) must be instantiated at creation time.
   r"""Process time elapsed (in sec) between last invocation of :meth:`reset` and last invocation of :meth:`tick` on :attr:`stepper`"""
   step: int
   r"""Number of invocations of :meth:`tick` since last invocation of :meth:`reset` on :attr:`stepper`"""
-  visible: Sequence[str]
-  r"""List of visible attributes, for a human readable representation of the run"""
 
 #--------------------------------------------------------------------------------------------------
   def __init__(self,**ka):
 #--------------------------------------------------------------------------------------------------
     self._device = None
     self._net = None
-    self.visible = []
-    self.listeners = [] # to hold the list of listeners, otherwise they may be garbage collected
+    self.visible = fmtdict(lambda k,o=self: getattr(o,k))
     self.stepper = Stepper(self)
-    self.set(**ka)
+    self.listeners = odict() # listeners register
+    self.config(**ka)
 
   @property
   def device(self): return self._device
@@ -83,28 +88,16 @@ Attributes (\*) must be instantiated at creation time.
     self._net = v
 
 #--------------------------------------------------------------------------------------------------
-  def set(self,**ka):
-#--------------------------------------------------------------------------------------------------
+  def config(self,**ka):
     r"""
 All the key-value pairs in *ka* are turned into attributes of the run. If a key starts with `_`, that character is dropped from the added attribute name, otherwise, the attribute is marked as visible.
     """
-    for k,v in ka.items():
-      if k.startswith('_'): k = k[1:]
-      else: self.visible.append(k)
-      setattr(self,k,v)
+#--------------------------------------------------------------------------------------------------
+    for k,v in self.visible.filter_(ka).items(): setattr(self,k,v)
+    return self
 
 #--------------------------------------------------------------------------------------------------
-  def getvisible(self):
-    r"""
-Returns an iterator of pairs of visible attributes and their values.
-    """
-#--------------------------------------------------------------------------------------------------
-    for k in self.visible:
-      r = ' '.join(repr(getattr(self,k)).split())
-      yield k, (r if len(r)<80 else r[:77]+'...')
-
-#--------------------------------------------------------------------------------------------------
-  def __call__(self):
+  def main(self):
     r"""
 Executes the run. Must be defined in subclasses. This implementation raises an error.
     """
@@ -121,9 +114,10 @@ Evaluates model :attr:`net` on *data* according to :attr:`measures`. Each entry 
 #--------------------------------------------------------------------------------------------------
     avg = 0.
     weight = 0.
-    with training(self.net,False),torch.no_grad():
+    net = self.net
+    with training(net,False),torch.no_grad():
       for w,inputs,args in data:
-        outputs = self.net(*to(inputs,self.device))
+        outputs = net(*to(inputs,self.device))
         weight += w
         avg += (torch.stack([m(outputs,*to(args,self.device)) for m in self.measures])-avg)*(w/weight)
     return tuple(avg.to('cpu').numpy())
@@ -142,36 +136,55 @@ Returns a cached version of :meth:`eval` on *data*. The cache is cleared at each
     return cache
 
 #--------------------------------------------------------------------------------------------------
-  def bind_listeners(self,*listeners):
-    r"""
-Binds the set of *listeners* (any objects) to the events of this run. For each listener, the methods of that listener whose name match ``on_`` followed by the name of a supported event are bound as callback to this run. These methods are usually specified as attributes of type :class:`PROC`, so as to easily be configurable.
-
-:param listeners: list of listener objects
-    """
-#--------------------------------------------------------------------------------------------------
-    for x in listeners:
-      self.bind(**dict((ev,t) for ev in self._events_ for t in (getattr(x,'on_'+ev,None),) if t is not None))
-    self.listeners.extend(listeners)
-    return self
-
-#--------------------------------------------------------------------------------------------------
+  listenerTools = {}
   @classmethod
-  def listenerFactory(cls,name:str)->Callable[[Callable],Callable]:
+  def listenerFactory(cls,name:str,tools:Tuple[str]=None)->Callable[[Callable],Callable]:
     r"""
-Used as decorator to attach a listener factory to a subclass *cls* of this class. The factory is available as method :meth:`bind<name>Listener` using the provided *name*.
+Used as decorator to attach a listener factory (the decorated object, assumed callable) to a subclass *cls* of this class. The factory is available as method :meth:`add<name>Listener` using the provided *name*. Its invocation accepts a parameter :attr:`label` under which its result in stored in the listeners registry (by default, the label is the lowercase version of *name*). Attributes of the decorated object can be passed into a class dictionary stored as attribute :attr:`listenerTool` under the key *name*, which points to a dictionary mapping the tool attributes' names to themselves.
 
 :param name: short name for the factory
+:param tools: a list of tool names
     """
 #--------------------------------------------------------------------------------------------------
     def app(f):
-      setattr(cls,f'{name}Listener',f)
-      F = lambda self,*a,**ka: self.bind_listeners(f(*a,**ka))
-      F.__doc__ = f'Binds an event listener obtained by invoking factory :func:`{name}Listener`'
-      setattr(cls,f'bind{name}Listener',F)
+      if tools is not None:
+        cls.listenerTools = D = odict(**cls.listenerTools) # a copy
+        D[name] = DD = odict(**D.get(name,{}))
+        DD.update((a,getattr(f,a)) for a in tools)
+      def F(self,label=name.lower(),*a,**ka): self.listeners[label] = x = f(*a,**ka); return x
+      F.__doc__ = f'Listener factory for {f}. The result is assigned as attribute *label* in the listeners register.'
+      setattr(cls,f'add{name}Listener',F)
       return f
     return app
 
-  def __repr__(self): return f'{self.__class__.__name__}<{self.created[0]}|{self.created[1]}>'
+  @contextmanager
+  def activate_listeners(self):
+    def callbacks(x,events=self._events_):
+      for ev in events:
+        t = getattr(x,'on_'+ev,None)
+        if t is not None: yield ev,t
+    L = tuple(tuple(callbacks(x)) for x in self.listeners.values() if x.active)
+    for c in L: self.bind(**dict(c))
+    yield
+    for c in L: self.unbind(t for ev,t in c)
+
+#==================================================================================================
+  def describe(self,tab:str='',file=None):
+    r"""
+Prints out the list of visible attributes (with their values) as well as the list of listeners.
+
+:param tab: an indentation
+:param file: passed to the print function
+    """
+#==================================================================================================
+    self.visible.describe(tab=tab,file=file)
+    for k,x in self.listeners.items():
+      print(tab,f'listener.{k}:',file=file)
+      x.describe(tab=tab+'  ',file=file)
+
+  def __call__(self):
+    with self.activate_listeners(): self.main()
+  def __repr__(self): i = self.process_info; return f'{self.__class__.__name__}({i.host}:{i.pid}|{i.started})'
 
 #==================================================================================================
 class SupervisedRun (Run):
@@ -200,7 +213,7 @@ Runs of this type execute a simple supervised training loop. Attributes (\*) mus
   """
 #==================================================================================================
 
-  _events_ = ['open','batch','epoch','close']
+  _events_ = 'open','batch','epoch','close'
 
   ## set at instantiation
   train_data: Iterable[Tuple[torch.tensor,torch.tensor]]
@@ -226,7 +239,7 @@ Runs of this type execute a simple supervised training loop. Attributes (\*) mus
   r"""Function returning the test performance at the end of the last completed step (cached)"""
 
 #--------------------------------------------------------------------------------------------------
-  def __call__(self):
+  def main(self):
 #--------------------------------------------------------------------------------------------------
     net = self.net
     self.eval_valid,self.eval_test = map(self.eval_cache,(self.valid_data,self.test_data))
@@ -273,7 +286,7 @@ Runs of this type attempt to inverse the model at a sample of labels. Attributes
   r"""The estimated inverse image of :attr:`labels`"""
 
 #--------------------------------------------------------------------------------------------------
-  def __call__(self):
+  def main(self):
 #--------------------------------------------------------------------------------------------------
     projection = (lambda a: None) if self.projection is None else self.projection
     self.protos = torch.repeat_interleave(self.init[None,...],len(self.labels),0)
@@ -293,8 +306,18 @@ Runs of this type attempt to inverse the model at a sample of labels. Attributes
           self.stepper.tick()
 
 #==================================================================================================
+class RunListener:
+  r"""Base class for run listeners"""
+#==================================================================================================
+  def __init__(self,**ka): self.spec = {}; self.visible = fmtdict(self.spec.get); self.config(**ka)
+  def config(self,**ka): ka = self.visible.filter_(ka); self.spec.update(ka); self.set(**self.spec)
+  def set(self,**ka): self.set2(**ka)
+  def set2(self,active=True): self.active = active
+  def describe(self,tab='',file=None): self.visible.describe(tab=tab,file=file)
+
+#==================================================================================================
 @SupervisedTrainRun.listenerFactory('Base')
-class SupervisedTrainRunListener:
+class SupervisedTrainRunBaseListener (RunListener):
   r"""
 Instances of this class monitor basic supervised training runs. By default, train, validation and test info are logged, respectively, on batch end, epoch end and run end. At least one of *max_epoch* or *max_time* must be set, or the run never ends.
 
@@ -308,9 +331,8 @@ Instances of this class monitor basic supervised training runs. By default, trai
 :param config: passed as keyword arguments to method :meth:`configure`
   """
 #==================================================================================================
-
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,max_epoch:int=None,max_time:float=None,logger:logging.Logger=None,
+  def set(self,max_epoch:int=None,max_time:float=None,logger:logging.Logger=None,
     status:Tuple[Tuple[str,...],Callable[[Run],Tuple[Any,...]]]=(
       ('TIME','STEP','EPO','BAT'),
       (lambda run: (run.walltime,run.step,run.epoch,run.batch))
@@ -322,7 +344,7 @@ Instances of this class monitor basic supervised training runs. By default, trai
     itrain_fmt:str='TRAIN loss: %.3f',
     ivalid_fmt:str='VALIDATION loss: %.3f, accuracy: %.3f',
     itest_fmt:str= 'TEST loss: %.3f, accuracy: %.3f',
-    **config
+    **ka
   ):
 #--------------------------------------------------------------------------------------------------
     assert max_epoch is not None or max_time is not None
@@ -333,22 +355,19 @@ Instances of this class monitor basic supervised training runs. By default, trai
       self.ivalid = lambda run,fmt=status_fmt[1]+ivalid_fmt,s=status[1]: logger.info(fmt,*s(run),*ivalid(run))
       self.iprogress = lambda run,fmt=status_fmt[1]+'PROGRESS: %s',s=status[1]: logger.info(fmt,*s(run),'{:.0%}'.format(run.progress))
       self.itest = lambda run,fmt=status_fmt[1]+itest_fmt,s=status[1]: logger.info(fmt,*s(run),*itest(run))
-      def i_header(run,fmt=status_fmt[0],s=status[0]):
-        logger.info('RUN %s',run)
-        fmtp = 'PARAM %{}s= %s'.format(max(list(map(len,run.visible))))
-        for k,v in run.getvisible(): logger.info(fmtp,k,v)
-        logger.info(fmt,*s)
+      def i_header(run,fmt=status_fmt[0],s=status[0]): logger.info('RUN %s',run); logger.info(fmt,*s)
       self.iheader = i_header
     if max_epoch is None: max_epoch = float('inf')
     if max_time is None: max_time = float('inf')
     def set_progress(run): run.progress = min(max(run.epoch/max_epoch,run.walltime/max_time),1.)
     self.set_progress = set_progress
-    self.configure(**config)
+    super().set(**ka)
 
 #--------------------------------------------------------------------------------------------------
-  def configure(self,
+  def set2(self,
     train_p:Union[Callable[[Run],bool],bool]=False,
-    valid_p:Union[Callable[[Run],bool],bool]=False
+    valid_p:Union[Callable[[Run],bool],bool]=False,
+    **ka
   ):
     r"""
 This method, called at the end of the constructor, configures the callback methods of this listener. This implementation assigns reasonable defaults, using the run selectors passed in arguments, and can be refined in subclasses.
@@ -361,10 +380,11 @@ This method, called at the end of the constructor, configures the callback metho
     self.on_close = self.itest
     self.on_batch = abs(PROC(self.itrain)%train_p)
     self.on_epoch = abs(PROC(self.set_progress)+PROC(self.iprogress)+PROC(self.ivalid)%valid_p)
+    super().set2(**ka)
 
 #==================================================================================================
-@SupervisedTrainRun.listenerFactory('Mlflow')
-class SupervisedTrainRunMlflowListener:
+@SupervisedTrainRun.listenerFactory('Mlflow',tools=('load_model',))
+class SupervisedTrainRunMlflowListener (RunListener):
   r"""
 Instances of this class provide mlflow logging of supervised training runs. By default, train, validation and test info are logged, respectively, on batch end, epoch end and run end.
 
@@ -375,16 +395,15 @@ Instances of this class provide mlflow logging of supervised training runs. By d
 :param config: passed as keyword arguments to method :meth:`configure`
   """
 #==================================================================================================
-
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,uri:str,exp:str,
+  def set(self,uri:str,exp:str,
     itrain:Callable[[Run],Tuple[Any,...]]=(lambda run: (run.loss,)),
     ivalid:Callable[[Run],Tuple[Any,...]]=(lambda run: run.eval_valid()),
     itest:Callable[[Run],Tuple[Any,...]] =(lambda run: run.eval_test()),
     itrain_labels:Tuple[str,...] = ('tloss',),
     ivalid_labels:Tuple[str,...] = ('vloss','vaccu'),
     itest_labels:Tuple[str,...] = ('loss','accu'),
-    **config
+    **ka
   ):
 #--------------------------------------------------------------------------------------------------
     import mlflow, mlflow.pytorch
@@ -401,7 +420,7 @@ Instances of this class provide mlflow logging of supervised training runs. By d
     def i_test(run):
       for key,val in zip(itest_labels,itest(run)): mlflow.set_tag(key,val)
     self.checkpoint = lambda run: mlflow.pytorch.log_model(run.net,f'model_{run.epoch:03d}')
-    def open_mlflow(run): mlflow.start_run(); mlflow.log_params(dict(run.getvisible()))
+    def open_mlflow(run): mlflow.start_run(); mlflow.log_params(dict(run.visible.content()))
     self.open_mlflow = open_mlflow
     def close_mlflow(run):
       try:
@@ -409,13 +428,14 @@ Instances of this class provide mlflow logging of supervised training runs. By d
         mlflow.pytorch.log_model(run.net,'model')
       finally: mlflow.end_run()
     self.close_mlflow = close_mlflow
-    self.configure(**config)
+    super().set(**ka)
 
 #--------------------------------------------------------------------------------------------------
-  def configure(self,
+  def set2(self,
     train_p:Union[Callable[[Run],bool],bool]=False,
     valid_p:Union[Callable[[Run],bool],bool]=False,
     checkpoint_p:Union[Callable[[Run],bool],bool]=False,
+    **ka
   ):
     r"""
 This method, called at the end of the constructor, configures the callback methods of this listener. This implementation assigns reasonable defaults, using the run selectors passed in arguments, and can be refined in subclasses.
@@ -429,10 +449,11 @@ This method, called at the end of the constructor, configures the callback metho
     self.on_close = self.close_mlflow
     self.on_batch = abs(PROC(self.itrain)%train_p)
     self.on_epoch = abs(PROC(self.iprogress)+PROC(self.ivalid)%valid_p+PROC(self.checkpoint)%checkpoint_p)
+    super().set2(**ka)
 
 #--------------------------------------------------------------------------------------------------
-  @staticmethod
-  def load_model(uri:'str',exp:'str',run_id:'str'=None,epoch=None,**ka):
+  @classmethod
+  def load_model(cls,uri:str,exp:str,run_id:str=None,epoch:int=None,**ka):
     r"""
 Returns a model saved in a run.
     """
@@ -565,15 +586,6 @@ At most one of the number of rows or columns can be -1. When both are positive a
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-@contextmanager
-def training(net,flag):
-#--------------------------------------------------------------------------------------------------
-  oflag = net.training
-  net.train(flag)
-  yield
-  net.train(oflag)
-
-#--------------------------------------------------------------------------------------------------
 class PROC:
   r"""
 This class is meant to facilitate writing flexible pipelines of callable invocations. An instance of this class encapsulates a callable or :const:`None` (void instance). All callables take a single argument (typically a run). Generic function :func:`abs` (absolute value) returns the encapsulated callable. This class supports two operations.
@@ -612,24 +624,29 @@ Returns a run selector, i.e. a callable which takes a run as input and returns a
   if p is None: return None
   if isinstance(p,int):
     if counter is None: counter = 'step'
-    return lambda run,a=counter: getattr(run,a)%p == 0
+    F = lambda _,run,a=counter: getattr(run,a)%p == 0
+    mark = ''
   elif isinstance(p,float):
     if counter is None: counter = 'walltime'
     current = 0.
-    def F(run,a=counter):
+    def F(_,run,a=counter):
       nonlocal current
       c = getattr(run,a); r = c-current>p
       if r: current = c
       return r
-    return F
-  raise TypeError(f'p[expected: int|float|NoneType; found: {type(p)}]')
+    mark = '.'
+  else: raise TypeError(f'p[expected: int|float|NoneType; found: {type(p)}]')
+  return type('periodic',(),dict(__call__=F,__repr__=lambda _,d=f'periodic{mark}({p},{counter})': d))()
 
 #--------------------------------------------------------------------------------------------------
 class Stepper:
 #--------------------------------------------------------------------------------------------------
   def __init__(self,run):
+    from socket import getfqdn
+    from os import getpid
+    from time import ctime, time, process_time
     started = None
-    run.created = getfqdn(),ctime()
+    run.process_info = ProcessInfo(host=getfqdn(),pid=getpid(),started=ctime())
     def reset():
       nonlocal started
       started = time(),process_time()

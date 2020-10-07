@@ -51,48 +51,79 @@ A decorator to declare, in a class, a computable attribute which is computed onl
       return val
 
 #==================================================================================================
-class odict:
+class odict (dict):
   r"""
-Objects of this class present an attribute oriented interface to an underlying proxy mapping object.
-
-:param __proxy__: a mapping object used as proxy
-
-Keys in the proxy are turned into attributes of this instance. If *__proxy__* is :const:`None`, the proxy is a new empty dictionary, otherwise *__proxy__* must be a mapping object, and *__proxy__* (or its proxy if it is itself of class :class:`odict`) is taken as proxy. The proxy is first updated with the keyword arguments *ka*. Example::
+Objects of this class present an attribute oriented interface to a mapping object. Example::
 
    x = odict(a=3,b=6); print(x.a)
    #> 3
    del x.a; print(x)
    #> {'b':6}
-   x.b += 7; x.__proxy__
-   #> {'b':13}
-   x == x.__proxy__
+   x.b += 7; print(x,x['b'])
+   #> {'b':13},13
+   x == dict(b=13)
    #> True
   """
 #==================================================================================================
-  __slot__ = '__proxy__',
-  def __init__(self,__proxy__:Mapping[str,Any]=None,**ka):
-    r = __proxy__
-    if r is None: r = dict(ka)
-    else:
-      if isinstance(r,odict): r = r.__proxy__
-      else: assert isinstance(r,collections.abc.Mapping)
-      if ka: r.update(ka)
-    super().__setattr__('__proxy__',r)
-  def __eq__(self,other):
-    return self.__proxy__ == (other.__proxy__ if isinstance(other,odict) else other)
-  def __ne__(self,other):
-    return self.__proxy__ != (other.__proxy__ if isinstance(other,odict) else other)
-  def __hash__(self): return hash(self.__proxy__)
   def __getattr__(self,a):
-    try: return self.__proxy__[a]
+    try: return self[a]
     except KeyError: raise AttributeError(a) from None
-  def __setattr__(self,a,v):
-    self.__proxy__[a] = v
   def __delattr__(self,a):
-    try: del self.__proxy__[a]
+    try: del self[a]
     except KeyError: raise AttributeError(a) from None
-  def __str__(self): return str(self.__proxy__)
-  def __repr__(self): return repr(self.__proxy__)
+  def __setattr__(self,a,v): self[a] = v
+
+#==================================================================================================
+class fmtdict(dict):
+  r"""
+Instances of this class are dictionaries mapping keys to formatting functions (or :const:`None`). Each instance has an attribute :attr:`root`, a callable capable of returning a value for each key.
+
+* Method :meth:`content` iterates over the keys, and applies to each key the root then the formatting function associated to that key (or a default one if :const:`None`) and yields the pair of the key and the obtained result.
+* Method :meth:`describe` pretty-prints out the content.
+* Method :meth:`filter_` takes a dictionary *d* and format function *fmt* (default :const:`None`), and returns a copy of *d* where the keys starting with `_` are replaced by their copy without that character, while the others are stored in this object with value *fmt* if they don't already have a value .
+
+E.g.::
+
+   root = dict(u=3.141592,v='value of pi',w='something',x='something else').get
+   F = '{:.2f}'.format
+   c = fmtdict(root,u=F,v=str.title,w=None)
+   assert dict(c.content()) == dict(u='3.14',v='Value Of Pi',w="'something'")
+   del c['u','w']
+   assert c == dict(v=str.title)
+   r = c.filter_(dict(u=2.71828,v='a test',_w=42.,_x=451.),fmt=F)
+   assert r == dict(u=2.71828,v='a test',w=42.,x=451.)
+   assert dict(c)==(u=F,v=str.title)
+   assert dict(c.content()) == dict(u='3.14',v='Value Of Pi')
+  """
+#==================================================================================================
+  root:Callable[[str],Any]
+  def __init__(self,root,*a,**ka):
+    self.root = root
+    super().__init__(*a,**ka)
+#--------------------------------------------------------------------------------------------------
+  def content(self,m=80):
+#--------------------------------------------------------------------------------------------------
+    for k,fmt in self.items():
+      r = self.root(k)
+      if fmt is None:
+        r = ' '.join(repr(r).split())
+        if len(r)>m: r = r[:m-3]+'...'
+      else: r = fmt(r)
+      yield k,r
+#--------------------------------------------------------------------------------------------------
+  def describe(self,tab='',file=None):
+#--------------------------------------------------------------------------------------------------
+    fmtp = '{{:{}s}}= {{}}'.format(1+max(map(len,self))).format
+    for k,v in self.content(): print(tab,fmtp(k,v),file=file)
+    print(end='',flush=True)
+#--------------------------------------------------------------------------------------------------
+  def filter_(self,ka,fmt=None):
+#--------------------------------------------------------------------------------------------------
+    def f(k,v):
+      if k.startswith('_'): k = k[1:]
+      elif k not in self: self[k] = fmt
+      return k,v
+    return dict(f(k,v) for k,v in ka.items())
 
 #==================================================================================================
 class forward:

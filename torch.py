@@ -24,7 +24,12 @@ from functools import partial
 from copy import deepcopy
 from pydispatch import Dispatcher, Property
 import torch
-from . import odict, fmtdict
+from . import fmtdict
+
+class udict (dict):
+  def __getattr__(self,a): return self[a]
+  def __delattr__(self,a): del self[a]
+  def __setattr__(self,a,v): self[a] = v
 
 @contextmanager
 def training(obj,v): oldv = obj.training; obj.train(v); yield; obj.train(oldv)
@@ -68,7 +73,7 @@ Attributes (\*) must be instantiated at creation time.
     self._net = None
     self.visible = fmtdict(lambda k,o=self: getattr(o,k))
     self.stepper = Stepper(self)
-    self.listeners = odict() # listeners register
+    self.listeners = udict() # listeners register
     self.config(**ka)
 
   @property
@@ -148,8 +153,8 @@ Used as decorator to attach a listener factory (the decorated object, assumed ca
 #--------------------------------------------------------------------------------------------------
     def app(f):
       if tools is not None:
-        cls.listenerTools = D = odict(**cls.listenerTools) # a copy
-        D[name] = DD = odict(**D.get(name,{}))
+        cls.listenerTools = D = udict(**cls.listenerTools) # a copy
+        D[name] = DD = udict(**D.get(name,{}))
         DD.update((a,getattr(f,a)) for a in tools)
       def F(self,label=name.lower(),*a,**ka): self.listeners[label] = x = f(*a,**ka); return x
       F.__doc__ = f'Listener factory for {f}. The result is assigned as attribute *label* in the listeners register.'
@@ -159,10 +164,7 @@ Used as decorator to attach a listener factory (the decorated object, assumed ca
 
   @contextmanager
   def activate_listeners(self):
-    def callbacks(x,events=self._events_):
-      for ev in events:
-        t = getattr(x,'on_'+ev,None)
-        if t is not None: yield ev,t
+    callbacks = lambda x,evs=self._events_: ((ev,t) for ev in evs if (t:=getattr(x,'on_'+ev,None)) is not None)
     L = tuple(tuple(callbacks(x)) for x in self.listeners.values() if x.active)
     for c in L: self.bind(**dict(c))
     yield
@@ -625,7 +627,7 @@ Returns a run selector, i.e. a callable which takes a run as input and returns a
   if isinstance(p,int):
     if counter is None: counter = 'step'
     F = lambda _,run,a=counter: getattr(run,a)%p == 0
-    mark = ''
+    d = f'{counter}≡0[{p}]'
   elif isinstance(p,float):
     if counter is None: counter = 'walltime'
     current = 0.
@@ -634,9 +636,9 @@ Returns a run selector, i.e. a callable which takes a run as input and returns a
       c = getattr(run,a); r = c-current>p
       if r: current = c
       return r
-    mark = '.'
+    d = f'Δ{counter}>{p}'
   else: raise TypeError(f'p[expected: int|float|NoneType; found: {type(p)}]')
-  return type('periodic',(),dict(__call__=F,__repr__=lambda _,d=f'periodic{mark}({p},{counter})': d))()
+  return type('periodic',(),dict(__call__=F,__repr__=lambda _,d=f'periodic({d})': d))()
 
 #--------------------------------------------------------------------------------------------------
 class Stepper:

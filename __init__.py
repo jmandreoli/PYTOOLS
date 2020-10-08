@@ -51,27 +51,47 @@ A decorator to declare, in a class, a computable attribute which is computed onl
       return val
 
 #==================================================================================================
-class odict (dict):
+class odict:
   r"""
-Objects of this class present an attribute oriented interface to a mapping object. Example::
+Objects of this class present an attribute oriented interface to an underlying proxy mapping object.
 
-   x = odict(a=3,b=6); print(x.a)
-   #> 3
-   del x.a; print(x)
-   #> {'b':6}
-   x.b += 7; print(x,x['b'])
-   #> {'b':13},13
-   x == dict(b=13)
-   #> True
+:param __proxy__: a mapping object used as proxy
+
+Keys in the proxy are turned into attributes of this instance. If *__proxy__* is :const:`None`, the proxy is a new empty dictionary, otherwise *__proxy__* must be a mapping object, and *__proxy__* (or its proxy if it is itself of class :class:`odict`) is taken as proxy. The proxy is first updated with the keyword arguments *ka*. Example::
+
+   p = dict(a=3,b=6); x = odict(p)
+   assert x.a == 3
+   del x.a; x.b += 7
+   assert p == {'b':13}
+   p['c'] = 42
+   assert x.c == 42
+   assert x == p
   """
 #==================================================================================================
+  __slot__ = '__proxy__',
+  def __init__(self,__proxy__:Mapping[str,Any]=None,**ka):
+    r = __proxy__
+    if r is None: r = dict(ka)
+    else:
+      if isinstance(r,odict): r = r.__proxy__
+      else: assert isinstance(r,collections.abc.Mapping)
+      if ka: r.update(ka)
+    super().__setattr__('__proxy__',r)
+  def __eq__(self,other):
+    return self.__proxy__ == (other.__proxy__ if isinstance(other,odict) else other)
+  def __ne__(self,other):
+    return self.__proxy__ != (other.__proxy__ if isinstance(other,odict) else other)
+  def __hash__(self): return hash(self.__proxy__)
   def __getattr__(self,a):
-    try: return self[a]
+    try: return self.__proxy__[a]
     except KeyError: raise AttributeError(a) from None
+  def __setattr__(self,a,v):
+    self.__proxy__[a] = v
   def __delattr__(self,a):
-    try: del self[a]
+    try: del self.__proxy__[a]
     except KeyError: raise AttributeError(a) from None
-  def __setattr__(self,a,v): self[a] = v
+  def __str__(self): return str(self.__proxy__)
+  def __repr__(self): return repr(self.__proxy__)
 
 #==================================================================================================
 class fmtdict(dict):
@@ -130,10 +150,11 @@ class forward:
   r"""
 This object allows to name callable members of module/packages without loading them. They are loaded only on actual call. Example::
 
-   A = forward.numpy.array; print(A)
-   #> forward<numpy.array> # numpy is not loaded
-   print(A((1,3,2)))
-   #> [1 2 3] # numpy is loaded
+   from sys import modules
+   array = forward.numpy.array
+   assert 'numpy' not in modules # numpy is not loaded
+   x = array((1,2,3))
+   assert 'numpy' in modules and x.shape == (3,) # now numpy is loaded and x is computed
   """
 #==================================================================================================
   __slot__ = '__spec__','__value__'
@@ -423,7 +444,7 @@ Returns a default HTML representation of a compound object, where *La,Lka* are t
   from lxml.html.builder import E
   def content():
     for v in La: yield E.span(html(v),style=style)
-    for k,v in Lka: yield E.span(E.b(k),'=',html(v),style=style)
+    for k,v in Lka: yield E.span(E.b(str(k)),'=',html(v),style=style)
   return E.div(*opening,*content(),*closing,style='padding:0')
 
 #==================================================================================================
@@ -667,7 +688,7 @@ Each subclass *C* of this class should define a class attribute :attr:`base` ass
 
 * they are attached to an sqlalchemy engine at this url (note that engines are reused across multiple sessionmakers with the same url)
 
-* they have a :attr:`root` attribute, pointing to an instance of *C*, which acts as a dictionary where the keys are the primary keys of *B* and the values the corresponding ORM entries. The root object has a convenient ipython HTML representation. Direct update to the dictionary is not supported, except deletion, which is made persitent on session commit.
+* they have a :attr:`root` attribute, pointing to an instance of *C*, which acts as a mapping where the keys are the primary keys of *B* and the values the corresponding ORM entries. The root object has a convenient ipython HTML representation.
 
 Class *C* should provide a method to insert new objects in the persistent class *B*, and they will then be reflected in the session root (and made persitent on session commit). Example::
 
@@ -679,14 +700,10 @@ Class *C* should provide a method to insert new objects in the persistent class 
      oid = Column(Integer(),primary_key=True)
      name = Column(Text())
      age = Column(Integer())
-     def __str__(self): return 'Entry<{},{}>'.format(self.oid,self.name)
+     def __repr__(self): return 'Entry<{0.oid},{0.name},{0.age}>'.format(self)
 
-   class Root(ormsroot): # simple manager for class Entry
+   class Root(ormsroot): # manager for class Entry
      base = Entry
-     def new(self,name,age):
-       r = Entry(name=name,age=age)
-       self.session.add(r)
-       return r
 
    sessionmaker = Root.sessionmaker
 
@@ -696,55 +713,74 @@ Example of use (assuming :func:`sessionmaker` as above has been imported)::
 
    from contextlib import contextmanager
    @contextmanager
-   def mysession(): # sessions as simple sequences of instructions, for the example
-     s = Session()
+   def mysession(): # basic sessions as simple block of instructions
+     s = Session(autocommit=True)
      try: yield s
-     else: s.commit()
-     s.close()
+     finally: s.close()
 
-   with mysession() as s: # first session, define two entries
-     jack = s.root.new('jack',45); joe = s.root.new('joe',29)
-     print('Listing:',*s.root.values()) # s.root used as a mapping
-   #> Listing: Entry<1,jack> Entry<2,joe>
+   with mysession() as s: assert len(s.root)==0
+
+   with mysession() as s:
+     # first session, define two entries. Use key None in assignment because Entry is autokey
+     self.root[None] = Entry(name='jack',age=42); self.root[None] = Entry(name='jill',age=29)
+     assert len(s.root) == 2 and s.root[1].name=='jack' and s.root[2].name=='jill'
 
    with mysession() as s: # second session, possibly on another process (if not memory db)
-     jack = s.root.pop(1) # remove jack (directly from mapping)
-     print('Deleted: {}'.format(jack),'; Listing',*s.root.values())
-   #> Deleted: Entry<1,jack> ; Listing: Entry<2,joe>
+     jack = s.root.pop(1) # also removes from db
+     assert len(s.root) == 1 and jack.name=='jack'
 
    with mysession() as s: # But of course direct sqlalchemy operations are available
-     for x in s.query(Entry.name).filter(Entry.age>25): print(*x)
-   #> joe
-  """
+     assert len(s.root) == 1
+     x, = list(s.query(Entry.name).filter(Entry.age>25))
+   assert x.name == 'jill'
+    """
 #==================================================================================================
 
-  def __init__(self,session,dclass):
-    self.dclass = dclass
-    self.pk = pk = self.dclass.__table__.primary_key.columns.values()
-    self.pkindex = (lambda r,k=pk[0].name: getattr(r,k)) if len(pk)==1 else (lambda r,pk=pk: tuple(getattr(r,c.name) for c in pk))
+  base = None # must be defined in subclasses, NOT at the instance level
+
+  def __init__(self,session):
+    self.pk = pk = self.base.__table__.primary_key.columns.values()
+    if len(pk) == 1:
+      getpk = lambda r,kn=pk[0].name: getattr(r,kn)
+      def setpk(k,r,kn=pk[0].name):
+        if k is not None: r[kn] = k # does nothing is k is None (autokeys)
+        return r
+    else:
+      getpk = lambda r,kns=tuple(c.name for c in pk): tuple(getattr(r,kn) for kn in kns)
+      def setpk(ks,r,kns=tuple(c.name for c in pk)):
+        assert len(ks) in (0,)
+        for kn,k in zip(kns,ks): r[kn] = k # does nothing if ks==() (autokeys)
+        return r
+    self.getpk,self.setpk = getpk,setpk
     self.session = session
 
   def __getitem__(self,k):
-    r = self.session.query(self.dclass).get(k)
+    r = self.session.query(self.base).get(k)
     if r is None: raise KeyError(k)
     return r
 
   def __delitem__(self,k):
     self.session.delete(self[k])
 
-  def __setitem__(self,k,v):
-    raise Exception('Direct create/update not permitted')
+  def __setitem__(self,k,r):
+    assert isinstance(r,self.base)
+    self.session.add(self.setpk(k,r))
 
   def __iter__(self):
-    for r in self.session.query(*self.pk): yield self.pkindex(r)
+    for r in self.session.query(*self.pk): yield self.getpk(r)
+  def items(self): return ((self.getpk(r),r) for r in self.session.query(self.base))
 
   def __len__(self):
     return self.session.query(self.base).count()
 
-  def __hash__(self): return hash((self.session,self.dclass))
+  def __hash__(self): return hash((self.session,self.base))
 
   def as_html(self,_):
-    return html_parlist(_,(),sorted(self.items()),opening=('ormsroot {',),closing=('}',))
+    n = len(self)-self._html_limit
+    L = self.items(); closing = None
+    if n>0: L = islice(L,self._html_limit); closing = '{} more'.format(n)
+    return html_table(sorted((k,(v,)) for k,v in L),fmts=(repr,),opening=repr(self),closing=closing)
+  def __repr__(self): return f'{self.__class__.__name__}<{self.base.__name__}>'
 
   cache = {}
   @classmethod
@@ -762,7 +798,7 @@ Example of use (assuming :func:`sessionmaker` as above has been imported)::
     Session_ = sessionmaker(engine,*a,**ka)
     def Session(**x):
       s = Session_(**x)
-      s.root = cls(s,cls.base)
+      s.root = cls(s)
       return s
     return Session
 

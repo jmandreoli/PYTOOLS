@@ -41,7 +41,7 @@ class Run (Dispatcher):
   r"""
 Instances of this class are callables, taking no argument and returning no value. The execution of a run only changes its attribute values. All the keyword arguments of the constructor are passed to method :meth:`set`.
 
-Runs may emit messages during their execution. Each message is passed a single argument, which is the run itself, so runs can be controlled by message listeners. Methods :meth:`Dispatcher.bind` (inherited) and :meth:`bind_listeners` can be used to bind callbacks to a run. Some methods, defined in subclasses, of the form :meth:`bind<name>Listener` are also available to bind specific callbacks named by `<name>`.
+Runs may emit messages during their execution. Each message is passed a single argument, which is the run itself, so runs can be controlled by message listeners. Listeners (instances of class :class:`RunListener`) are special cases of listeners. A run can invoke a method :meth:`add<name>Listener` to attach a listener of type `<name>` to itself. Some such methods are defined in subclasses of :class:`RunListener` (see their documentation for details).
 
 Attributes (\*) must be instantiated at creation time.
 
@@ -117,14 +117,13 @@ Evaluates model :attr:`net` on *data* according to :attr:`measures`. Each entry 
 :param data: a list of data entries
     """
 #--------------------------------------------------------------------------------------------------
-    avg = 0.
-    weight = 0.
+    avg_measures = 0.; weight = 0.
     net = self.net
     with training(net,False),torch.no_grad():
       for w,inputs,args in data:
         outputs = net(*to(inputs,self.device))
         weight += w
-        avg += (torch.stack([m(outputs,*to(args,self.device)) for m in self.measures])-avg)*(w/weight)
+        avg_measures += (torch.stack([m(outputs,*to(args,self.device)) for m in self.measures])-avg_measures)*(w/weight)
     return tuple(avg.to('cpu').numpy())
 
 #--------------------------------------------------------------------------------------------------
@@ -141,24 +140,21 @@ Returns a cached version of :meth:`eval` on *data*. The cache is cleared at each
     return cache
 
 #--------------------------------------------------------------------------------------------------
-  listenerTools = {}
   @classmethod
-  def listenerFactory(cls,name:str,tools:Tuple[str]=None)->Callable[[Callable],Callable]:
+  def listener_factory(cls,name:str)->Callable[[Callable],Callable]:
     r"""
-Used as decorator to attach a listener factory (the decorated object, assumed callable) to a subclass *cls* of this class. The factory is available as method :meth:`add<name>Listener` using the provided *name*. Its invocation accepts a parameter :attr:`label` under which its result in stored in the listeners registry (by default, the label is the lowercase version of *name*). Attributes of the decorated object can be passed into a class dictionary stored as attribute :attr:`listenerTool` under the key *name*, which points to a dictionary mapping the tool attributes' names to themselves.
+Used as decorator to attach a listener factory (the decorated object, assumed callable) to a subclass *cls* of this class. The factory is available as method :meth:`add<name>Listener` using the provided *name*. Its invocation accepts a parameter :attr:`label` under which its result in stored in the listeners registry (by default, the label is the lowercase version of *name*). The decorated object may have an attribute :attr:`tools` listing the name of tool attributes, which are passed into as attribute :attr:`<name>_tools` of *cls*.
 
 :param name: short name for the factory
 :param tools: a list of tool names
     """
 #--------------------------------------------------------------------------------------------------
     def app(f):
-      if tools is not None:
-        cls.listenerTools = D = udict(**cls.listenerTools) # a copy
-        D[name] = DD = udict(**D.get(name,{}))
-        DD.update((a,getattr(f,a)) for a in tools)
       def F(self,label=name.lower(),*a,**ka): self.listeners[label] = x = f(*a,**ka); return x
       F.__doc__ = f'Listener factory for {f}. The result is assigned as attribute *label* in the listeners register.'
       setattr(cls,f'add{name}Listener',F)
+      tools = getattr(f,'tools',None)
+      if tools is not None: setattr(cls,f'{name}_tools',udict((t,getattr(f,t)) for t in set(tools)))
       return f
     return app
 
@@ -314,23 +310,15 @@ class RunListener:
   def __init__(self,**ka): self.spec = {}; self.visible = fmtdict(self.spec.get); self.config(**ka)
   def config(self,**ka): ka = self.visible.filter_(ka); self.spec.update(ka); self.set(**self.spec)
   def set(self,**ka): self.set2(**ka)
-  def set2(self,active=True): self.active = active
+  def set2(self,**ka): self.set3(**ka)
+  def set3(self,active=True): self.active = active
   def describe(self,tab='',file=None): self.visible.describe(tab=tab,file=file)
 
 #==================================================================================================
-@SupervisedTrainRun.listenerFactory('Base')
+@SupervisedTrainRun.listener_factory('Base')
 class SupervisedTrainRunBaseListener (RunListener):
   r"""
-Instances of this class monitor basic supervised training runs. By default, train, validation and test info are logged, respectively, on batch end, epoch end and run end. At least one of *max_epoch* or *max_time* must be set, or the run never ends.
-
-:param max_epoch: maximum number of epochs to run; default: no limit
-:param max_time: maximum total wall time to run; default: no limit
-:param logger: logger to use for logging information
-:param status: pair of a tuple of headers and a function returning the status of a run as a tuple matching those headers
-:param status_fmt: pair of format strings for the components of *status*
-:param itrain,ivalid,itest: function returning various info on a run
-:param itrain_fmt,ivalid_fmt,itest_fmt: format strings for the results of the corresponding functions
-:param config: passed as keyword arguments to method :meth:`configure`
+Instances of this class provide basic listenering for supervised training runs.
   """
 #==================================================================================================
 #--------------------------------------------------------------------------------------------------
@@ -348,15 +336,28 @@ Instances of this class monitor basic supervised training runs. By default, trai
     itest_fmt:str= 'TEST loss: %.3f, accuracy: %.3f',
     **ka
   ):
+    r"""
+:param max_epoch: maximum number of epochs to run; default: no limit
+:param max_time: maximum total wall time to run; default: no limit
+:param logger: logger to use for logging information
+:param status: pair of a tuple of headers and a function returning the status of a run as a tuple matching those headers
+:param status_fmt: pair of format strings for the components of *status*
+:param itrain,ivalid,itest: function returning various info on a run
+:param itrain_fmt,ivalid_fmt,itest_fmt: format strings for the results of the corresponding functions
+
+Computes a number of information loggers, stored in attributes :attr:`itrain`, :attr:`ivalid`, :attr:`itest`, :attr:`iprogress`, :attr:`iheader`, as well as the main listenering function, stored as attribute :attr:`progress`. At least one of *max_epoch* or *max_time* must be set, or the run never ends.
+    """
 #--------------------------------------------------------------------------------------------------
     assert max_epoch is not None or max_time is not None
-    if logger is None:
-      self.itrain = self.ivalid = self.iprogress = self.itest = self.iheader = None
-    else:
-      self.itrain = lambda run,fmt=status_fmt[1]+itrain_fmt,s=status[1]: logger.info(fmt,*s(run),*itrain(run))
-      self.ivalid = lambda run,fmt=status_fmt[1]+ivalid_fmt,s=status[1]: logger.info(fmt,*s(run),*ivalid(run))
+    self.itrain = self.ivalid = self.itest = self.iheader = self.iprogress = None
+    if logger is not None:
+      if itrain is not None:
+        self.itrain = lambda run,fmt=status_fmt[1]+itrain_fmt,s=status[1]: logger.info(fmt,*s(run),*itrain(run))
+      if ivalid is not None:
+        self.ivalid = lambda run,fmt=status_fmt[1]+ivalid_fmt,s=status[1]: logger.info(fmt,*s(run),*ivalid(run))
+      if itest is not None:
+        self.itest = lambda run,fmt=status_fmt[1]+itest_fmt,s=status[1]: logger.info(fmt,*s(run),*itest(run))
       self.iprogress = lambda run,fmt=status_fmt[1]+'PROGRESS: %s',s=status[1]: logger.info(fmt,*s(run),'{:.0%}'.format(run.progress))
-      self.itest = lambda run,fmt=status_fmt[1]+itest_fmt,s=status[1]: logger.info(fmt,*s(run),*itest(run))
       def i_header(run,fmt=status_fmt[0],s=status[0]): logger.info('RUN %s',run); logger.info(fmt,*s)
       self.iheader = i_header
     if max_epoch is None: max_epoch = float('inf')
@@ -372,31 +373,26 @@ Instances of this class monitor basic supervised training runs. By default, trai
     **ka
   ):
     r"""
-This method, called at the end of the constructor, configures the callback methods of this listener. This implementation assigns reasonable defaults, using the run selectors passed in arguments, and can be refined in subclasses.
-
 :param train_p: run selector for train info logging at each batch
 :param valid_p: run selector for validation info logging at each epoch
+
+Configures the callbacks of this listener, stored as attributes :attr:`on_open`, :attr:`on_close`, :attr:`on_batch`, :attr:`on_epoch`, using components defined by method :meth:`set`.
     """
 #--------------------------------------------------------------------------------------------------
-    self.on_open = self.iheader
-    self.on_close = self.itest
+    self.on_open = abs(PROC(self.iheader))
+    self.on_close = abs(PROC(self.itest))
     self.on_batch = abs(PROC(self.itrain)%train_p)
     self.on_epoch = abs(PROC(self.set_progress)+PROC(self.iprogress)+PROC(self.ivalid)%valid_p)
     super().set2(**ka)
 
 #==================================================================================================
-@SupervisedTrainRun.listenerFactory('Mlflow',tools=('load_model',))
+@SupervisedTrainRun.listener_factory('Mlflow')
 class SupervisedTrainRunMlflowListener (RunListener):
   r"""
-Instances of this class provide mlflow logging of supervised training runs. By default, train, validation and test info are logged, respectively, on batch end, epoch end and run end.
-
-:param uri: mlflow tracking uri
-:param exp: experiment name
-:param itrain,ivalid,itest: function returning various info on a run
-:param itrain_labels,ivalid_labels,itest_labels: labels for the results of the corresponding functions
-:param config: passed as keyword arguments to method :meth:`configure`
+Instances of this class provide mlflow logging for supervised training runs.
   """
 #==================================================================================================
+  tools = 'load_model',
 #--------------------------------------------------------------------------------------------------
   def set(self,uri:str,exp:str,
     itrain:Callable[[Run],Tuple[Any,...]]=(lambda run: (run.loss,)),
@@ -407,28 +403,36 @@ Instances of this class provide mlflow logging of supervised training runs. By d
     itest_labels:Tuple[str,...] = ('loss','accu'),
     **ka
   ):
+    r"""
+:param uri: mlflow tracking uri
+:param exp: experiment name
+:param itrain,ivalid,itest: function returning various info on a run
+:param itrain_labels,ivalid_labels,itest_labels: metric keys for the results of the corresponding functions
+
+Computes a number of information loggers, stored in attributes :attr:`itrain`, :attr:`ivalid`, :attr:`itest`, :attr:`iprogress`, :attr:`open_mlflow`, :attr:`close_mlflow`. The *uri* must refer to a valid mlflow experiment storage.
+    """
 #--------------------------------------------------------------------------------------------------
     import mlflow, mlflow.pytorch
     mlflow.set_tracking_uri(uri)
     mlflow.set_experiment(exp)
-    def i_train(run):
-      for key,val in zip(itrain_labels,itrain(run)): mlflow.log_metric(key,val,run.step)
-    self.itrain = i_train
-    def i_valid(run):
-      for key,val in zip(ivalid_labels,ivalid(run)): mlflow.log_metric(key,val,run.step)
-    self.ivalid = i_valid
+    if itrain is None: i_train = None
+    else:
+      def i_train(run):
+        for key,val in zip(itrain_labels,itrain(run)): mlflow.log_metric(key,val,run.step)
+    if ivalid is None: i_valid = None
+    else:
+      def i_valid(run):
+        for key,val in zip(ivalid_labels,ivalid(run)): mlflow.log_metric(key,val,run.step)
+    if itest is None: i_test = None
+    else:
+      def i_test(run):
+        for key,val in zip(itest_labels,itest(run)): mlflow.set_tag(key,val)
     def i_progress(run): mlflow.set_tag('progress',run.progress)
-    self.iprogress = i_progress
-    def i_test(run):
-      for key,val in zip(itest_labels,itest(run)): mlflow.set_tag(key,val)
+    self.itrain,self.ivalid,self.itest,self.iprogress = i_train,i_valid,i_test,i_progress
     self.checkpoint = lambda run: mlflow.pytorch.log_model(run.net,f'model_{run.epoch:03d}')
-    def open_mlflow(run): mlflow.start_run(); mlflow.log_params(dict(run.visible.content()))
+    def open_mlflow(run): mlflow.log_params(dict(run.visible.content()))
     self.open_mlflow = open_mlflow
-    def close_mlflow(run):
-      try:
-        i_valid(run); i_progress(run); i_test(run)
-        mlflow.pytorch.log_model(run.net,'model')
-      finally: mlflow.end_run()
+    def close_mlflow(run): mlflow.pytorch.log_model(run.net,'model')
     self.close_mlflow = close_mlflow
     super().set(**ka)
 
@@ -440,18 +444,33 @@ Instances of this class provide mlflow logging of supervised training runs. By d
     **ka
   ):
     r"""
-This method, called at the end of the constructor, configures the callback methods of this listener. This implementation assigns reasonable defaults, using the run selectors passed in arguments, and can be refined in subclasses.
-
 :param train_p: run selector for train info logging at each batch
 :param valid_p: run selector for validation info logging at each epoch
 :param checkpoint_p: run selector for checkpointing at each epoch
+
+Configures the callbacks of this listener, stored as attributes :attr:`on_open`, :attr:`on_close`, :attr:`on_batch`, :attr:`on_epoch`, using components defined by method :meth:`set`.
     """
 #--------------------------------------------------------------------------------------------------
-    self.on_open = self.open_mlflow
-    self.on_close = self.close_mlflow
+    self.on_open = abs(PROC(self.open_mlflow))
+    self.on_close = abs(PROC(self.ivalid)+PROC(self.itest)+PROC(self.iprogress)+PROC(self.close_mlflow))
     self.on_batch = abs(PROC(self.itrain)%train_p)
     self.on_epoch = abs(PROC(self.iprogress)+PROC(self.ivalid)%valid_p+PROC(self.checkpoint)%checkpoint_p)
     super().set2(**ka)
+
+#--------------------------------------------------------------------------------------------------
+  def set3(self,**ka):
+    r"""
+Protects callbacks :attr:`on_open` and :attr:`on_close` from exceptions to make sure the mlflow run is not left in a corrupted state.
+    """
+#--------------------------------------------------------------------------------------------------
+    def on_open(run,f=self.on_open):
+      mlflow.start_run()
+      try: f(run)
+      except: mlflow.end_run(); raise
+    def on_close(run,f=self.on_close):
+      try: f(run)
+      finally: mlflow.end_run()
+    super().set3(**ka)
 
 #--------------------------------------------------------------------------------------------------
   @classmethod

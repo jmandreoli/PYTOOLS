@@ -12,54 +12,15 @@ import logging; logger = logging.getLogger(__name__)
 import os, re, collections
 
 #==================================================================================================
-class ondemand:
-  r"""
-A decorator to declare, in a class, a computable attribute which is computed only once (its value is then cached). Example::
-
-   class c:
-     def __init__(self,u): self.u = u
-     @ondemand
-     def att(self): print('Computing att...'); return self.u+1
-   x = c(3); print(x.att)
-   #> Computing att...
-   #> 4
-   print(x.att)
-   #> 4
-   x.u = 6; print(x.att)
-   #> 4
-   del x.att; print(x.att)
-   #> Computing att...
-   #> 7
-  """
-#==================================================================================================
-
-  __slots__ = 'get',
-
-  def __init__(self,get:Callable[[Any],None]):
-    from inspect import signature
-    L = list(signature(get).parameters.values())
-    if len(L)==0 or any(p.default==p.empty for p in L[1:]):
-      raise TypeError('ondemand attribute definition must be a function with a single argument')
-    self.get = get
-
-  def __get__(self,instance,typ):
-    if instance is None:
-      return self
-    else:
-      val = self.get(instance)
-      setattr(instance,self.get.__name__,val)
-      return val
-
-#==================================================================================================
-class odict:
+class owrap:
   r"""
 Objects of this class present an attribute oriented interface to an underlying proxy mapping object.
 
 :param __proxy__: a mapping object used as proxy
 
-Keys in the proxy are turned into attributes of this instance. If *__proxy__* is :const:`None`, the proxy is a new empty dictionary, otherwise *__proxy__* must be a mapping object, and *__proxy__* (or its proxy if it is itself of class :class:`odict`) is taken as proxy. The proxy is first updated with the keyword arguments *ka*. Example::
+Keys in the proxy are turned into attributes of this instance. If *__proxy__* is :const:`None`, the proxy is a new empty dictionary, otherwise *__proxy__* must be a mapping object, and *__proxy__* (or its proxy if it is itself of class :class:`owrap`) is taken as proxy. The proxy is first updated with the keyword arguments *ka*. Example::
 
-   p = dict(a=3,b=6); x = odict(p)
+   p = dict(a=3,b=6); x = owrap(p)
    assert x.a == 3
    del x.a; x.b += 7
    assert p == {'b':13}
@@ -73,14 +34,14 @@ Keys in the proxy are turned into attributes of this instance. If *__proxy__* is
     r = __proxy__
     if r is None: r = dict(ka)
     else:
-      if isinstance(r,odict): r = r.__proxy__
+      if isinstance(r,owrap): r = r.__proxy__
       else: assert isinstance(r,collections.abc.Mapping)
       if ka: r.update(ka)
     super().__setattr__('__proxy__',r)
   def __eq__(self,other):
-    return self.__proxy__ == (other.__proxy__ if isinstance(other,odict) else other)
+    return self.__proxy__ == (other.__proxy__ if isinstance(other,owrap) else other)
   def __ne__(self,other):
-    return self.__proxy__ != (other.__proxy__ if isinstance(other,odict) else other)
+    return self.__proxy__ != (other.__proxy__ if isinstance(other,owrap) else other)
   def __hash__(self): return hash(self.__proxy__)
   def __getattr__(self,a):
     try: return self.__proxy__[a]
@@ -94,56 +55,68 @@ Keys in the proxy are turned into attributes of this instance. If *__proxy__* is
   def __repr__(self): return repr(self.__proxy__)
 
 #==================================================================================================
-class fmtdict(dict):
+class fmtwrap(collections.abc.MutableMapping):
   r"""
-Instances of this class are dictionaries mapping keys to formatting functions (or :const:`None`). Each instance has an attribute :attr:`root`, a callable capable of returning a value for each key.
+Instances of this class provide a formatting wrapper to an underlying mapping object. Each instance keeps a list of visible keys in the proxy.
 
-* Method :meth:`content` iterates over the keys, and applies to each key the root then the formatting function associated to that key (or a default one if :const:`None`) and yields the pair of the key and the obtained result.
-* Method :meth:`describe` pretty-prints out the content.
-* Method :meth:`filter_` takes a dictionary *d* and format function *fmt* (default :const:`None`), and returns a copy of *d* where the keys starting with `_` are replaced by their copy without that character, while the others are stored in this object with value *fmt* if they don't already have a value .
+* accessing a key raises an error if it is not visible, otherwises returns the formatted value of that same key in the proxy
+* assigning a key to a value forwards the assignment to the proxy but memorises that the key is visible. If the key starts with `_`, that character is first dropped and the key is removed from the visible list.
+* deleting a key deletes it from both the proxy and the visible list.
+
+:param proxy: the proxy (possibly mutable) mapping object
 
 E.g.::
 
-   root = dict(u=3.141592,v='value of pi',w='something',x='something else').get
-   F = '{:.2f}'.format
-   c = fmtdict(root,u=F,v=str.title,w=None)
-   assert dict(c.content()) == dict(u='3.14',v='Value Of Pi',w="'something'")
-   del c['u','w']
-   assert c == dict(v=str.title)
-   r = c.filter_(dict(u=2.71828,v='a test',_w=42.,_x=451.),fmt=F)
-   assert r == dict(u=2.71828,v='a test',w=42.,x=451.)
-   assert dict(c)==(u=F,v=str.title)
-   assert dict(c.content()) == dict(u='3.14',v='Value Of Pi')
+   root = {}
+   r = fmtwrap(root)
+   r.fmt.update(pi='{:.3f}'.format,title=str.title)
+   r.update(pi=3.14,title='the value of pi',x='something',_y='another')
+   assert r==dict(pi='3.140',title='The Value Of Pi',x="'something'")
+   assert root==dict(pi=3.14,title='the value of pi',x='something',y='another')
+   del r['title']
+   assert r==dict(pi='3.140',x="'something'") and root==dict(pi=3.14,x='something',y='another')
+   r.update(pi=3.141592,_x='boo')
+   assert r==dict(pi='3.142') and root==dict(pi=3.141592,x='boo',y='another')
+   r.update(z=42)
+   r.fmt.update(z='{:x}'.format)
+   assert r==dict(pi='3.142',z='2a') and root==dict(pi=3.141592,x='boo',y='another',z=42)
   """
 #==================================================================================================
-  root:Callable[[str],Any]
-  def __init__(self,root,*a,**ka):
-    self.root = root
-    super().__init__(*a,**ka)
+  proxy:Dict[[str],Any]
+  r"""The proxy mapping object"""
+  fmt:Dict[[str],Callable[[Any],str]]
+  r"""The formatters (default is function :func:`repr`)"""
+
+  def __init__(self,proxy): self.fmt = {}; self.visible = {}; self.proxy = proxy
+  def __getitem__(self,k):
+    if self.visible.get(k): return self.fmt.get(k,repr)(self.proxy[k])
+    else: raise KeyError(k)
+  def __setitem__(self,k,v):
+    if k.startswith('_'): k = k[1:]; self.visible.pop(k,None)
+    else: self.visible[k] = True
+    self.proxy[k] = v
+  def __delitem__(self,k):
+    del self.visible[k]
+    del self.proxy[k]
+  def __iter__(self): yield from iter(self.visible)
+  def __len__(self): return len(self.visible)
 #--------------------------------------------------------------------------------------------------
-  def content(self,m=80):
+  def describe(self,tab:str='',lim:int=120,file=None):
+    r"""Pretty-prints out this instance. Each of the possibly multiple lines of output are indented by a prefix given by parameter *tab* and clipped at a number of characters (including the prefix) given by parameter *lim*."""
 #--------------------------------------------------------------------------------------------------
-    for k,fmt in self.items():
-      r = self.root(k)
-      if fmt is None:
-        r = ' '.join(repr(r).split())
-        if len(r)>m: r = r[:m-3]+'...'
-      else: r = fmt(r)
-      yield k,r
-#--------------------------------------------------------------------------------------------------
-  def describe(self,tab='',file=None):
-#--------------------------------------------------------------------------------------------------
-    fmtp = '{{:{}s}}= {{}}'.format(1+max(map(len,self))).format
-    for k,v in self.content(): print(tab,fmtp(k,v),file=file)
-    print(end='',flush=True)
-#--------------------------------------------------------------------------------------------------
-  def filter_(self,ka,fmt=None):
-#--------------------------------------------------------------------------------------------------
-    def f(k,v):
-      if k.startswith('_'): k = k[1:]
-      elif k not in self: self[k] = fmt
-      return k,v
-    return dict(f(k,v) for k,v in ka.items())
+    n = max(map(len,self))
+    lim = lim-len(tab)-n-3
+    if lim<10: print(tab,'...',file=file)
+    else:
+      def clip(s,lim=lim):
+        n = len(s)
+        if n<=lim: return s
+        n = (n-3)//2
+        return f'{s[:n]}...{s[-n:]}'
+      for k,v in self.items():
+        for i,s in enumerate(v.split('\n')):
+          print(tab,(k if i==0 else '').ljust(n),(' = ' if i==0 else '.. '),clip(s),sep='',file=file)
+    print(end='',file=file,flush=True)
 
 #==================================================================================================
 class forward:
@@ -537,33 +510,40 @@ Makes sure the file at *path* is a SQlite3 database with schema exactly equal to
       for sql in schema: conn.execute(sql)
 
 #==================================================================================================
-def gitcheck(path:str):
+def gitcheck(path:str,update:bool=False):
   r"""
 :param path: a path to a git repository
+:param update: whether to pull updates in remote branch
 
-Assumes that *path* denotes a git repository (target) which is a passive copy of another repository (source) on the same file system. If that is not the case, returns :const:`None`. Checks that the target repository is up-to-date, and updates it if needed using the git pull operation. Use the ``GIT_PYTHON_GIT_EXECUTABLE`` environment variable to set the Git executable if it is not the default ``/usr/bin/git``.
+Checks directory at *path*, assumed to be a git repository. If *update* is true, attempts to synch with its origin. Returns a tuple of status  (a string) followed by a list of details. The details are fields `ref`,`flags` and `note` from the :class:`git.remote.FetchInfo` object returned by the pull operation. Status is
+* `dirty`: repository is dirty (no details)
+* `up-to-date-pre`: repository is up to date (details only if remote exists)
+* `up-to-date-post`: repository was stale but has been successfully updated
+* `stale`: repository is stale but has not been touched
+
+Use the ``GIT_PYTHON_GIT_EXECUTABLE`` environment variable to set the Git executable if it is not the default ``/usr/bin/git``.
   """
 #==================================================================================================
   from git import Repo
-  trg = Repo(path)
-  try: r = trg.remote()
-  except ValueError: return # no remote
-  if not os.path.isdir(r.url): return # remote not on file system
-  src = Repo(r.url)
-  if src.is_dirty(): raise GitException('source-dirty',trg,src)
-  if trg.is_dirty(): raise GitException('target-dirty',trg,src)
-  if not all((f.flags & f.HEAD_UPTODATE) for f in r.pull()):
-    logger.info('Synched (git pull) %s',trg)
-    if src.commit()!=trg.commit(): raise GitException('synch-failed',trg,src)
-    return True
-class GitException (Exception): pass
+  r = Repo(path)
+  if r.is_dirty(): return 'dirty',
+  try: rm = r.remote()
+  except ValueError: return 'up-to-date-pre', # clean and no remote
+  i, = rm.pull(dry_run=not update)
+  d = str(i.ref),i.flags,i.note # detail
+  if i.flags & i.HEAD_UPTODATE: return 'up-to-date-pre',*d
+  if update:
+    if i.commit!=r.commit(): raise Exception('Git synch failed',d)
+    logger.info('git pull run on %s',r)
+    return 'up-to-date-post',*d
+  return 'stale',*d
 
 #==================================================================================================
-def gitcheck_package(pkgname:str):
+def gitcheck_package(pkgname:str,update=False):
   r"""
 :param pkgname: full name of a package
 
-Assumes that *pkgname* is the name of a python regular (non namespace) package and invokes :meth:`gitcheck` on its path. Reloads the package if git update was performed.
+Assumes that *pkgname* is the name of a python regular (non namespace) package and invokes :meth:`gitcheck` on its path. Reloads the package if up-to-date-post is returned.
   """
 #==================================================================================================
   from importlib.util import find_spec
@@ -571,10 +551,11 @@ Assumes that *pkgname* is the name of a python regular (non namespace) package a
   from sys import modules
   try: path, = find_spec(pkgname).submodule_search_locations
   except: raise ValueError('Not a regular package',pkgname)
-  if gitcheck(path):
+  c = gitcheck(path,update)
+  if c[0] == 'up-to-date-post':
     m = modules.get(pkgname)
-    if m is not None: logger.warning('Reloading %s ...',pkgname); reload(m)
-    return True
+    if m is not None: logger.warning('Reloading %s',pkgname); reload(m)
+  return c
 
 #==================================================================================================
 def SQLinit(engine:Union[str,sqlalchemy.Engine],meta:sqlalchemy.MetaData)->sqlalchemy.Engine:
@@ -620,8 +601,8 @@ def SQLinit(engine:Union[str,sqlalchemy.Engine],meta:sqlalchemy.MetaData)->sqlal
     engine.execute(insert(metainfo_table).values(created=datetime.now(),**meta.info))
     meta.create_all(bind=engine)
   return engine
-
 class SQLinitMetainfoException (Exception): pass
+SQLinit.MetainfoException = SQLinitMetainfoException
 
 #==================================================================================================
 class SQLHandler (logging.Handler):

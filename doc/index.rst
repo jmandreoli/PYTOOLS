@@ -14,6 +14,7 @@ Welcome to PYTOOLS's documentation!
    mod_ipywidgets.rst
    mod_polling.rst
    mod_torch.rst
+   mod_tensorboard_manager.rst
 
 Available types and functions
 -----------------------------

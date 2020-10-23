@@ -20,7 +20,7 @@ import logging; logger = logging.getLogger(__name__)
 
 import traitlets
 from ipywidgets import Label, IntSlider, FloatSlider, Text, HTML, IntText, FloatText, BoundedIntText, BoundedFloatText, Checkbox, Dropdown, Select, SelectMultiple, FloatProgress, Button, Output, Tab, Accordion, VBox, HBox, Box, Layout, Valid
-from . import ondemand, unid
+from . import unid
 
 #==================================================================================================
 def seq_browser(D:Sequence,start:int=1,pgsize:int=10)->VBox:

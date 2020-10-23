@@ -26,18 +26,12 @@ from pydispatch import Dispatcher, Property
 import torch
 from . import fmtwrap
 
-class udict (dict):
+#--------------------------------------------------------------------------------------------------
+class udict (dict): # a utility class; must be att the top
+#--------------------------------------------------------------------------------------------------
   def __getattr__(self,a): return self[a]
   def __delattr__(self,a): del self[a]
   def __setattr__(self,a,v): self[a] = v
-
-class namedfunc:
-  def __init__(self,r,f): self.repr,self.call=r,f
-  def __call__(self,*a,**ka): return self.call(*a,**ka)
-  def __repr__(self): return self.repr
-
-@contextmanager
-def training(obj,v): oldv = obj.training; obj.train(v); yield; obj.train(oldv)
 
 ProcessInfo = namedtuple('ProcessInfo','host pid started')
 DataInfo = namedtuple('DataInfo','source train valid test')
@@ -154,7 +148,7 @@ Evaluates the policy part of model :attr:`net` on *data* according to :attr:`mea
       W = 0.
       for inputs in data:
         inputs = to(inputs,self.device)
-        x = net.foreval(*inputs)
+        x = net.embedding(*inputs)
         measures = tuple(m(*x) for m in self.measures.values())
         w = len(x[0]); W += w
         avg_measures += (torch.stack(measures)-avg_measures)*(w/W)
@@ -193,10 +187,9 @@ A helper to attach measures to this run. *ka* maps names to strings denoting pre
   @classmethod
   def listener_factory(cls,name:str)->Callable[[Callable],Callable]:
     r"""
-Used as decorator to attach a listener factory (the decorated object, assumed callable) to a subclass *cls* of this class. The factory is available as method :meth:`add<name>Listener` using the provided *name*. Its invocation accepts a parameter :attr:`label` under which its result in stored in the listeners registry (by default, the label is the lowercase version of *name*). The decorated object may have an attribute :attr:`tools` listing the name of tool attributes, which are passed into as attribute :attr:`<name>_tools` of *cls*.
+Used as decorator to attach a listener factory (the decorated object, assumed callable) to a subclass *cls* of this class. The factory is then available as method :meth:`add<name>Listener` using the provided *name*. Its invocation accepts a parameter :attr:`label` under which its result in stored in the listeners registry (by default, the label is the lowercase version of *name*). The decorated object may have an attribute :attr:`tools` listing the name of tool attributes, which are passed into as attribute :attr:`<name>_tools` of *cls*.
 
 :param name: short name for the factory
-:param tools: a list of tool names
     """
 #--------------------------------------------------------------------------------------------------
     def app(f):
@@ -221,7 +214,7 @@ Used as decorator to attach a listener factory (the decorated object, assumed ca
     r"""
 Prints out the list of configuration attributes (with their values) as well as the list of listeners.
 
-:param tab: an indentation
+:param tab: an indentation string
 :param file: passed to the print function
     """
 #--------------------------------------------------------------------------------------------------
@@ -232,7 +225,9 @@ Prints out the list of configuration attributes (with their values) as well as t
 
   def __call__(self):
     with self.activate_listeners(): self.main()
-  def __repr__(self): i = self.process_info; return f'{self.__class__.__name__}({i.host}:{i.pid}|{i.started})'
+  def __repr__(self):
+    i = self.process_info
+    return f'{self.__class__.__name__}({i.host}:{i.pid}|{i.started.ctime()})'
 
 #==================================================================================================
 class SupervisedNet (torch.nn.Module):
@@ -245,39 +240,41 @@ Instances of this class are supervised task nets, composed of a main module comp
     self.policy = policy
     if loss is None: loss = torch.nn.CrossEntropyLoss()
     self.loss = loss
-  def forward(self,*inputs):
-    return self.loss(*self.foreval(*inputs))
-  def foreval(self,*inputs):
+  def embedding(self,*inputs):
     *feats,labels = inputs
     scores = self.policy(*feats)
     return scores,labels
+  def forward(self,*inputs):
+    return self.loss(*self.embedding(*inputs))
 
 #==================================================================================================
-class ClassificationInvRun (Run):
+class SupervisedInvRun (Run):
   r"""
 Instances of this class are runs in which the role of data and parameters are inverted.
   """
 #==================================================================================================
-  protos:torch.Tensor
-  projection:Callable[[torch.Tensor],None]
+  protos:Tuple[torch.Tensor,...]
+  projection:Callable[[torch.Tensor,...],None]
   train_data = (),
-  valid_data = None
-  test_data = None
-  class ProxyNet (torch.nn.Module):
+  valid_data = ()
+  test_data = ()
+  class InvNet (torch.nn.Module):
     def __init__(self,net,protos):
       super().__init__()
-      self.param = torch.nn.Parameter(protos)
-      self.labels = torch.arange(protos.shape[0])
-      self.__dict__.update(net=net) # so the net's params are not params of the proxy
-    def forward(self): return self.net.forward(self.param,self.labels)
+      *feats,labels = protos
+      self.params = torch.nn.ParameterList(torch.nn.Parameter(x) for x in feats)
+      self.labels = labels
+      self.__dict__.update(net=net) # so the net is not added as a submodule of the inv net
+    def forward(self):
+      return self.net(*self.params,self.labels)
   def main(self):
     net = self.net
     try:
-      self.net = self.ProxyNet(net,self.protos)
+      self.net = self.InvNet(self.net,self.protos)
       super().main()
     finally: self.net = net
   @staticmethod
-  def on_post_optim(run): run.projection(run.protos)
+  def on_post_optim(run): tuple(run.projection(p.data) for p in run.net.params)
 
 #==================================================================================================
 class RunListener:
@@ -294,7 +291,7 @@ class RunListener:
 @Run.listener_factory('Base')
 class RunBaseListener (RunListener):
   r"""
-Instances of this class provide basic listenering for supervised training runs.
+Instances of this class provide basic logging/monitoring for supervised training runs.
   """
 #==================================================================================================
 #--------------------------------------------------------------------------------------------------
@@ -363,7 +360,7 @@ Configures the callbacks of this listener, stored as attributes :attr:`on_open`,
 @Run.listener_factory('Mlflow')
 class RunMlflowListener (RunListener):
   r"""
-Instances of this class provide mlflow logging for supervised training runs.
+Instances of this class provide mlflow logging.
   """
 #==================================================================================================
   tools = 'load_model',
@@ -390,9 +387,9 @@ Computes a number of information loggers, stored in attributes :attr:`itrain`, :
     self.ivalid = None if ivalid is None else partial(log_metrics,ivalid)
     self.itest = None if itest is None else partial(log_metrics,itest)
     self.iprogress = lambda run: mlflow.set_tag('progress',run.progress)
-    self.checkpoint = lambda run: mlflow.pytorch.log_model(run.net.cpu(),f'model_{run.epoch:03d}')
+    self.checkpoint = lambda run: mlflow.pytorch.log_model(run.net,f'model_{run.epoch:03d}')
     self.open_mlflow = lambda run: mlflow.log_params(dict((k,v[:250]) for k,v in run._config.items()))
-    self.close_mlflow = lambda run: mlflow.pytorch.log_model(run.net.cpu(),'model')
+    self.close_mlflow = lambda run: mlflow.pytorch.log_model(run.net,'model')
     super().set(**ka)
 
 #--------------------------------------------------------------------------------------------------
@@ -445,6 +442,87 @@ Returns a model saved in a run.
     mlflow.set_experiment(exp)
     if run_id is None: run_id = mlflow.search_runs().run_id[0] # most recent run
     return mlflow.pytorch.load_model('runs:/{}/model{}'.format(run_id,('' if epoch is None else f'_{epoch:03d}')),**ka)
+
+#==================================================================================================
+@Run.listener_factory('Tensorboard')
+class RunTensorboardListener (RunListener):
+  r"""
+Instances of this class provide tensorboard logging for runs. Limited functionality if standalone tb is installed (without tf).
+  """
+#==================================================================================================
+#--------------------------------------------------------------------------------------------------
+  def set(self,
+    itrain:Callable[[Run],Tuple[Any,...]]=(lambda run: {'loss/train':run.loss}),
+    ivalid:Callable[[Run],Tuple[Any,...]]=(lambda run: dict((k+'/valid',v) for k,v in run.eval_valid().items())),
+    itest:Callable[[Run],Tuple[Any,...]] =(lambda run: dict((k+'/test',v) for k,v in run.eval_test().items())),
+    **ka
+  ):
+    r"""
+:param uri: mlflow tracking uri
+:param exp: experiment name
+:param itrain,ivalid,itest: function returning various info on a run
+
+Computes a number of information loggers, stored in attributes :attr:`itrain`, :attr:`ivalid`, :attr:`itest`, :attr:`iprogress`, :attr:`open_mlflow`, :attr:`close_mlflow`. The *uri* must refer to a valid mlflow experiment storage.
+    """
+#--------------------------------------------------------------------------------------------------
+    log_metrics = lambda f,run: tuple(run.tbwriter.add_scalar(k,v,run.step) for k,v in f(run).items())
+    self.itrain = None if itrain is None else partial(log_metrics,itrain)
+    self.ivalid = None if ivalid is None else partial(log_metrics,ivalid)
+    self.itest = None if itest is None else partial(log_metrics,itest)
+    self.iprogress = lambda run: run.tbwriter.add_scalar('progress',run.progress,run.step)
+    self.checkpoint = None # MISSING: checkpoint
+    self.open_tb = lambda run: tuple(run.tbwriter.add_text(k,'<pre>{}</pre>'.format(v.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')),0) for k,v in run._config.items())
+    self.close_tb = None # MISSING: save model
+    super().set(**ka)
+
+#--------------------------------------------------------------------------------------------------
+  def set2(self,
+    train_p:Union[Callable[[Run],bool],bool]=False,
+    valid_p:Union[Callable[[Run],bool],bool]=False,
+    checkpoint_p:Union[Callable[[Run],bool],bool]=False,
+    **ka
+  ):
+    r"""
+:param train_p: run selector for train info logging at each batch
+:param valid_p: run selector for validation info logging at each epoch
+:param checkpoint_p: run selector for checkpointing at each epoch
+
+Configures the callbacks of this listener, stored as attributes :attr:`on_open`, :attr:`on_close`, :attr:`on_batch`, :attr:`on_epoch`, using components defined by method :meth:`set`.
+    """
+#--------------------------------------------------------------------------------------------------
+    self.on_open = abs(PROC(self.open_tb))
+    self.on_close = abs(PROC(self.ivalid)+PROC(self.itest)+PROC(self.iprogress)+PROC(self.close_tb))
+    self.on_batch = abs(PROC(self.itrain)%train_p)
+    self.on_epoch = abs(PROC(self.iprogress)+PROC(self.ivalid)%valid_p+PROC(self.checkpoint)%checkpoint_p)
+    super().set2(**ka)
+
+#--------------------------------------------------------------------------------------------------
+  def set3(self,root=None,exp=None,**ka):
+    r"""
+Protects callbacks :attr:`on_open` and :attr:`on_close` from exceptions to make sure the mlflow run is not left in a corrupted state.
+    """
+#--------------------------------------------------------------------------------------------------
+    from torch.utils.tensorboard import SummaryWriter
+    from pathlib import Path
+    from datetime import datetime
+    import shutil
+    root = Path(root).resolve()
+    assert root.is_dir()
+    exp = root/exp
+    exp.mkdir(exist_ok=True)
+    def on_open(run,f=self.on_open):
+      path = exp/'{0}_{1.host}_{1.pid}'.format(datetime.now().strftime('%Y%m%d_%H%M%S'),run.process_info)
+      run.tbwriter = SummaryWriter(log_dir=str(path))
+      try: f(run)
+      except:
+        run.tbwriter.close()
+        if path.exists(): shutil.rmtree(path)
+        raise
+    def on_close(run,f=self.on_close):
+      try: f(run)
+      finally: run.tbwriter.close()
+    self.on_open,self.on_close = on_open,on_close
+    super().set3(**ka)
 
 #==================================================================================================
 class ClassificationDatasource:
@@ -627,10 +705,11 @@ class Stepper:
   def __init__(self,run):
     from socket import getfqdn
     from os import getpid
-    from time import ctime, time, process_time
+    from datetime import datetime
+    from time import time, process_time
     started = None
     self.marks = marks = {}
-    run.process_info = ProcessInfo(host=getfqdn(),pid=getpid(),started=ctime())
+    run.process_info = ProcessInfo(host=getfqdn(),pid=getpid(),started=datetime.now())
     def reset():
       nonlocal started
       marks.clear()
@@ -651,6 +730,15 @@ Clones a :class:`torch.Module` *m* into another one *out* or a new one if *out* 
   if out is None: out = deepcopy(m)
   out.load_state_dict(m.state_dict())
   return out
+
+#--------------------------------------------------------------------------------------------------
+@contextmanager
+def training(obj,v):
+  r"""
+Returns a context which saves the value of :attr:`training` in *obj* on enter and restores it on exit.
+  """
+#--------------------------------------------------------------------------------------------------
+  oldv = obj.training; obj.train(v); yield; obj.train(oldv)
 
 #--------------------------------------------------------------------------------------------------
 def to(L,device): return ((t.to(device) if isinstance(t,torch.Tensor) else t) for t in L)

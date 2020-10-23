@@ -5,3 +5,4 @@ Makefile
 archive
 docmod
 pkg
+tensorboard_manager.py

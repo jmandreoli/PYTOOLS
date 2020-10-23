@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Tensorboard experiment manager: ${experiment}</title>
+
+  <style type="text/css">
+body {height:100%;}
+form.manage {position:fixed;top:0;left:35%;z-index:10000;background-color:orange;border:thin solid white;opacity:1;}
+form.manage select {font-size:xx-small;padding:1px;}
+form.manage button {font-size:xx-small;padding:1px;border:thin solid black;}
+form.manage td { vertical-align: top;}
+iframe.main {border:none;position:fixed;width:100%;height:100%;}
+table.listing {position:absolute;z-index:10001;background-color:white;border:thin solid black;opacity:1;}
+  </style>
+
+  <script type="text/javascript">
+// A very basic ajax wrapper
+toserver = function (method,op,onsuccess,onfailure) {
+  var h = new XMLHttpRequest()
+  if (onsuccess==null) { onsuccess = window.alert }
+  if (onfailure==null) { onfailure = function(sc){window.alert('Status code: '+sc)} }
+  h.onreadystatechange = function(){
+    if (h.readyState === XMLHttpRequest.DONE) {
+      if (h.status === 200) { onsuccess(h.responseText) }
+      else { onfailure(h.status) }
+    }
+  }
+  h.open(method,'/_${experiment}?op='+op,true)
+  return h
+}
+
+// When selecting an option in <select name="experiments">
+// -> Changes the view to the selected experiment
+select_experiment = function (form) {
+  var x = form.experiments.options[form.experiments.selectedIndex].value
+  if (x == '${experiment}') { return }
+  window.location.replace(window.location.origin+'/'+x)
+}
+// When clicking on <select name="experiments"> to open the options
+// -> updates the available options
+update_experiments = function (form) {
+  cont = function (elist) {
+    elist = JSON.parse(elist)
+    var olist = form.experiments.options
+    if (olist.length==elist.length) {
+      var allequal = true
+      for (var i=0;i<olist.length;i++) { if (olist[i].value!== elist[i]) { allequal = false; break } }
+      if (allequal) { return }
+    }
+    var options = []
+    for (var i=0;i<elist.length;i++) {
+      var x = elist[i]
+      options.push('<option'+(x=='${experiment}'?' selected="selected"':'')+'>'+x+'</option>')
+    }
+    form.experiments.innerHTML = options.join('')
+  }
+  toserver('GET','experiments&date='+Date.now(),cont).send()
+}
+
+// When clicking on <button name="delete">
+// -> deletes the current experiment (after confirm) and changes the view to an default experiment
+delete_experiment = function (form) {
+  if (!window.confirm('Are you sure you want to delete experiment "${experiment}" and all its runs?')) { return }
+  toserver('POST','delete',onsuccess=function(msg){window.alert(msg);window.location.replace(window.location.origin+'/')}).send()
+}
+
+// When clicking on <button name="restart">
+// -> reboot the tensorboard server associated with the current experiment
+restart_server = function (form) {
+  toserver('POST','restart').send()
+}
+
+// When clicking on <button name="mruns">
+// -> if <select name="runs"> is invisible: updates its list of runs and makes it visible
+// -> otherwise: makes it invisible.
+manage_runs = function (form) {
+  cont = function (rlist) {
+    rlist = JSON.parse(rlist)
+    var options = []
+    for (var i=0;i<rlist.length;i++) {
+      var x = rlist[i]
+      options.push('<option>'+x+'</option>')
+    }
+    form.runs.innerHTML = options.join('')
+    form.mruns.nextElementSibling.style.display = ''
+  }
+  if (form.mruns.nextElementSibling.style.display==='none') {
+    toserver('GET','runs&date='+Date.now(),cont).send()
+  }
+  else { form.mruns.nextElementSibling.style.display = 'none' }
+}
+
+// When clicking on <button name="delruns">
+// -> Delete the selected runs from <select name="runs"> and makes it invisible
+delete_runs = function(form) {
+  var data = []
+  var options = form.runs.options
+  for (var i=0;i<options.length;i++){
+    var x = options[i]
+    if (x.selected) {data.push('remove='+encodeURIComponent(x.value))}
+  }
+  if (data) {
+    cont = function (msg) {
+      window.alert(msg);
+      form.mruns.nextElementSibling.style.display = 'none'
+    }
+    data = data.join('&')
+    h = toserver('POST','delruns',cont)
+    h.setRequestHeader('Content-Type','application/x-www-form-urlencoded')
+    h.send(data)
+  }
+  else { window.alert('No runs selected.')}
+}
+  </script>
+</head>
+
+<body>
+  <form class="manage">
+    <table>
+      <tr>
+        <td>
+          <select name="experiments" onclick="update_experiments(this.form)" onchange="select_experiment(this.form)" title="Displays the current experiment. Lets you select another experiment from your tensorboard store."><option selected="selected">${experiment}</option></select>
+        </td>
+        <td>
+          <button name="server" type="button" onclick="restart_server(this.form)" title="Restarts the tensorboard server associated with the current experiment.">restart</button>
+        </td>
+        <td>
+          <button name="mruns" type="button" onclick="manage_runs(this.form)" title="Toggles the list of all the runs in the current experiment.">runs</button>
+          <table class="listing" style="display:none">
+            <tr><td><select name="runs" size="5" multiple="multiple" title="Lets you select one or more runs from the current experiment."></select></td></tr>
+            <tr><td><button name="delruns" type="button" onclick="delete_runs(this.form)" title="Deletes the selected runs.">delete</button></td></tr>
+          </table>
+        </td>
+        <td>
+          <button name="delete" type="button" onclick="delete_experiment(this.form)" title="Deletes the current experiment (after confirmation) and reloads a default experiment.">delete</button>
+        </td>
+      </tr>
+    </table>
+  </form>
+  <iframe class="main" src="${tensorboard}"></iframe>
+</body>
+</html>

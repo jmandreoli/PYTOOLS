@@ -4,23 +4,22 @@
 # Language:             python
 # Purpose:              A server of tensorboard servers
 #
-
 r"""
 :mod:`PYTOOLS.tensorboard_manager` --- A server of tensorboard servers
 ======================================================================
-This module implements a wsgi application which launches, then manages interactions with, a set of tensorboard servers.
+This module implements a wsgi application which launches, then manages interactions with, a set of tensorboard servers. Note that the app kills all existing tensorboard processes at startup.
 
 * With the default wsgi server included in the python distribution, the tensorboard manager is started by:
 
   .. code-block:: sh
 
-     python -m PYTOOLS.tensorboard-manager [ARGS]
+     python -m PYTOOLS.tensorboard_manager [ARGS]
 
   Run the following to obtain information on ARGS:
 
   .. code-block:: sh
 
-     python -m PYTOOLS.tensorboard-manager --help
+     python -m PYTOOLS.tensorboard_manager --help
 
 * With gunicorn, the command is:
 
@@ -35,7 +34,7 @@ Available types and functions
 -----------------------------
 """
 
-import falcon,time,psutil,sys,subprocess,shutil,json,base64
+import falcon,time,psutil,sys,shutil,json
 from pathlib import Path
 from collections import namedtuple
 from functools import partial
@@ -51,7 +50,7 @@ class ExperimentResource:
   r"""
 A resource of this class represents a store of Tensorboard experiments.
 
-:param store: the path to an existing directory (each subdirectory is an experiment, i.e. a set of tensorboard logs)
+:param store: the path to an existing directory, each member of which is an experiment, i.e. a set of tensorboard logs
   """
 #==================================================================================================
   def __init__(self,store): self.store = store; self.procs = {}
@@ -130,7 +129,7 @@ def tensorboard_start(logdir:str,host:str,_Dummy=namedtuple('DummyTensorboard','
 Starts a tensorboard server listening to host *host* at a random free port. Returns the :class:`subprocess.Popen` instance, augmented with attribute :attr:`url` set to the URL for interaction with the tensorboard server.
   """
 #==================================================================================================
-  proc = subprocess.Popen((str(Path(sys.executable).with_name('tensorboard')),'--host',host,'--port','0','--logdir',str(logdir)),text=True)
+  proc = Popen((str(Path(sys.executable).with_name('tensorboard')),'--host',host,'--port','0','--logdir',str(logdir)),text=True)
   p = psutil.Process(proc.pid)
   for _ in range(3):
     if (L:=p.connections()) and (a:=L[0]).status=='LISTEN':
@@ -154,7 +153,7 @@ def main(store=None):
   r"""
 Returns the main wsgi application object (to be used by the wsgi server).
 
-:param store: the store of tensorboard experiments to manage. Default is ```~/.tensorboard/store```.
+:param store: the store of tensorboard experiments to manage. Default is ``~/.tensorboard/store``.
   """
 #==================================================================================================
   if store is None: store = Path.home()/'.tensorboard'/'store'
@@ -164,11 +163,11 @@ Returns the main wsgi application object (to be used by the wsgi server).
   app = falcon.API(middleware=[LoggingMiddleware(sys.stderr)])
   app.req_options.auto_parse_form_urlencoded = True
   rsc = ExperimentResource(store)
-  class HardResource:
+  class HardwiredResource:
     def __init__(self,val): self.val = val
     def on_get(self,req,resp): resp.content_type,resp.body = self.val
-  app.add_route('/favicon.ico',HardResource(FAVICON))
-  app.add_route('/.dummytensorboard',HardResource(('text/plain','The Tensorboard server could not be started')))
+  app.add_route('/favicon.ico',HardwiredResource(FAVICON))
+  app.add_route('/.dummytensorboard',HardwiredResource(('text/plain','The Tensorboard server could not be started')))
   app.add_route('/_{exp}',rsc,suffix='manage')
   app.add_route('/{exp}',rsc)
   return app

@@ -4,7 +4,6 @@
 # Language:             python
 # Purpose:              Some utilities in Python
 #
-
 from __future__ import annotations
 from typing import Any, Union, Callable, Iterable, Mapping, Tuple
 import logging; logger = logging.getLogger(__name__)
@@ -14,90 +13,89 @@ import os, re, collections
 #==================================================================================================
 class owrap:
   r"""
-Objects of this class present an attribute oriented interface to an underlying proxy mapping object.
+Objects of this class present an attribute oriented proxy interface to an underlying mapping object.
 
-:param __proxy__: a mapping object used as proxy
+:param __ref__: a reference to a (possibly mutable) mapping object, of which this instance is to be a proxy
 
-Keys in the proxy are turned into attributes of this instance. If *__proxy__* is :const:`None`, the proxy is a new empty dictionary, otherwise *__proxy__* must be a mapping object, and *__proxy__* (or its proxy if it is itself of class :class:`owrap`) is taken as proxy. The proxy is first updated with the keyword arguments *ka*. Example::
+Keys in the reference are turned into attributes of the proxy. If *__ref__* is :const:`None`, the reference is a new empty dictionary, otherwise *__ref__* must be a mapping object, and *__ref__* (or its own reference if it is itself of class :class:`owrap`) is taken as reference. The reference is first updated with the keyword arguments *ka*. Example::
 
-   p = dict(a=3,b=6); x = owrap(p)
+   r = dict(a=3,b=6); x = owrap(r)
    assert x.a == 3
    del x.a; x.b += 7
-   assert p == {'b':13}
-   p['c'] = 42
+   assert r == {'b':13}
+   r['c'] = 42
    assert x.c == 42
-   assert x == p
+   assert x == r
   """
 #==================================================================================================
-  __slot__ = '__proxy__',
-  def __init__(self,__proxy__:Mapping[str,Any]=None,**ka):
-    r = __proxy__
+  __slot__ = '__ref__',
+  def __init__(self,__ref__:Mapping[str,Any]=None,**ka):
+    r = __ref__
     if r is None: r = dict(ka)
     else:
-      if isinstance(r,owrap): r = r.__proxy__
+      if isinstance(r,owrap): r = r.__ref__
       else: assert isinstance(r,collections.abc.Mapping)
       if ka: r.update(ka)
-    super().__setattr__('__proxy__',r)
+    super().__setattr__('__ref__',r)
   def __eq__(self,other):
-    return self.__proxy__ == (other.__proxy__ if isinstance(other,owrap) else other)
+    return self.__ref__ == (other.__ref__ if isinstance(other,owrap) else other)
   def __ne__(self,other):
-    return self.__proxy__ != (other.__proxy__ if isinstance(other,owrap) else other)
-  def __hash__(self): return hash(self.__proxy__)
+    return self.__ref__ != (other.__ref__ if isinstance(other,owrap) else other)
+  def __hash__(self): return hash(self.__ref__)
   def __getattr__(self,a):
-    try: return self.__proxy__[a]
+    try: return self.__ref__[a]
     except KeyError: raise AttributeError(a) from None
   def __setattr__(self,a,v):
-    self.__proxy__[a] = v
+    self.__ref__[a] = v
   def __delattr__(self,a):
-    try: del self.__proxy__[a]
+    try: del self.__ref__[a]
     except KeyError: raise AttributeError(a) from None
-  def __str__(self): return str(self.__proxy__)
-  def __repr__(self): return repr(self.__proxy__)
+  def __str__(self): return str(self.__ref__)
+  def __repr__(self): return repr(self.__ref__)
 
 #==================================================================================================
 class fmtwrap(collections.abc.MutableMapping):
   r"""
-Instances of this class provide a formatting wrapper to an underlying mapping object. Each instance keeps a list of visible keys in the proxy.
+Instances of this class provide a formatting wrapper to an underlying mapping object. Each instance keeps a list of visible keys in the reference object.
 
-* accessing a key raises an error if it is not visible, otherwises returns the formatted value of that same key in the proxy
-* assigning a key to a value forwards the assignment to the proxy but memorises that the key is visible. If the key starts with `_`, that character is first dropped and the key is removed from the visible list.
-* deleting a key deletes it from both the proxy and the visible list.
+* accessing a key raises an error if it is not visible, otherwises returns the formatted value of that same key in the reference object
+* assigning a key to a value forwards the assignment to the reference object, and also memorises the key as visible. If the key starts with `_`, that character is first dropped and the key is, on the contrary, removed from the visible list if present.
+* deleting a key deletes it from both the reference object and the visible list.
 
-:param proxy: the proxy (possibly mutable) mapping object
+:param reference: the reference (possibly mutable) mapping object, of which this instance is to be a partial proxy
 
 E.g.::
 
-   root = {}
-   r = fmtwrap(root)
-   r.fmt.update(pi='{:.3f}'.format,title=str.title)
-   r.update(pi=3.14,title='the value of pi',x='something',_y='another')
-   assert r==dict(pi='3.140',title='The Value Of Pi',x="'something'")
-   assert root==dict(pi=3.14,title='the value of pi',x='something',y='another')
-   del r['title']
-   assert r==dict(pi='3.140',x="'something'") and root==dict(pi=3.14,x='something',y='another')
-   r.update(pi=3.141592,_x='boo')
-   assert r==dict(pi='3.142') and root==dict(pi=3.141592,x='boo',y='another')
-   r.update(z=42)
-   r.fmt.update(z='{:x}'.format)
-   assert r==dict(pi='3.142',z='2a') and root==dict(pi=3.141592,x='boo',y='another',z=42)
+   r = {}; x = fmtwrap(r)
+   x.fmt.update(pi='{:.3f}'.format,title=str.title)
+   x.update(pi=3.14,title='the value of pi',a='something',_b='another')
+   assert x==dict(pi='3.140',title='The Value Of Pi',a="'something'")
+   assert r==dict(pi=3.14,title='the value of pi',a='something',b='another')
+   del x['title']
+   assert x==dict(pi='3.140',a="'something'") and r==dict(pi=3.14,a='something',b='another')
+   x.update(pi=3.141592,_a='boo')
+   assert x==dict(pi='3.142') and r==dict(pi=3.141592,a='boo',b='another')
+   x.update(z=42)
+   x.fmt.update(z='{:x}'.format)
+   assert x==dict(pi='3.142',z='2a') and r==dict(pi=3.141592,a='boo',b='another',z=42)
   """
 #==================================================================================================
-  proxy:Dict[[str],Any]
-  r"""The proxy mapping object"""
+  ref:Dict[[str],Any]
+  r"""The reference mapping object"""
   fmt:Dict[[str],Callable[[Any],str]]
   r"""The formatters (default is function :func:`repr`)"""
 
-  def __init__(self,proxy): self.fmt = {}; self.visible = {}; self.proxy = proxy
+  def __init__(self,ref): self.fmt = {}; self.visible = {}; self.ref = ref
   def __getitem__(self,k):
-    if self.visible.get(k): return self.fmt.get(k,repr)(self.proxy[k])
+    if self.visible.get(k): return self.fmt.get(k,repr)(self.ref[k])
     else: raise KeyError(k)
   def __setitem__(self,k,v):
     if k.startswith('_'): k = k[1:]; self.visible.pop(k,None)
     else: self.visible[k] = True
-    self.proxy[k] = v
+    self.ref[k] = v
   def __delitem__(self,k):
     del self.visible[k]
-    del self.proxy[k]
+    del self.ref[k]
   def __iter__(self): yield from iter(self.visible)
   def __len__(self): return len(self.visible)
 #--------------------------------------------------------------------------------------------------

@@ -27,7 +27,7 @@ import torch
 from . import fmtwrap
 
 #--------------------------------------------------------------------------------------------------
-class udict (dict): # a utility class; must be att the top
+class udict (dict): # a utility class reflecting a dictionary as an object (attributes=keys); must be at the top
 #--------------------------------------------------------------------------------------------------
   def __getattr__(self,a): return self[a]
   def __delattr__(self,a): del self[a]
@@ -64,6 +64,19 @@ Attributes (\*) must be instantiated at creation time.
   r"""(\*)The optimiser factory"""
   stepper: Stepper
   r"""Time and step keeper"""
+  loss: Accumulator
+  r"""Accumulator holding the average loss since beginning of current epoch"""
+  listeners: Mapping[str,RunListener]
+  r"""Named listener objects"""
+  measures: Mapping[str,Accumulator]
+  r"""Named measure objects"""
+  ## set at execution
+  progress: float
+  r"""Between 0. and 1., stops the run when 1. is reached (must be updated by a listener)"""
+  epoch: int
+  r"""Number of completed epochs"""
+  batch: int
+  r"""Number of completed batches within current epoch"""
   walltime: float
   r"""Wall time elapsed (in sec) between last invocations of :meth:`reset` and :meth:`tick` on :attr:`stepper`"""
   proctime: float
@@ -74,23 +87,15 @@ Attributes (\*) must be instantiated at creation time.
   r"""Function returning the validation performance at the end of the last completed step (cached)"""
   eval_test: Callable[[],Tuple[float,float]]
   r"""Function returning the test performance at the end of the last completed step (cached)"""
-  ## set at execution
-  progress: float
-  r"""Between 0. and 1., stops the run when 1. is reached (must be updated by a listener)"""
-  epoch: int
-  r"""Number of completed epochs"""
-  batch: int
-  r"""Number of completed batches within current epoch"""
-  loss: float
-  r"""Average loss since beginning of current epoch"""
 
 #--------------------------------------------------------------------------------------------------
   def __init__(self,**ka):
 #--------------------------------------------------------------------------------------------------
     self._config = fmtwrap(self.__dict__)
     self.stepper = Stepper(self)
-    self.listeners = udict() # listeners register
+    self.listeners = udict()
     self.measures = udict()
+    self.loss = MeanAccumulator()
     self.config(**ka)
     self.bind(**dict((ev,t) for ev in self._events_ if (t:=getattr(self,'on_'+ev,None)) is not None))
   def config(self,**ka): self._config.update(**ka)
@@ -108,7 +113,7 @@ Executes the run. Must be defined in subclasses. This implementation raises an e
     with training(net,True):
       self.stepper.reset()
       self.progress = 0.; self.epoch = 0
-      self.batch = 0; self.loss = 0.
+      self.batch = 0; self.loss.ini()
       self.emit('open',self)
       try:
         while self.progress<1.:
@@ -122,14 +127,13 @@ Executes the run. Must be defined in subclasses. This implementation raises an e
             self.emit('pre_optim',self)
             optimiser.step()
             self.emit('post_optim',self)
-            self.batch += 1
-            self.loss += (loss.item()-self.loss)/self.batch
+            self.batch += 1; self.loss.inc(loss.item())
             del inputs,loss # free memory before emitting (not sure this works)
             self.stepper.tick()
             self.emit('batch',self)
             if self.progress>=1.: return
           self.epoch += 1
-          self.batch = 0; self.loss = 0.
+          self.batch = 0; self.loss.ini()
           self.emit('epoch',self)
       finally:
         self.emit('close',self)
@@ -142,17 +146,15 @@ Evaluates the policy part of model :attr:`net` on *data* according to :attr:`mea
 :param data: a list of data entries
     """
 #--------------------------------------------------------------------------------------------------
-    avg_measures = 0.
+    acs = self.measures.values()
     net = self.net
+    for ac in acs: ac.ini()
     with training(net,False),torch.no_grad():
-      W = 0.
       for inputs in data:
         inputs = to(inputs,self.device)
         x = net.embedding(*inputs)
-        measures = tuple(m(*x) for m in self.measures.values())
-        w = len(x[0]); W += w
-        avg_measures += (torch.stack(measures)-avg_measures)*(w/W)
-    return dict(zip(self.measures,avg_measures.cpu().numpy()))
+        for ac in acs: ac.inc(x)
+    return dict(zip(self.measures,(ac.val() for ac in acs)))
 
 #--------------------------------------------------------------------------------------------------
   def eval_cache(self,data):
@@ -168,20 +170,23 @@ Returns a cached version of :meth:`eval` on *data*. The cache is cleared at each
     return cache
 
 #--------------------------------------------------------------------------------------------------
-  def predef_measures(self,**ka):
+  def addMeasures(self,**ka):
     r"""
 A helper to attach measures to this run. *ka* maps names to strings denoting predefined measures.
     """
 #--------------------------------------------------------------------------------------------------
-    def lookup(n):
-      ka = {}
-      if isinstance(n,tuple): n,ka = n
-      return self.predef_measures_lookup[n](**ka)
-    self.measures.update((name,lookup(n)) for name,n in ka.items())
-  predef_measures_lookup = {
-    'ZeroOne': (lambda reduction='mean',Agg={'mean':torch.mean,'sum':torch.sum,'none':(lambda x:x)}: lambda scores,labels,agg=Agg[reduction]: agg((torch.argmax(scores,1)==labels).float())),
-    **dict((p[:-4],getattr(torch.nn,p)) for p in dir(torch.nn) if p.endswith('Loss'))
-  }
+    def accumulator(s):
+      if isinstance(s,str): s,*k = s.split(':',1); k = ({'reduction':k[0]} if k else {}); s = self.predef_measures[s](**k)
+      elif isinstance(s,tuple): s,k = s; s = self.predef_measures[s](**k)
+      elif not callable(s): raise ValueError('Measure object not callable')
+      try: r = s.reduction
+      except AttributeError: raise ValueError('Missing \'reduction\' attribute in measure object')
+      if r=='mean': return AvgAccumulator(lambda x,s=s: (len(x[0]),s(*x).item()))
+      elif r=='sum': return SumAccumulator(lambda x,s=s: s(*x).item())
+      elif r=='none': return CatAccumulator(lambda x,s=s: s(*x).cpu().numpy())
+      else: raise ValueError('Unsupported reduction in measure object')
+    self.measures.update((name,accumulator(s)) for name,s in ka.items())
+  predef_measures = dict((p[:-4],getattr(torch.nn,p)) for p in dir(torch.nn) if p.endswith('Loss'))
 
 #--------------------------------------------------------------------------------------------------
   @classmethod
@@ -281,7 +286,7 @@ class RunListener:
   r"""Base class for run listeners"""
 #==================================================================================================
   def __init__(self,**ka): self._config = fmtwrap({}); self.config(**ka)
-  def config(self,**ka): self._config.update(**ka); self.set(**self._config.proxy)
+  def config(self,**ka): self._config.update(**ka); self.set(**self._config.ref)
   def set(self,**ka): self.set2(**ka)
   def set2(self,**ka): self.set3(**ka)
   def set3(self,active=True): self.active = active
@@ -301,7 +306,7 @@ Instances of this class provide basic logging/monitoring for supervised training
       (lambda run: (run.walltime,run.step,run.epoch,run.batch))
     ),
     status_fmt:Tuple[str,str]=('%6s %6s %4s/%5s','%6.1f %6d %4d/%5d'),
-    itrain:Callable[[Run],Mapping[str,Any]]=(lambda run: dict(tloss=run.loss)),
+    itrain:Callable[[Run],Mapping[str,Any]]=(lambda run: dict(tloss=run.loss.val())),
     ivalid:Callable[[Run],Mapping[str,Any]]=(lambda run: run.eval_valid()),
     itest:Callable[[Run],Mapping[Any]]=(lambda run: run.eval_test()),
     fmt:Mapping[str,Callable[[Any],str]]={},
@@ -366,7 +371,7 @@ Instances of this class provide mlflow logging.
   tools = 'load_model',
 #--------------------------------------------------------------------------------------------------
   def set(self,uri:str,exp:str,
-    itrain:Callable[[Run],Tuple[Any,...]]=(lambda run: dict(tloss=run.loss)),
+    itrain:Callable[[Run],Tuple[Any,...]]=(lambda run: dict(tloss=run.loss.val())),
     ivalid:Callable[[Run],Tuple[Any,...]]=(lambda run: run.eval_valid()),
     itest:Callable[[Run],Tuple[Any,...]] =(lambda run: run.eval_test()),
     **ka
@@ -452,7 +457,7 @@ Instances of this class provide tensorboard logging for runs. Limited functional
 #==================================================================================================
 #--------------------------------------------------------------------------------------------------
   def set(self,
-    itrain:Callable[[Run],Tuple[Any,...]]=(lambda run: {'loss/train':run.loss}),
+    itrain:Callable[[Run],Tuple[Any,...]]=(lambda run: {'loss/train':run.loss.val()}),
     ivalid:Callable[[Run],Tuple[Any,...]]=(lambda run: dict((k+'/valid',v) for k,v in run.eval_valid().items())),
     itest:Callable[[Run],Tuple[Any,...]] =(lambda run: dict((k+'/test',v) for k,v in run.eval_test().items())),
     **ka
@@ -743,3 +748,54 @@ Returns a context which saves the value of :attr:`training` in *obj* on enter an
 #--------------------------------------------------------------------------------------------------
 def to(L,device): return ((t.to(device) if isinstance(t,torch.Tensor) else t) for t in L)
 #--------------------------------------------------------------------------------------------------
+
+class Accumulator:
+  def __init__(self,f=(lambda x: x)): self.f = f
+  def ini(self): raise NotImplementedError()
+  def inc(self,x): raise NotImplementedError()
+  def val(self): raise NotImplementedError()
+
+#--------------------------------------------------------------------------------------------------
+class AvgAccumulator (Accumulator):
+#--------------------------------------------------------------------------------------------------
+  # self.f expected to return a pair of scalars (weight,value)
+  def ini(self): self.W = self.Z = 0.
+  def inc(self,x): w,z = self.f(x); self.W += w; self.Z += (z-self.Z)*(w/self.W)
+  def val(self): return self.Z
+
+#--------------------------------------------------------------------------------------------------
+class MeanAccumulator (Accumulator):
+#--------------------------------------------------------------------------------------------------
+  # self.f expected to return a single scalar (value)
+  def ini(self): self.n = self.Z = 0.
+  def inc(self,x): self.n += 1.; self.Z += (self.f(x)-self.Z)/self.n
+  def val(self): return self.Z
+
+#--------------------------------------------------------------------------------------------------
+class SumAccumulator (Accumulator):
+#--------------------------------------------------------------------------------------------------
+  # self.f expected to return a single scalar (value)
+  def ini(self): self.Z = 0.
+  def inc(self,x): self.Z += self.f(x)
+  def val(self): return self.Z
+
+#--------------------------------------------------------------------------------------------------
+class CatAccumulator (Accumulator):
+#--------------------------------------------------------------------------------------------------
+  # self.f expected to return a numpy array
+  def ini(self): self.Z = []
+  def inc(z,x): self.Z.append(self.f(x))
+  def val(self): from numpy import concatenate; return concatenate(self.Z)
+
+#--------------------------------------------------------------------------------------------------
+class Measure:
+#--------------------------------------------------------------------------------------------------
+  def __init__(self,reduction='mean'):
+    Agg={'mean':torch.mean,'sum':torch.sum,'none':(lambda x:x)}
+    self.agg = Agg[reduction]
+    self.reduction = reduction
+#--------------------------------------------------------------------------------------------------
+class ZeroOneMeasure (Measure):
+#--------------------------------------------------------------------------------------------------
+  def __call__(self,scores,labels): return self.agg((torch.argmax(scores,1)==labels).float())
+Run.predef_measures['ZeroOne'] = ZeroOneMeasure

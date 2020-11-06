@@ -20,9 +20,9 @@ import logging; logger = logging.getLogger(__name__)
 
 from collections import namedtuple
 from contextlib import contextmanager
-from functools import partial, update_wrapper
+from functools import partial
 from copy import deepcopy
-from pydispatch import Dispatcher, Property
+from pydispatch import Dispatcher
 import torch
 from . import fmtwrap
 
@@ -43,7 +43,7 @@ Instances of this class are callables, taking no argument and returning no value
 
 Runs may emit messages during their execution. Each message is passed a single argument, which is the run itself, so runs can be controlled by message listeners. Listeners (instances of class :class:`RunListener`) are special cases of listeners. A run can invoke a method :meth:`add<name>Listener` to attach a listener of type `<name>` to itself. Some such methods are defined in subclasses of :class:`RunListener` (see their documentation for details).
 
-Attributes (\*) must be instantiated at creation time.
+Attributes (\*) must be explicitly instantiated at creation time.
   """
 #==================================================================================================
 
@@ -128,7 +128,7 @@ Executes the run. Must be defined in subclasses. This implementation raises an e
             optimiser.step()
             self.emit('post_optim',self)
             self.batch += 1; self.loss.inc(loss.item())
-            del inputs,loss # free memory before emitting (not sure this works)
+            del inputs # free memory before emitting
             self.stepper.tick()
             self.emit('batch',self)
             if self.progress>=1.: return
@@ -141,7 +141,7 @@ Executes the run. Must be defined in subclasses. This implementation raises an e
 #--------------------------------------------------------------------------------------------------
   def eval(self,data:Iterable[Tuple[float,Tuple[torch.Tensor,...],Tuple[torch.Tensor,...]]])->Tuple[float,...]:
     r"""
-Evaluates the policy part of model :attr:`net` on *data* according to :attr:`measures`. The training batches are not assumed constant sized.
+Evaluates the embedding part of model :attr:`net` on *data* according to :attr:`measures`. The batches are not assumed constant sized.
 
 :param data: a list of data entries
     """
@@ -170,27 +170,32 @@ Returns a cached version of :meth:`eval` on *data*. The cache is cleared at each
     return cache
 
 #--------------------------------------------------------------------------------------------------
-  def addMeasures(self,**ka):
+  @classmethod
+  def measure_factory(cls,name:str,doc:bool=True)->Callable[[Callable],Callable]:
     r"""
-A helper to attach measures to this run. *ka* maps names to strings denoting predefined measures.
+Used as decorator to attach a measure factory (the decorated object, assumed callable) to a subclass *cls* of this class. The factory is then available as method :meth:`add<name>Measure` using the provided *name*. Its invocation accepts a parameter :attr:`label` under which its result in stored in the measures registry (by default, the label is the lowercase version of *name*).
+
+:param name: short name for the factory
     """
 #--------------------------------------------------------------------------------------------------
-    def accumulator(s):
-      if isinstance(s,str): s,*k = s.split(':',1); k = ({'reduction':k[0]} if k else {}); s = self.predef_measures[s](**k)
-      elif isinstance(s,tuple): s,k = s; s = self.predef_measures[s](**k)
-      elif not callable(s): raise ValueError('Measure object not callable')
-      try: r = s.reduction
-      except AttributeError: raise ValueError('Missing \'reduction\' attribute in measure object')
-      if r=='mean': return AvgAccumulator(lambda x,s=s: (len(x[0]),s(*x).item()))
-      elif r=='sum': return SumAccumulator(lambda x,s=s: s(*x).item())
-      elif r=='none': return CatAccumulator(lambda x,s=s: s(*x).cpu().numpy())
-      else: raise ValueError('Unsupported reduction in measure object')
-    self.measures.update((name,accumulator(s)) for name,s in ka.items())
-  predef_measures = dict((p[:-4],getattr(torch.nn,p)) for p in dir(torch.nn) if p.endswith('Loss'))
+    def app(f):
+      def F(self,label=name.lower(),*a,**ka):
+        m = f(*a,**ka)
+        r = m.reduction
+        if r=='mean': acc = AvgAccumulator((lambda x,m=m: (len(x[0]),m(*x).item())),repr(m))
+        elif r=='sum': acc = SumAccumulator((lambda x,m=m: m(*x).item()),repr(m))
+        elif r=='none': acc = CatAccumulator((lambda x,m=m: m(*x).cpu().detach().numpy()),repr(m))
+        else: raise ValueError('Unsupported reduction')
+        self.measures[label] = acc
+        return acc
+      setattr(cls,f'add{name}Measure',F)
+      if doc: F.__doc__ = f'Measure factory for :class:`{f.__qualname__}`. The result is assigned as attribute *label* in the measures register.'
+      return f
+    return app
 
 #--------------------------------------------------------------------------------------------------
   @classmethod
-  def listener_factory(cls,name:str)->Callable[[Callable],Callable]:
+  def listener_factory(cls,name:str,doc:bool=True)->Callable[[Callable],Callable]:
     r"""
 Used as decorator to attach a listener factory (the decorated object, assumed callable) to a subclass *cls* of this class. The factory is then available as method :meth:`add<name>Listener` using the provided *name*. Its invocation accepts a parameter :attr:`label` under which its result in stored in the listeners registry (by default, the label is the lowercase version of *name*). The decorated object may have an attribute :attr:`tools` listing the name of tool attributes, which are passed into as attribute :attr:`<name>_tools` of *cls*.
 
@@ -199,7 +204,7 @@ Used as decorator to attach a listener factory (the decorated object, assumed ca
 #--------------------------------------------------------------------------------------------------
     def app(f):
       def F(self,label=name.lower(),*a,**ka): self.listeners[label] = x = f(*a,**ka); return x
-      F.__doc__ = f'Listener factory for {f}. The result is assigned as attribute *label* in the listeners register.'
+      if doc: F.__doc__ = f'Listener factory for :class:`{f.__qualname__}`. The result is assigned as attribute *label* in the listeners register.'
       setattr(cls,f'add{name}Listener',F)
       tools = getattr(f,'tools',None)
       if tools is not None: setattr(cls,f'{name}_tools',udict((t,getattr(f,t)) for t in set(tools)))
@@ -224,8 +229,11 @@ Prints out the list of configuration attributes (with their values) as well as t
     """
 #--------------------------------------------------------------------------------------------------
     self._config.describe(tab=tab,file=file,**ka)
+    for k,x in self.measures.items():
+      print(tab,f'measures.{k}:',sep='',file=file)
+      print(tab+'  ',x,sep='',file=file)
     for k,x in self.listeners.items():
-      print(tab,f'listener.{k}:',sep='',file=file)
+      print(tab,f'listeners.{k}:',sep='',file=file)
       x.describe(tab=tab+'  ',file=file,**ka)
 
   def __call__(self):
@@ -234,10 +242,16 @@ Prints out the list of configuration attributes (with their values) as well as t
     i = self.process_info
     return f'{self.__class__.__name__}({i.host}:{i.pid}|{i.started.ctime()})'
 
+def predefine_measures_from_standard_losses(): # invoked only once below, then destroyed
+  for p in dir(torch.nn):
+    if p.endswith('Loss'): Run.measure_factory(p[:-4],doc=False)(getattr(torch.nn,p))
+predefine_measures_from_standard_losses()
+del predefine_measures_from_standard_losses
+
 #==================================================================================================
 class SupervisedNet (torch.nn.Module):
   r"""
-Instances of this class are supervised task nets, composed of a main module computing an encoding of the features followed by a loss module measuring the computed encoding against ground truth labels. In training mode, a single scalar is returned, which is the average of the loss measures over the batch. In evaluation mode, a tuple of scalars is returned, the first one being the average loss, the others being averages of other measures (passed in forward).
+Instances of this class are supervised task nets, composed of a policy module computing an encoding of the features as scores, followed by a loss module measuring the gap between the computed scores and the ground truth labels.
   """
 #==================================================================================================
   def __init__(self,policy,loss=None):
@@ -250,6 +264,7 @@ Instances of this class are supervised task nets, composed of a main module comp
     scores = self.policy(*feats)
     return scores,labels
   def forward(self,*inputs):
+    r"""Sequentially composes embedding and loss."""
     return self.loss(*self.embedding(*inputs))
 
 #==================================================================================================
@@ -264,18 +279,20 @@ Instances of this class are runs in which the role of data and parameters are in
   valid_data = ()
   test_data = ()
   class InvNet (torch.nn.Module):
+    r"""A variant of *net* where the parameters are given by *protos*."""
     def __init__(self,net,protos):
       super().__init__()
       *feats,labels = protos
       self.params = torch.nn.ParameterList(torch.nn.Parameter(x) for x in feats)
       self.labels = labels
-      self.__dict__.update(net=net) # so the net is not added as a submodule of the inv net
+      super(torch.nn.Module,self).__setattr__('net',net) # so the net is not added as a submodule of the inv net
     def forward(self):
+      r"""Simply invokes *net* with the appropriate arguments."""
       return self.net(*self.params,self.labels)
   def main(self):
     net = self.net
     try:
-      self.net = self.InvNet(self.net,self.protos)
+      self.net = self.InvNet(net,self.protos)
       super().main()
     finally: self.net = net
   @staticmethod
@@ -750,42 +767,43 @@ def to(L,device): return ((t.to(device) if isinstance(t,torch.Tensor) else t) fo
 #--------------------------------------------------------------------------------------------------
 
 class Accumulator:
-  def __init__(self,f=(lambda x: x)): self.f = f
+  def __init__(self,feed=(lambda x: x),descr=None): self.feed = feed; self.repr = (repr(feed) if descr is None else descr)
   def ini(self): raise NotImplementedError()
   def inc(self,x): raise NotImplementedError()
   def val(self): raise NotImplementedError()
+  def __repr__(self): return self.repr
 
 #--------------------------------------------------------------------------------------------------
 class AvgAccumulator (Accumulator):
 #--------------------------------------------------------------------------------------------------
-  # self.f expected to return a pair of scalars (weight,value)
-  def ini(self): self.W = self.Z = 0.
-  def inc(self,x): w,z = self.f(x); self.W += w; self.Z += (z-self.Z)*(w/self.W)
-  def val(self): return self.Z
+  # self.feed expected to return a pair of scalars (weight,value)
+  def ini(self): self.weight = self.value = 0.
+  def inc(self,x): w,v = self.feed(x); self.weight += w; self.value += (v-self.value)*(w/self.weight)
+  def val(self): return self.value
 
 #--------------------------------------------------------------------------------------------------
 class MeanAccumulator (Accumulator):
 #--------------------------------------------------------------------------------------------------
-  # self.f expected to return a single scalar (value)
-  def ini(self): self.n = self.Z = 0.
-  def inc(self,x): self.n += 1.; self.Z += (self.f(x)-self.Z)/self.n
-  def val(self): return self.Z
+  # self.feed expected to return a single scalar (value)
+  def ini(self): self.n = self.value = 0.
+  def inc(self,x): self.n += 1.; self.value += (self.feed(x)-self.value)/self.n
+  def val(self): return self.value
 
 #--------------------------------------------------------------------------------------------------
 class SumAccumulator (Accumulator):
 #--------------------------------------------------------------------------------------------------
-  # self.f expected to return a single scalar (value)
-  def ini(self): self.Z = 0.
-  def inc(self,x): self.Z += self.f(x)
-  def val(self): return self.Z
+  # self.feed expected to return a single scalar (value)
+  def ini(self): self.value = 0.
+  def inc(self,x): self.value += self.feed(x)
+  def val(self): return self.value
 
 #--------------------------------------------------------------------------------------------------
 class CatAccumulator (Accumulator):
 #--------------------------------------------------------------------------------------------------
-  # self.f expected to return a numpy array
-  def ini(self): self.Z = []
-  def inc(z,x): self.Z.append(self.f(x))
-  def val(self): from numpy import concatenate; return concatenate(self.Z)
+  # self.feed expected to return a numpy array
+  def ini(self): self.value = []
+  def inc(self,x): self.value.append(self.feed(x))
+  def val(self): from numpy import concatenate; return concatenate(self.value)
 
 #--------------------------------------------------------------------------------------------------
 class Measure:
@@ -794,8 +812,13 @@ class Measure:
     Agg={'mean':torch.mean,'sum':torch.sum,'none':(lambda x:x)}
     self.agg = Agg[reduction]
     self.reduction = reduction
+  def __repr__(self): return f'{self.__class__.__name__}(reduction={self.reduction})'
+
 #--------------------------------------------------------------------------------------------------
+@Run.measure_factory('ZeroOne')
 class ZeroOneMeasure (Measure):
+  r"""
+Instances of this class measure accuracy for classification runs.
+  """
 #--------------------------------------------------------------------------------------------------
   def __call__(self,scores,labels): return self.agg((torch.argmax(scores,1)==labels).float())
-Run.predef_measures['ZeroOne'] = ZeroOneMeasure

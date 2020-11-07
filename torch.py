@@ -41,7 +41,9 @@ class Run (Dispatcher):
   r"""
 Instances of this class are callables, taking no argument and returning no value. The execution of a run only changes its attribute values. All the keyword arguments of the constructor are passed to method :meth:`set`.
 
-Runs may emit messages during their execution. Each message is passed a single argument, which is the run itself, so runs can be controlled by message listeners. Listeners (instances of class :class:`RunListener`) are special cases of listeners. A run can invoke a method :meth:`add<name>Listener` to attach a listener of type `<name>` to itself. Some such methods are defined in subclasses of :class:`RunListener` (see their documentation for details).
+Runs may emit messages during their execution. Each message is passed a single argument, which is the run itself, so runs can be controlled by callbacks attached to messages. Listeners (instances of class :class:`RunListener`) are special cases of callbacks. A run can invoke a method :meth:`add<name>Listener` to attach a listener of type `<name>` to itself. Some such methods are defined in class :class:`Run` and its subclasses (see their documentation for details).
+
+A typical event callback stores the result of a campaign of measures on the run. Measures (instances of class :class:`Measure`) are in charge of reporting individual measures. A run can invoke a method :meth:`add<name>Measure` to attach a measure of type `<name>` to itself. Some such methods are defined in class :class:`Run` and its subclasses (see their documentation for details). In particular, all the pytorch losses can be added in this way.
 
 Attributes (\*) must be explicitly instantiated at creation time.
   """
@@ -222,7 +224,7 @@ Used as decorator to attach a listener factory (the decorated object, assumed ca
 #--------------------------------------------------------------------------------------------------
   def describe(self,tab:str='',file=None,**ka):
     r"""
-Prints out the list of configuration attributes (with their values) as well as the list of listeners.
+Prints out the list of configuration attributes (with their values) as well as the list of measures and listeners.
 
 :param tab: an indentation string
 :param file: passed to the print function
@@ -241,31 +243,6 @@ Prints out the list of configuration attributes (with their values) as well as t
   def __repr__(self):
     i = self.process_info
     return f'{self.__class__.__name__}({i.host}:{i.pid}|{i.started.ctime()})'
-
-def predefine_measures_from_standard_losses(): # invoked only once below, then destroyed
-  for p in dir(torch.nn):
-    if p.endswith('Loss'): Run.measure_factory(p[:-4],doc=False)(getattr(torch.nn,p))
-predefine_measures_from_standard_losses()
-del predefine_measures_from_standard_losses
-
-#==================================================================================================
-class SupervisedNet (torch.nn.Module):
-  r"""
-Instances of this class are supervised task nets, composed of a policy module computing an encoding of the features as scores, followed by a loss module measuring the gap between the computed scores and the ground truth labels.
-  """
-#==================================================================================================
-  def __init__(self,policy,loss=None):
-    super().__init__()
-    self.policy = policy
-    if loss is None: loss = torch.nn.CrossEntropyLoss()
-    self.loss = loss
-  def embedding(self,*inputs):
-    *feats,labels = inputs
-    scores = self.policy(*feats)
-    return scores,labels
-  def forward(self,*inputs):
-    r"""Sequentially composes embedding and loss."""
-    return self.loss(*self.embedding(*inputs))
 
 #==================================================================================================
 class SupervisedInvRun (Run):
@@ -299,8 +276,54 @@ Instances of this class are runs in which the role of data and parameters are in
   def on_post_optim(run): tuple(run.projection(p.data) for p in run.net.params)
 
 #==================================================================================================
+class SupervisedNet (torch.nn.Module):
+  r"""
+Instances of this class are supervised task nets, composed of a policy module computing an encoding of the features as scores, followed by a loss module measuring the gap between the computed scores and the ground truth labels.
+  """
+#==================================================================================================
+  def __init__(self,policy,loss=None):
+    super().__init__()
+    self.policy = policy
+    if loss is None: loss = torch.nn.CrossEntropyLoss()
+    self.loss = loss
+  def embedding(self,*inputs):
+    r"""Replaces the features in *inputs* by their scores computed by the :attr:`policy` net."""
+    *feats,labels = inputs
+    scores = self.policy(*feats)
+    return scores,labels
+  def forward(self,*inputs):
+    r"""Sequentially composes embedding and loss."""
+    return self.loss(*self.embedding(*inputs))
+
+#==================================================================================================
+class Measure:
+  r"""Base class for measures."""
+#==================================================================================================
+  Agg = {'mean':torch.mean,'sum':torch.sum,'none':(lambda x:x)}
+  def __init__(self,reduction='mean'):
+    self.agg = self.Agg[reduction]
+    self.reduction = reduction
+  def __repr__(self): return f'{self.__class__.__name__}(reduction={self.reduction})'
+
+def predefine_measures_from_standard_losses(): # invoked only once below, then destroyed
+  # adds one measure to class Run for each loss function defined in torch.nn
+  for p in dir(torch.nn):
+    if p.endswith('Loss'): Run.measure_factory(p[:-4],doc=False)(getattr(torch.nn,p))
+predefine_measures_from_standard_losses()
+del predefine_measures_from_standard_losses
+
+#==================================================================================================
+@Run.measure_factory('ZeroOne')
+class ZeroOneMeasure (Measure):
+  r"""
+Instances of this class measure accuracy for classification runs.
+  """
+#==================================================================================================
+  def __call__(self,scores,labels): return self.agg((torch.argmax(scores,1)==labels).float())
+
+#==================================================================================================
 class RunListener:
-  r"""Base class for run listeners"""
+  r"""Base class for run listeners."""
 #==================================================================================================
   def __init__(self,**ka): self._config = fmtwrap({}); self.config(**ka)
   def config(self,**ka): self._config.update(**ka); self.set(**self._config.ref)
@@ -313,7 +336,7 @@ class RunListener:
 @Run.listener_factory('Base')
 class RunBaseListener (RunListener):
   r"""
-Instances of this class provide basic logging/monitoring for supervised training runs.
+Instances of this class provide basic logging/monitoring for runs.
   """
 #==================================================================================================
 #--------------------------------------------------------------------------------------------------
@@ -338,7 +361,7 @@ Instances of this class provide basic logging/monitoring for supervised training
 :param itrain,ivalid,itest: function returning various info on a run
 :param fmt: dictionary associating measure names to their formats
 
-Computes a number of information loggers, stored in attributes :attr:`itrain`, :attr:`ivalid`, :attr:`itest`, :attr:`iprogress`, :attr:`iheader`, as well as the main listenering function, stored as attribute :attr:`progress`. At least one of *max_epoch* or *max_time* must be set, or the run never ends.
+Computes a number of information loggers, stored in attributes :attr:`itrain`, :attr:`ivalid`, :attr:`itest`, :attr:`iprogress`, :attr:`iheader`, as well as the main monitoring function, stored as attribute :attr:`progress`. At least one of *max_epoch* or *max_time* must be set, or the run never ends.
     """
 #--------------------------------------------------------------------------------------------------
     assert max_epoch is not None or max_time is not None
@@ -484,7 +507,7 @@ Instances of this class provide tensorboard logging for runs. Limited functional
 :param exp: experiment name
 :param itrain,ivalid,itest: function returning various info on a run
 
-Computes a number of information loggers, stored in attributes :attr:`itrain`, :attr:`ivalid`, :attr:`itest`, :attr:`iprogress`, :attr:`open_mlflow`, :attr:`close_mlflow`. The *uri* must refer to a valid mlflow experiment storage.
+Computes a number of information loggers, stored in attributes :attr:`itrain`, :attr:`ivalid`, :attr:`itest`, :attr:`iprogress`, :attr:`open_tb`, :attr:`close_tb`. The *uri* must refer to a valid tensorboard experiment storage.
     """
 #--------------------------------------------------------------------------------------------------
     log_metrics = lambda f,run: tuple(run.tbwriter.add_scalar(k,v,run.step) for k,v in f(run).items())
@@ -521,7 +544,7 @@ Configures the callbacks of this listener, stored as attributes :attr:`on_open`,
 #--------------------------------------------------------------------------------------------------
   def set3(self,root=None,exp=None,**ka):
     r"""
-Protects callbacks :attr:`on_open` and :attr:`on_close` from exceptions to make sure the mlflow run is not left in a corrupted state.
+Protects callbacks :attr:`on_open` and :attr:`on_close` from exceptions to make sure the tensorboard run is not left in a corrupted state.
     """
 #--------------------------------------------------------------------------------------------------
     from torch.utils.tensorboard import SummaryWriter
@@ -574,9 +597,9 @@ Returns a callable, which, when passed a data instance, displays it on *ax* (its
     r"""
 Returns a dictionary which can be passed as keyword arguments to the :class:`Run` constructor to initialise its required attributes:
 
-* non config attributes :attr:`train_data`, :attr:`valid_data`, :attr:`test_data`, obtained by calling :class:`torch.utils.data.DataLoader` on the corresponding split with key-word parameters *ka* (with prefix `_` removed from keys);
-* a config attribute :attr:`data` holding a description of the datasource;
-* all the attributes (config or not) in *ka*, so they appear as attributes of the run.
+* non visible attributes :attr:`train_data`, :attr:`valid_data`, :attr:`test_data`, obtained by calling :class:`torch.utils.data.DataLoader` on the corresponding split with key-word parameters *ka* (with prefix `_` removed from keys);
+* a visible attribute :attr:`data` holding a description of the datasource;
+* all the attributes (visible or not) in *ka*, so they appear as attributes of the run.
 
 :param pcval: proportion (between 0. and 1.) of instances from the train split to use for validation.
     """
@@ -766,7 +789,9 @@ Returns a context which saves the value of :attr:`training` in *obj* on enter an
 def to(L,device): return ((t.to(device) if isinstance(t,torch.Tensor) else t) for t in L)
 #--------------------------------------------------------------------------------------------------
 
+#--------------------------------------------------------------------------------------------------
 class Accumulator:
+#--------------------------------------------------------------------------------------------------
   def __init__(self,feed=(lambda x: x),descr=None): self.feed = feed; self.repr = (repr(feed) if descr is None else descr)
   def ini(self): raise NotImplementedError()
   def inc(self,x): raise NotImplementedError()
@@ -804,21 +829,3 @@ class CatAccumulator (Accumulator):
   def ini(self): self.value = []
   def inc(self,x): self.value.append(self.feed(x))
   def val(self): from numpy import concatenate; return concatenate(self.value)
-
-#--------------------------------------------------------------------------------------------------
-class Measure:
-#--------------------------------------------------------------------------------------------------
-  def __init__(self,reduction='mean'):
-    Agg={'mean':torch.mean,'sum':torch.sum,'none':(lambda x:x)}
-    self.agg = Agg[reduction]
-    self.reduction = reduction
-  def __repr__(self): return f'{self.__class__.__name__}(reduction={self.reduction})'
-
-#--------------------------------------------------------------------------------------------------
-@Run.measure_factory('ZeroOne')
-class ZeroOneMeasure (Measure):
-  r"""
-Instances of this class measure accuracy for classification runs.
-  """
-#--------------------------------------------------------------------------------------------------
-  def __call__(self,scores,labels): return self.agg((torch.argmax(scores,1)==labels).float())

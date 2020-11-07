@@ -513,11 +513,12 @@ def gitcheck(path:str,update:bool=False):
 :param path: a path to a git repository
 :param update: whether to pull updates in remote branch
 
-Checks directory at *path*, assumed to be a git repository. If *update* is true, attempts to synch with its origin. Returns a tuple of status  (a string) followed by a list of details. The details are fields `ref`,`flags` and `note` from the :class:`git.remote.FetchInfo` object returned by the pull operation. Status is
-* `dirty`: repository is dirty (no details)
-* `up-to-date-pre`: repository is up to date (details only if remote exists)
-* `up-to-date-post`: repository was stale but has been successfully updated
-* `stale`: repository is stale but has not been touched
+Checks directory at *path*, assumed to be a git repository. If *update* is true, attempts to synch with its origin. Returns a tuple of the status  (a string) followed by a list of details. The details are fields ``ref``, ``flags`` and ``note`` from the :class:`git.remote.FetchInfo` object returned by the pull operation. Status is
+
+* ``dirty``: repository is dirty (no details)
+* ``uptodate``: repository is up to date (details only if remote exists)
+* ``uptodate-now``: repository was stale but has been successfully updated (when *update* is :const:`True`)
+* ``stale``: repository is stale but has not been touched (when *update* is :const:`False`)
 
 Use the ``GIT_PYTHON_GIT_EXECUTABLE`` environment variable to set the Git executable if it is not the default ``/usr/bin/git``.
   """
@@ -526,14 +527,14 @@ Use the ``GIT_PYTHON_GIT_EXECUTABLE`` environment variable to set the Git execut
   r = Repo(path)
   if r.is_dirty(): return 'dirty',
   try: rm = r.remote()
-  except ValueError: return 'up-to-date-pre', # clean and no remote
+  except ValueError: return 'uptodate', # clean and no remote
   i, = rm.pull(dry_run=not update)
   d = str(i.ref),i.flags,i.note # detail
-  if i.flags & i.HEAD_UPTODATE: return 'up-to-date-pre',*d
+  if i.flags & i.HEAD_UPTODATE: return 'uptodate',*d
   if update:
     if i.commit!=r.commit(): raise Exception('Git synch failed',d)
     logger.info('git pull run on %s',r)
-    return 'up-to-date-post',*d
+    return 'uptodate-now',*d
   return 'stale',*d
 
 #==================================================================================================
@@ -541,7 +542,7 @@ def gitcheck_package(pkgname:str,update=False):
   r"""
 :param pkgname: full name of a package
 
-Assumes that *pkgname* is the name of a python regular (non namespace) package and invokes :meth:`gitcheck` on its path. Reloads the package if up-to-date-post is returned.
+Assumes that *pkgname* is the name of a python regular (non namespace) package and invokes :meth:`gitcheck` on its path. Reloads the package if ``uptodate-now`` is returned.
   """
 #==================================================================================================
   from importlib.util import find_spec
@@ -550,7 +551,7 @@ Assumes that *pkgname* is the name of a python regular (non namespace) package a
   try: path, = find_spec(pkgname).submodule_search_locations
   except: raise ValueError('Not a regular package',pkgname)
   c = gitcheck(path,update)
-  if c[0] == 'up-to-date-post':
+  if c[0] == 'uptodate-now':
     m = modules.get(pkgname)
     if m is not None: logger.warning('Reloading %s',pkgname); reload(m)
   return c

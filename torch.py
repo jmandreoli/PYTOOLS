@@ -173,7 +173,7 @@ Returns a cached version of :meth:`eval` on *data*. The cache is cleared at each
 
 #--------------------------------------------------------------------------------------------------
   @classmethod
-  def measure_factory(cls,name:str,doc:bool=True)->Callable[[Callable],Callable]:
+  def measure_factory(cls,name:str,norm:Callable[[Any],float]=None,doc:bool=True)->Callable[[Callable],Callable]:
     r"""
 Used as decorator to attach a measure factory (the decorated object, assumed callable) to a subclass *cls* of this class. The factory is then available as method :meth:`add<name>Measure` using the provided *name*. Its invocation accepts a parameter :attr:`label` under which its result in stored in the measures registry (by default, the label is the lowercase version of *name*).
 
@@ -183,12 +183,11 @@ Used as decorator to attach a measure factory (the decorated object, assumed cal
     def app(f):
       def F(self,label=name.lower(),*a,**ka):
         m = f(*a,**ka)
-        r = m.reduction
-        if r=='mean': acc = AvgAccumulator((lambda x,m=m: (len(x[0]),m(*x).item())),repr(m))
-        elif r=='sum': acc = SumAccumulator((lambda x,m=m: m(*x).item()),repr(m))
-        elif r=='none': acc = CatAccumulator((lambda x,m=m: m(*x).cpu().detach().numpy()),repr(m))
-        else: raise ValueError('Unsupported reduction')
-        self.measures[label] = acc
+        self.measures[label] = acc = {
+          'mean':partial(AvgAccumulator,feed=lambda x,m=m: (len(x[0]),m(*x).item())),
+          'sum':partial(SumAccumulator,feed=lambda x,m=m: m(*x).item()),
+          'none':partial(ListAccumulator,feed=lambda x,m=m: m(*x).cpu().detach().numpy()),
+        }[m.reduction](descr=repr(m),norm=norm)
         return acc
       setattr(cls,f'add{name}Measure',F)
       if doc: F.__doc__ = f'Measure factory for :class:`{f.__qualname__}`. The result is assigned as attribute *label* in the measures register.'
@@ -792,40 +791,41 @@ def to(L,device): return ((t.to(device) if isinstance(t,torch.Tensor) else t) fo
 #--------------------------------------------------------------------------------------------------
 class Accumulator:
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,feed=(lambda x: x),descr=None): self.feed = feed; self.repr = (repr(feed) if descr is None else descr)
-  def ini(self): raise NotImplementedError()
-  def inc(self,x): raise NotImplementedError()
-  def val(self): raise NotImplementedError()
+  feed = staticmethod(lambda x:x)
+  norm = staticmethod(lambda x:x)
+  def __init__(self,feed=None,norm=None,descr=None):
+    if feed is not None: self.feed = feed
+    if norm is not None: self.norm = norm
+    self.repr = f'{self.__class__.__name__}[{self.feed.__name__},{self.norm.__name__}]' if descr is None else descr
+  def ini(self): self._val = self._ini()
+  def inc(self,x): self._inc(self.feed(x))
+  def val(self): return self.norm(self._val)
   def __repr__(self): return self.repr
 
 #--------------------------------------------------------------------------------------------------
 class AvgAccumulator (Accumulator):
 #--------------------------------------------------------------------------------------------------
   # self.feed expected to return a pair of scalars (weight,value)
-  def ini(self): self.weight = self.value = 0.
-  def inc(self,x): w,v = self.feed(x); self.weight += w; self.value += (v-self.value)*(w/self.weight)
-  def val(self): return self.value
+  def _ini(self): self._w = 0.; return 0.
+  def _inc(self,x): w,v = x; self._w += w; self._val += (v-self._val)*(w/self._w)
 
 #--------------------------------------------------------------------------------------------------
 class MeanAccumulator (Accumulator):
 #--------------------------------------------------------------------------------------------------
   # self.feed expected to return a single scalar (value)
-  def ini(self): self.n = self.value = 0.
-  def inc(self,x): self.n += 1.; self.value += (self.feed(x)-self.value)/self.n
-  def val(self): return self.value
+  def _ini(self): self._n = 0.; return 0.
+  def _inc(self,x): self._n += 1.; self._val += (x-self._val)/self._n
 
 #--------------------------------------------------------------------------------------------------
 class SumAccumulator (Accumulator):
 #--------------------------------------------------------------------------------------------------
   # self.feed expected to return a single scalar (value)
-  def ini(self): self.value = 0.
-  def inc(self,x): self.value += self.feed(x)
-  def val(self): return self.value
+  def _ini(self): return 0.
+  def _inc(self,x): self._val += x
 
 #--------------------------------------------------------------------------------------------------
-class CatAccumulator (Accumulator):
+class ListAccumulator (Accumulator):
 #--------------------------------------------------------------------------------------------------
   # self.feed expected to return a numpy array
-  def ini(self): self.value = []
-  def inc(self,x): self.value.append(self.feed(x))
-  def val(self): from numpy import concatenate; return concatenate(self.value)
+  def _ini(self): return []
+  def _inc(self,x): self._val.append(x)

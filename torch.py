@@ -299,9 +299,10 @@ class Measure:
   r"""Base class for measures."""
 #==================================================================================================
   Agg = {'mean':torch.mean,'sum':torch.sum,'none':(lambda x:x)}
-  def __init__(self,reduction='mean'):
-    self.agg = self.Agg[reduction]
-    self.reduction = reduction
+  reduction = 'mean'
+  def __init__(self,reduction=None):
+    if reduction is not None: self.reduction = reduction
+    self.agg = self.Agg[self.reduction]
   def __repr__(self): return f'{self.__class__.__name__}(reduction={self.reduction})'
 
 def predefine_measures_from_standard_losses(): # invoked only once below, then destroyed
@@ -796,7 +797,7 @@ class Accumulator:
   def __init__(self,feed=None,norm=None,descr=None):
     if feed is not None: self.feed = feed
     if norm is not None: self.norm = norm
-    self.repr = f'{self.__class__.__name__}[{self.feed.__name__},{self.norm.__name__}]' if descr is None else descr
+    self.repr = f'{self.__class__.__name__}({self.feed.__name__},{self.norm.__name__})' if descr is None else descr
   def ini(self): self._val = self._ini()
   def inc(self,x): self._inc(self.feed(x))
   def val(self): return self.norm(self._val)
@@ -805,27 +806,24 @@ class Accumulator:
 #--------------------------------------------------------------------------------------------------
 class AvgAccumulator (Accumulator):
 #--------------------------------------------------------------------------------------------------
-  # self.feed expected to return a pair of scalars (weight,value)
+  # input as pair of scalars (weight,value)
   def _ini(self): self._w = 0.; return 0.
   def _inc(self,x): w,v = x; self._w += w; self._val += (v-self._val)*(w/self._w)
 
 #--------------------------------------------------------------------------------------------------
 class MeanAccumulator (Accumulator):
 #--------------------------------------------------------------------------------------------------
-  # self.feed expected to return a single scalar (value)
   def _ini(self): self._n = 0.; return 0.
   def _inc(self,x): self._n += 1.; self._val += (x-self._val)/self._n
 
 #--------------------------------------------------------------------------------------------------
 class SumAccumulator (Accumulator):
 #--------------------------------------------------------------------------------------------------
-  # self.feed expected to return a single scalar (value)
   def _ini(self): return 0.
   def _inc(self,x): self._val += x
 
 #--------------------------------------------------------------------------------------------------
 class ListAccumulator (Accumulator):
 #--------------------------------------------------------------------------------------------------
-  # self.feed expected to return a numpy array
   def _ini(self): return []
   def _inc(self,x): self._val.append(x)

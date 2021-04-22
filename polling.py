@@ -28,7 +28,7 @@ Available types and functions
 """
 
 from __future__ import annotations
-from typing import Any, Union, Callable, Iterable, Mapping, Tuple
+from typing import Any, Union, Callable, Iterable, Mapping, Tuple, Optional
 import logging; logger = logging.getLogger(__name__)
 
 import os,socket,sqlite3,time,threading,traceback
@@ -59,7 +59,7 @@ Each field descriptor is a pair of an sql column specification and a function wi
       except: pass
     def run_():
       try: open_()
-      except Exception as exc: logger.warn('Unable to open status file %s (giving up): %s',path,exc); return
+      except Exception as exc: logger.warning('Unable to open status file %s (giving up): %s',path,exc); return
       error = 0
       lasterr = None
       ongoing = True
@@ -81,7 +81,7 @@ Each field descriptor is a pair of an sql column specification and a function wi
             try: open_(); continue
             except Exception as exc2: lasterr = str(exc2)
           else: lasterr = str(exc)
-        logger.warn('Unable to record status in %s (giving up after %d errors): %s',path,error,lasterr)
+        logger.warning('Unable to record status in %s (giving up after %d errors): %s',path,error,lasterr)
         return
       try: conn.execute('PRAGMA user_version = 1'); conn.commit()
       except: pass
@@ -96,23 +96,23 @@ Each field descriptor is a pair of an sql column specification and a function wi
       return name,DefaultTypes.get(type(value),'BLOB'),value
     started = time.time(); elapsed = lambda started=started:time.time()-started
     staticfields = list(staticfields.items())
-    staticfields[0:0] = ('started',datetime.fromtimestamp(started)), ('pid','{}:{}'.format(socket.getfqdn(),os.getpid()))
+    staticfields[0:0] = ('started',datetime.fromtimestamp(started)), ('pid', f'{socket.getfqdn()}:{os.getpid()}')
     staticfields = [staticfield(*x) for x in staticfields]
     fields = list(fields)
     fields[0:0] = ('elapsed',elapsed,elapsed),('error TEXT',NoneFunc,traceback.format_exc)
     fields = [field(*x) for x in fields]
-    sql_create = 'CREATE TABLE Status ({})'.format(', '.join('{} {}'.format(f[0],f[1]) for l in (staticfields,fields) for f in l))
+    sql_create = 'CREATE TABLE Status ({})'.format(', '.join(f'{f[0]} {f[1]}' for l in (staticfields, fields) for f in l))
     sql_init = 'INSERT INTO Status ({}) VALUES ({})'.format(','.join(f[0] for f in staticfields),','.join(len(staticfields)*'?'))
-    sql_update = 'UPDATE Status SET {}'.format(', '.join('{}=?'.format(f[0]) for f in fields))
-    conn = None
-    def init_(sql_create=sql_create,sql_init=sql_init,initv=[f[2] for f in staticfields]):
+    sql_update = 'UPDATE Status SET {}'.format(', '.join(f'{f[0]}=?' for f in fields))
+    conn:Optional[sqlite3.Connection] = None
+    def init_(sql_create=sql_create,sql_init=sql_init,initv=tuple(f[2] for f in staticfields)):
       conn.execute(sql_create)
       conn.execute(sql_init,initv)
       conn.commit()
-    def updates_(updf=[f[2] for f in fields],sql_update=sql_update):
+    def updates_(updf=tuple(f[2] for f in fields),sql_update=sql_update):
       conn.execute(sql_update,tuple(u() for u in updf))
       conn.commit()
-    def updates_error(updf=[f[3] for f in fields]): updates_(updf)
+    def updates_error(updf=tuple(f[3] for f in fields)): updates_(updf)
     self.stop_requested = threading.Event()
     if isinstance(path,str): path = Path(path)
   def __enter__(self):

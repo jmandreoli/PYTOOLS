@@ -194,14 +194,14 @@ Note that this constructor is locally cached on the resolved path *spec*.
     if isinstance(spec,CacheDB): return spec
     if isinstance(spec,str): path = Path(spec)
     elif isinstance(spec,Path): path = spec
-    else: raise TypeError('Expected: {}|{}|{}; Found: {}'.format(CacheDB,str,Path,type(spec)))
+    else: raise TypeError(f'Expected: {CacheDB}|{str}|{Path}; Found: {type(spec)}')
     path = path.resolve()
     with lock:
       self = listing.get(path)
       if self is None:
         if path.is_dir(): storage = DefaultStorage(path)
         elif path.is_file():
-          with path.open('rb') as u: storage = pickle.loads(u)
+          with path.open('rb') as u: storage = pickle.load(u)
         else: raise ValueError('Cache repository specification path must be directory or file')
         dbpath = str(storage.dbpath)
         SQliteNew(dbpath,SCHEMA)
@@ -293,9 +293,9 @@ Clears all the blocks which are obsolete.
   def as_html(self,_):
     n = len(self)-self._html_limit
     L = self.items(); closing = None
-    if n>0: L = islice(L,self._html_limit); closing = '{} more'.format(n)
+    if n>0: L = islice(L,self._html_limit); closing = f'{n} more'
     return html_table(sorted((k,(v,)) for k,v in L),fmts=((lambda x: x.as_html(_)),),opening=repr(self),closing=closing)
-  def __repr__(self): return 'Cache<{}>'.format(self.path)
+  def __repr__(self): return f'Cache<{self.path}>'
 
 #==================================================================================================
 class CacheBlock (MutableMapping,HtmlPlugin):
@@ -485,9 +485,9 @@ Implements cacheing as follows:
   def as_html(self,_,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz)),time_fmt_=(lambda t: '' if t is None else time_fmt(t))):
     n = len(self)-self._html_limit
     L = self.items(); closing = None
-    if n>0: L = islice(L,self._html_limit); closing = '{} more'.format(n)
+    if n>0: L = islice(L,self._html_limit); closing = f'{n} more'
     return html_table(sorted(L),hdrs=('ckey','tstamp','hits','size','duration'),fmts=((lambda ckey,h=self.functor.html: h(ckey,_)),str,str,size_fmt_,time_fmt_),opening=repr(self),closing=closing)
-  def __repr__(self): return 'Cache<{}>'.format(repr(self.functor))
+  def __repr__(self): return f'Cache<{repr(self.functor)}>'
 
 #==================================================================================================
 class AbstractFunctor (metaclass=abc.ABCMeta):
@@ -598,7 +598,7 @@ Generates a functor.
   def __getstate__(self): return
   def __hash__(self): return hash(self.config)
   def __eq__(self,other): return isinstance(other,Functor) and self.config==other.config
-  def __repr__(self): return '{}{}'.format(self.config[0],self.sig)
+  def __repr__(self): return f'{self.config[0]}{self.sig}'
 
   class fpickle (pickleclass):
     class Pickler (pickle.Pickler):
@@ -711,7 +711,7 @@ Removes the content file path for *cell* as well as the corresponding synch lock
     except: pass
 
 #--------------------------------------------------------------------------------------------------
-  def getpath(self,cell:int,masks=[(5*n,31*32**n) for n in range(5)]):
+  def getpath(self,cell:int,masks=tuple((5*n,31*32**n) for n in range(5))):
     r"""
 Returns the content file path (as a :class:`pathlib.Path` instance) associated to *cell* (of type :class:`int`). It is composed of two parts (a directory name and a file name), joined to the main :attr:`path` attribute. The directory is created if it does not already exist. The concatenation of the directory name (without its prefix ``X``) and the file name (without its suffix ``.pck``) is the representation of *cell* in base 32 (digits are 0-9A-V). This mapping of cells to paths ensures that no sub-directory holds more than 1024 cells. It assumes that cells are created sequentially (which is what AUTOINCREMENT in sqlite3 does), so the number of sub-directories grows slowly.
     """
@@ -779,14 +779,14 @@ Attributes:
 #==================================================================================================
 
 #--------------------------------------------------------------------------------------------------
-def persistent_cache(f:Callable,factory=CacheBlock,**ka):
+def persistent_cache(f:Callable,factory=CacheBlock,**kwd):
   r"""
 A decorator which makes a function persistently cached. The cached function behaves as the original function except that its invocations are cached and reused when possible. The original function must be defined at the top-level of its module, to be compatible with :class:`Functor`. If it does not have a version already, it is assigned version :const:`None`.
   """
 #--------------------------------------------------------------------------------------------------
   assert inspect.isfunction(f)
   if not hasattr(f,'version'): f.version = None
-  c = factory(functor=Functor(f),**ka)
+  c = factory(functor=Functor(f),**kwd)
   F = lambda *a,**ka: c((a,ka))
   F.cache = c
   return update_wrapper(F,f)
@@ -811,7 +811,7 @@ Instances of this class are defined from versioned functions (ie. functions defi
   def __eq__(self,other): return isinstance(other,Shadow) and self.config==other.config
   def __repr__(self):
     module,name,version = self.config
-    return '{}.{}{}'.format(module,name,('' if version is None else '{{{}}}'.format(version)))
+    return '{}.{}{}'.format(module,name,('' if version is None else f'{{{version}}}'))
   def obsolete(self):
     r"""
 Returns :const:`None` if this instance is up-to-date. It may be obsolete for two reasons:
@@ -850,7 +850,7 @@ A simple tool to manage a set of :class:`CacheDB` instances, specified by their 
     try:
       with wmsg:
         clear_output()
-        print('Operation:','clear'+x,'(dryrun: {} unchanged)'.format(ivname) if wdryrun.value else '')
+        print('Operation:','clear'+x,f'(dryrun: {ivname} unchanged)' if wdryrun.value else '')
         r = autorun[x]()
         print('Result:',r)
     except: return

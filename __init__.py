@@ -5,7 +5,7 @@
 # Purpose:              Some utilities in Python
 #
 from __future__ import annotations
-from typing import Any, Union, Callable, Iterable, Mapping, Tuple
+from typing import Any, Union, Callable, Iterable, Mapping, MutableMapping, Tuple
 import logging; logger = logging.getLogger(__name__)
 
 import os, re, collections
@@ -62,7 +62,7 @@ Instances of this class provide a formatting wrapper to an underlying mapping ob
 * assigning a key to a value forwards the assignment to the reference object, and also memorises the key as visible. If the key starts with `_`, that character is first dropped and the key is, on the contrary, removed from the visible list if present.
 * deleting a key deletes it from both the reference object and the visible list.
 
-:param reference: the reference (possibly mutable) mapping object, of which this instance is to be a partial proxy
+:param ref: the reference object (a possibly mutable mapping), of which this instance is to be a partial proxy
 
 E.g.::
 
@@ -80,9 +80,9 @@ E.g.::
    assert x==dict(pi='3.142',z='2a') and r==dict(pi=3.141592,a='boo',b='another',z=42)
   """
 #==================================================================================================
-  ref:Dict[[str],Any]
+  ref:MutableMapping[str,Any]
   r"""The reference mapping object"""
-  fmt:Dict[[str],Callable[[Any],str]]
+  fmt:MutableMapping[str,Callable[[Any],str]]
   r"""The formatters (default is function :func:`repr`)"""
 
   def __init__(self,ref): self.fmt = {}; self.visible = {}; self.ref = ref
@@ -106,7 +106,7 @@ E.g.::
     lim = lim-len(tab)-n-3
     if lim<10: print(tab,'...',file=file)
     else:
-      def clip(s,lim=lim):
+      def clip(s:str,lim:int=lim):
         n = len(s)
         if n<=lim: return s
         n = (n-3)//2
@@ -290,7 +290,7 @@ class HtmlPluginPointer:
   __slots__ = 'name','attrs','html'
   def __init__(self,tid,k):
     self.name = '?'+str(k)
-    tref = 'document.getElementById(\'{}\').rows[{}]'.format(tid,k)
+    tref = f'document.getElementById(\'{tid}\').rows[{k}]'
     self.attrs = dict(
       onmouseenter=tref+'.style.outline=\'thick solid red\'',
       onmouseleave=tref+'.style.outline=\'\'',
@@ -318,6 +318,9 @@ Initially, a :class:`Expr` instance is mutable, and its configuration can be cha
 Caveat: function *func* should be defined at the top-level of its module, and the values in *a* and *ka* should be deterministically picklable and hashable (in particular: no dicts nor lists). Hence, any :class:`Expr` instance is itself deterministically picklable and hashable, and can thus be used as argument in the configuration of another :class:`Expr` instance.
   """
 #==================================================================================================
+
+  incarnated: bool
+  value: Any
 
   def __init__(self,func:Callable,*a,**ka):
     assert callable(func)
@@ -376,8 +379,8 @@ Set *f* as the config function of this instance. Raises an error if the instance
     func,a,ka = self.config
     sep = ',' if (a and ka) else ''
     a = ','.join(repr(v) for v in a)
-    ka = ','.join('{}={}'.format(k,repr(v)) for k,v in sorted(ka.items()))
-    return '{}({}{}{})'.format(func,a,sep,ka)
+    ka = ','.join(f'{k}={repr(v)}' for k,v in sorted(ka.items()))
+    return f'{func}({a}{sep}{ka})'
 
 #--------------------------------------------------------------------------------------------------
 class MapExpr (Expr,collections.abc.Mapping):
@@ -511,7 +514,7 @@ Makes sure the file at *path* is a SQlite3 database with schema exactly equal to
 def gitcheck(path:str,update:bool=False):
   r"""
 :param path: a path to a git repository
-:param update: whether to pull updates in remote branch
+:param update: whether to update if stale
 
 Checks directory at *path*, assumed to be a git repository. If *update* is true, attempts to synch with its origin. Returns a tuple of the status  (a string) followed by a list of details. The details are fields ``ref``, ``flags`` and ``note`` from the :class:`git.remote.FetchInfo` object returned by the pull operation. Status is
 
@@ -541,6 +544,7 @@ Use the ``GIT_PYTHON_GIT_EXECUTABLE`` environment variable to set the Git execut
 def gitcheck_package(pkgname:str,update=False):
   r"""
 :param pkgname: full name of a package
+:param update: whether to update (git pull) if stale
 
 Assumes that *pkgname* is the name of a python regular (non namespace) package and invokes :meth:`gitcheck` on its path. Reloads the package if ``uptodate-now`` is returned.
   """
@@ -589,7 +593,7 @@ def SQLinit(engine:Union[str,sqlalchemy.Engine],meta:sqlalchemy.MetaData)->sqlal
     except: raise SQLinitMetainfoException('Not found')
     for k,v in meta.info.items():
       if metainfo.get(k) != str(v):
-        raise SQLinitMetainfoException('{}[expected:{},found:{}]'.format(k,v,metainfo.get(k)))
+        raise SQLinitMetainfoException(f'{k}[expected:{v},found:{metainfo.get(k)}]')
   else:
     metainfo_table = Table(
       'Metainfo',meta_,
@@ -756,9 +760,10 @@ Example of use (assuming :func:`sessionmaker` as above has been imported)::
   def __hash__(self): return hash((self.session,self.base))
 
   def as_html(self,_):
+    from itertools import islice
     n = len(self)-self._html_limit
     L = self.items(); closing = None
-    if n>0: L = islice(L,self._html_limit); closing = '{} more'.format(n)
+    if n>0: L = islice(L,self._html_limit); closing = f'{n} more'
     return html_table(sorted((k,(v,)) for k,v in L),fmts=(repr,),opening=repr(self),closing=closing)
   def __repr__(self): return f'{self.__class__.__name__}<{self.base.__name__}>'
 
@@ -773,7 +778,7 @@ Example of use (assuming :func:`sessionmaker` as above has been imported)::
       trace = execution_options.pop('trace',{})
       engine = engine.execution_options(**execution_options)
       for evt,log in trace.items():
-        if isinstance(log,int): log = lambda _lvl=log,_fmt='SQA:{}%s'.format(evt),**ka:logger.log(_lvl,_fmt,ka)
+        if isinstance(log,int): log = lambda _lvl=log,_fmt=f'SQA:{evt}%s',**ka:logger.log(_lvl,_fmt,ka)
         event.listen(engine,evt,log,named=True)
     Session_ = sessionmaker(engine,*a,**ka)
     def Session(**x):
@@ -796,7 +801,7 @@ If a resource ``spark/pyspark.py`` exists in an XDG configuration file, that res
 Displays a link to the monitor of :class:`pyspark.SparkContext` *sc*. Recall that the monitor is active only between the creation of *sc* and its termination (when method :meth:`stop` is invoked).
     """
     from IPython.display import display_html
-    display_html('<a target="_blank" href="{}">SparkMonitor[{}@{}]</a>'.format(sc.uiWebUrl,sc.appName,sc.master),raw=True)
+    display_html(f'<a target="_blank" href="{sc.uiWebUrl}">SparkMonitor[{sc.appName}@{sc.master}]</a>', raw=True)
 
   @classmethod
   def SparkContext(cls,display=True,debug=False,conf={},**ka):
@@ -815,7 +820,7 @@ Returns an instance of :class:`pyspark.SparkContext` created with the predefined
   def _init(cls):
     if cls.conf is None:
       cls.init()
-      assert isinstance(cls.conf,dict) and all((isinstance(k,str) and isinstance(v,str)) for k,v in cls.conf.items()), 'Class method {0.__module__}.{0.__name__}.init must assign a str-str dictionary to class attribute \'conf\''.format(cls)
+      assert isinstance(cls.conf,dict) and all((isinstance(k,str) and isinstance(v,str)) for k,v in cls.conf.items()), f'Class method {cls.__module__}.{cls.__name__}.init must assign a str-str dictionary to class attribute \'conf\''
 
   init = config_xdg('spark/pyspark.py')
   if init is None: init = classmethod(lambda cls,**ka: None)
@@ -846,7 +851,7 @@ Instances of this class maintain basic statistics about a group of values.
     self.weight += w; r = w/self.weight; d = a-self.avg
     self.avg += r*d; self.var += r*(v-self.var+(1-r)*d*d)
     return self
-  def __repr__(self): return 'basic_stats<weight:{},avg:{},var:{}>'.format(repr(self.weight),repr(self.avg),repr(self.var))
+  def __repr__(self): return f'basic_stats<weight:{repr(self.weight)},avg:{repr(self.avg)},var:{repr(self.var)}>'
   @property
   def std(self):
     from math import sqrt
@@ -883,7 +888,7 @@ Returns the representation of *size* with IEC prefix. Each prefix is *K* times t
   """
 #==================================================================================================
   thr,mark = (1024.,'i') if binary else (1000.,'')
-  fmt = '{{:.{}g}}{{}}{}{}'.format(precision,mark,suffix).format
+  fmt = f'{{:.{precision}g}}{{}}{mark}{suffix}'.format
   if size<thr: return str(size)+suffix
   size /= thr
   for prefix in 'KMGTPEZ':
@@ -903,15 +908,15 @@ Returns the representation of *time* in one of days,hours,minutes,seconds,milli-
    #> 1.1574day 1.18hr 5sec 932msec
   """
 #==================================================================================================
-  fmt = '{{:.{}f}}'.format(precision).format
-  if time < 1.: return '{:3.3g}msec'.format(1000*time)
-  if time < 60.: return '{}sec'.format(fmt(time))
+  fmt = f'{{:.{precision}f}}'.format
+  if time < 1.: return f'{1000 * time:3.3g}msec'
+  if time < 60.: return f'{fmt(time)}sec'
   time /= 60.
-  if time < 60.: return '{}min'.format(fmt(time))
+  if time < 60.: return f'{fmt(time)}min'
   time /= 60.
-  if time < 24.: return '{}hr'.format(fmt(time))
+  if time < 24.: return f'{fmt(time)}hr'
   time /= 24.
-  return '{}day'.format(fmt(time))
+  return f'{fmt(time)}day'
 
 #==================================================================================================
 def versioned(v)->Callable[[Callable],Callable]:
@@ -953,7 +958,7 @@ Pretty-prints the AST object (python abstract syntax tree).
       indent += ' | '
       for k,y in ast.iter_fields(x): pp(y,k,indent)
     elif isinstance(x,list):
-      for i,y in enumerate(x): pp(y,'{}[{}]'.format(pre,i),indent)
+      for i,y in enumerate(x): pp(y, f'{pre}[{i}]', indent)
     else: print(indent,pre,'=',x)
   if isinstance(x,str): x = ast.parse(x)
   else: assert isinstance(x,ast.AST)

@@ -37,7 +37,6 @@ Available types and functions
 import falcon,time,psutil,sys,shutil,json
 from pathlib import Path
 from collections import namedtuple
-from functools import partial
 from datetime import datetime
 from subprocess import Popen
 from string import Template
@@ -66,7 +65,7 @@ Starts or retrieves the tensorboard server associated with experiment *exp*, and
     else:
       cookies = req.get_cookie_values('tensorboard_last_visited_experiment')
       if cookies and (self.store/(exp:=cookies[0])).exists(): pass
-      elif (L:=[f.name for f in self.store.iterdir()]): exp = L[0]
+      elif L:=[f.name for f in self.store.iterdir()]: exp = L[0]
       else: raise falcon.HTTPNotFound()
     proc = self.procs.get(exp)
     if proc is None:
@@ -138,7 +137,7 @@ Starts a tensorboard server listening to host *host* at a random free port. Retu
     else: time.sleep(1)
   else:
     proc.terminate()
-    proc = _Dummy(url=host+'/.dummytensorboard',terminate=lambda: None)
+    return _Dummy(url=host+'/.dummytensorboard',terminate=lambda: None)
 
 #==================================================================================================
 class LoggingMiddleware:

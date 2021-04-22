@@ -91,7 +91,7 @@ Returns an :class:`ipywidgets.Widget` to browse the file at *path*, possibly whi
     x = list(readlinesFwd(file,n,nafter))
     lines[c] += b'\n'.join(x[:1]); lines[c+1:c+len(x)] = x[1:]
     lines = [x.decode().replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') for x in lines]
-    lines[c] = '<span style="background-color: gray; color: white; border: thin solid gray;">{}</span>'.format(lines[c])
+    lines[c] = f'<span style="background-color: gray; color: white; border: thin solid gray;">{lines[c]}</span>'
     w_win.value = '<div style="white-space: pre; font-family: monospace; line-height:130%">{}</div>'.format('\n'.join(lines))
   def toend(): w_ctrl.value = fsize
   def tobeg(): w_ctrl.value = 0
@@ -112,7 +112,7 @@ Returns an :class:`ipywidgets.Widget` to browse the file at *path*, possibly whi
   fsize = path.stat().st_size or 1
   if start is None: start = fsize
   elif isinstance(start,float):
-    assert 0<=start and start<=1
+    assert 0 <= start <= 1
     start = int(start*fsize)
   else:
     assert isinstance(start,int)
@@ -138,7 +138,7 @@ Returns an :class:`ipywidgets.Widget` to browse the file at *path*, possibly whi
     from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler
     class MyHandler (FileSystemEventHandler):
-      def __init__(s,p,f): super().__init__(); s.on_modified = (lambda evt: (f() if evt.src_path==p else None))
+      def __init__(self,p,f): super().__init__(); self.on_modified = (lambda evt: (f() if evt.src_path==p else None))
     observer = Observer()
     observer.schedule(MyHandler(str(path),resetsize),str(path.parent))
     observer.start()
@@ -168,12 +168,12 @@ Returns an :class:`ipywidgets.Widget` to explore a database specified by *spec*.
     return r
   if isinstance(spec,MetaData):
     meta = spec
-    if not meta.is_bound(): raise ValueError('Argument of type {} must be bound to an existing engine'.format(MetaData))
-    no_table_msg = '{} object has no table (perhaps it was not reflected)'.format(MetaData)
+    if not meta.is_bound(): raise ValueError(f'Argument of type {MetaData} must be bound to an existing engine')
+    no_table_msg = f'{MetaData} object has no table (perhaps it was not reflected)'
   else:
     if isinstance(spec,str): spec = create_engine(spec)
     elif not isinstance(spec,Engine):
-      raise TypeError('Expected {}|{}|{}; Found {}'.format(str,Engine,MetaData,type(spec)))
+      raise TypeError(f'Expected {str}|{Engine}|{MetaData}; Found {type(spec)}')
     meta = MetaData(bind=spec)
     meta.reflect(views=True)
     no_table_msg = 'Database is empty'
@@ -283,7 +283,7 @@ def db_browser_initconfig(tables):
     for c in cols:
       yield HBox(children=[widget(c,x) for x in schema])
   style = db_browser.style['schema']
-  schema_hrow = HBox(children=[HTML(value='<div style="{}" title="{}">{}</div>'.format(style,x[0],x[2]),layout=x[3]) for x in schema])
+  schema_hrow = HBox(children=[HTML(value=f'<div style="{style}" title="{x[0]}">{x[2]}</div>', layout=x[3]) for x in schema])
   return dict((name,Tconf(t,schemag=schema_rows)) for name,t in tables.items())
 
 #==================================================================================================
@@ -346,7 +346,7 @@ Returns an :class:`ipywidgets.Widget` to edit a traitlets structure. The constru
       else: w = ws()
       apply_default_layout(w,**default_trait_layout)
       rbutton = Button(icon='undo',tooltip='Reset to default',layout=dict(width='0.5cm',padding='0cm'))
-      label = HTML('<span title="{}">{}</span>'.format(str(t.help),name),layout=label_layout)
+      label = HTML(f'<span title="{t.help}">{name}</span>', layout=label_layout)
       rbutton.on_click(lambda but,w=w,x=val: updw(w,x))
       w.observe((lambda c,name=name,w=w: upda(name,w,c.new)),'value')
       target.observe((lambda c,w=w: updw(w,c.new)),name)
@@ -371,6 +371,7 @@ def progress_reporter(progress:Callable[[],float],interval:float=None,maxerror:i
   """
 :param progress: returns the progress value (between 0. and 1.) when invoked
 :param interval: duration in seconds between two progress reports
+:param maxerror: gives up after that many errors
 
 Returns a :class:`ipywidgets.Widget` reporting on the progress of some activity. The *progress* callable can, in addition to returning the current progress value, display information about the progress, using functions :func:`print` and :func:`IPython.display.display`.
   """
@@ -387,7 +388,7 @@ Returns a :class:`ipywidgets.Widget` reporting on the progress of some activity.
       try:
         p = progress()
         w_progressbar.value = p
-        w_progress.value = '{:.1%}'.format(p)
+        w_progress.value = f'{p:.1%}'
         error = 0
       except:
         error += 1
@@ -451,13 +452,12 @@ An instance of this class is a widget toolbar of buttons.
     self.b_layout = {}
     super().__init__(**ka)
 
-  def add(self,callback:Callable[Tuple,Any],**ka):
+  def add(self,callback:Callable[[],Any],**ka):
     r"""
 :param callback: a function to call when the button is clicked
 
 Adds a new button to the toolbar. If keyword arguments are present, they are passed to the button constructor. The button widget is returned.
     """
-    from collections import ChainMap
     b = Button(**ka)
     apply_default_layout(b,**self.b_layout)
     b.on_click(lambda b: callback())

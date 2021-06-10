@@ -19,8 +19,10 @@ from __future__ import annotations
 from typing import Sequence,Any, Union, Callable, Iterable, Mapping, Tuple
 import logging; logger = logging.getLogger(__name__)
 
+import traceback
 import pandas
 import sqlalchemy.engine
+from functools import wraps
 from pathlib import Path
 import traitlets
 from ipywidgets import Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, VBox, HBox, Box, Layout, Valid, Play, jslink
@@ -33,7 +35,7 @@ AutoWidthStyle = dict(description_width='auto')
 #==================================================================================================
 class seq_browser:
   r"""
-An instance of this class holds a widget :attr:`w_main` displaying a (long) sequence object in pagination mode.
+An instance of this class holds a widget :attr:`main` displaying a (long) sequence object in pagination mode.
 
 :param D: a sequence object
 :param start: the index of the initial page
@@ -52,7 +54,7 @@ An instance of this class holds a widget :attr:`w_main` displaying a (long) sequ
     self.w_pager = w_pager
     w_closeb = SimpleButton(icon='close',tooltip='Close browser')
     w_pos = Label('',layout=dict(width='1cm',border='thin solid'))
-    self.w_main = w_main = VBox([HBox([w_closeb,w_pager,w_pos]),w_out])
+    self.main = main = VBox([HBox([w_closeb,w_pager,w_pos]),w_out])
     # event handling
     def show(n):
       with w_out:
@@ -61,15 +63,15 @@ An instance of this class holds a widget :attr:`w_main` displaying a (long) sequ
       w_pos.value = f'{n}/{P}'
     # event binding
     w_pager.observe((lambda c: show(c.new)),'value')
-    w_closeb.on_click(lambda b: w_main.close())
+    w_closeb.on_click(lambda b: main.close())
     # widget initialisation
     show(start)
-  def _ipython_display_(self): return self.w_main._ipython_display_()
+  def _ipython_display_(self): return self.main._ipython_display_()
 
 #==================================================================================================
 class file_browser:
   r"""
-An instance of this class holds a widget :attr:`w_main` for browsing the file at *path*, possibly while it expands. If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
+An instance of this class holds a widget :attr:`main` for browsing the file at *path*, possibly while it expands. If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
 
 :param path: a path to an existing file
 :param start: index of start pointed
@@ -99,7 +101,7 @@ An instance of this class holds a widget :attr:`w_main` for browsing the file at
     w_tobeg = SimpleButton(icon='angle-double-left',tooltip='Jump to beginning of file')
     w_closeb = SimpleButton(icon='close',tooltip='Close browser')
     w_pos = Label('')
-    self.w_main = w_main = VBox([HBox([w_closeb,w_ctrl,w_pos,w_tobeg,w_toend]),w_win])
+    self.main = main = VBox([HBox([w_closeb,w_ctrl,w_pos,w_tobeg,w_toend]),w_win])
     # event handling
     def setpos(n,nbefore=context[0]+1,nafter=context[1]+1):
       def readlinesFwd(u,n,k):
@@ -137,7 +139,7 @@ An instance of this class holds a widget :attr:`w_main` for browsing the file at
     def toend(): w_ctrl.value = fsize
     def tobeg(): w_ctrl.value = 0
     def close():
-      w_main.close()
+      main.close()
       file.close()
       if observer is not None: observer.stop(); observer.join()
     def resetsize():
@@ -162,12 +164,12 @@ An instance of this class holds a widget :attr:`w_main` for browsing the file at
       observer.schedule(MyHandler(str(path),resetsize),str(path.parent))
       observer.start()
     else: observer=None
-  def _ipython_display_(self): return self.w_main._ipython_display_()
+  def _ipython_display_(self): return self.main._ipython_display_()
 
 #==================================================================================================
 class db_browser:
   r"""
-An instance of this class holds a widget :attr:`w_main` for exploring a database specified by *spec*. If a metadata structure is specified, it must be bound to an existing engine and reflected.
+An instance of this class holds a widget :attr:`main` for exploring a database specified by *spec*. If a metadata structure is specified, it must be bound to an existing engine and reflected.
 
 :param spec: an sqlalchemy url or engine or metadata structure, defining the database to explore
   """
@@ -191,7 +193,7 @@ An instance of this class holds a widget :attr:`w_main` for exploring a database
       meta.reflect(views=True)
       no_table_msg = 'Database is empty'
     if not meta.tables:
-      self.w_main = Label(value=no_table_msg)
+      self.main = Label(value=no_table_msg)
       return
     config = dict((name,db_browser_table(t)) for name,t in meta.tables.items())
     config_header = db_browser_table.header()
@@ -211,7 +213,7 @@ An instance of this class holds a widget :attr:`w_main` for exploring a database
     w_size = Text('',disabled=True,tooltip='Number of rows',layout=dict(width='4cm'),style=AutoWidthStyle)
     w_offset = IntSlider(description='offset',min=0,step=1,layout=dict(width='10cm'),readout=False,style=AutoWidthStyle)
     w_out = Output()
-    self.w_main = w_main = VBox([HBox([w_closeb,w_title]),HBox([w_table,w_detailb]),w_detail,HBox([w_nsample,Label('/',style=AutoWidthStyle),w_size,w_offset,w_reloadb]),w_out])
+    self.main = main = VBox([HBox([w_closeb,w_title]),HBox([w_table,w_detailb]),w_detail,HBox([w_nsample,Label('/',style=AutoWidthStyle),w_size,w_offset,w_reloadb]),w_out])
     # event handling
     def size(table): # returns the size of a table
       try: return engine.execute(select([func.count()]).select_from(table)).fetchone()[0]
@@ -261,7 +263,7 @@ An instance of this class holds a widget :attr:`w_main` for exploring a database
     # event binding
     w_detailb.on_click(lambda b: toggledetail())
     w_reloadb.on_click(lambda b: show())
-    w_closeb.on_click(lambda b: w_main.close())
+    w_closeb.on_click(lambda b: main.close())
     w_table.observe(set_table,'value')
     w_offset.observe(set_offset,'value')
     w_nsample.observe(set_nsample,'value')
@@ -269,7 +271,7 @@ An instance of this class holds a widget :attr:`w_main` for exploring a database
     w_ordr.observe(set_ordr,'value')
     # initialisation
     set_table()
-  def _ipython_display_(self): return self.w_main._ipython_display_()
+  def _ipython_display_(self): return self.main._ipython_display_()
 #==================================================================================================
 class db_browser_table:
   """An instance of this data class holds the configuration and widget of a table."""
@@ -313,7 +315,7 @@ class db_browser_table:
 class hastrait_editor:
 #==================================================================================================
   r"""
-An instance of this class holds a widget :attr:`w_main` for editing a traitlets structure. The construction of the widget is directed by metadata which must be associated to each editable trait in *target* under the key ``widget``. This is either a callable, which produces a widget for that trait, or a :class:`dict`, passed as keyword arguments to a widget guesser. Guessing is based on the trait class. Each property in *default_trait_layout* is applied to all the trait widget layouts which assign a :const:`None` value to that property. The overall editor widget can be further customised using the following attributes:
+An instance of this class holds a widget :attr:`main` for editing a traitlets structure. The construction of the widget is directed by metadata which must be associated to each editable trait in *target* under the key ``widget``. This is either a callable, which produces a widget for that trait, or a :class:`dict`, passed as keyword arguments to a widget guesser. Guessing is based on the trait class. Each property in *default_trait_layout* is applied to all the trait widget layouts which assign a :const:`None` value to that property. The overall editor widget can be further customised using the following attributes:
 
 .. attribute:: toolbar,header,footer
 
@@ -336,7 +338,7 @@ An instance of this class holds a widget :attr:`w_main` for editing a traitlets 
     self.toolbar = HBox([w_closeb,w_resetb])
     self.header = VBox()
     self.footer = VBox()
-    self.w_main = w_main = VBox([self.toolbar,self.header,*(cfg.widget for cfg in config.values()),self.footer])
+    self.main = main = VBox([self.toolbar,self.header,*(cfg.widget for cfg in config.values()),self.footer])
     # event handling
     def updw(w,x): w.value = x
     def upda(name,w,x):
@@ -350,9 +352,9 @@ An instance of this class holds a widget :attr:`w_main` for editing a traitlets 
       cfg.resetb.on_click(lambda b,w=cfg.interact,x=initial[name]: updw(w,x))
       cfg.interact.observe((lambda c,name=name,w=cfg.interact: upda(name,w,c.new)),'value')
       target.observe((lambda c,w=cfg.interact: updw(w,c.new)),name)
-    w_closeb.on_click(lambda b: w_main.close())
+    w_closeb.on_click(lambda b: main.close())
     w_resetb.on_click(lambda b: reset(initial))
-  def _ipython_display_(self): return self.w_main._ipython_display_()
+  def _ipython_display_(self): return self.main._ipython_display_()
 #==================================================================================================
 class hastrait_editor_trait:
   """An instance of this data class holds the configuration and widget of a trait."""
@@ -410,50 +412,84 @@ class hastrait_editor_trait:
 #==================================================================================================
 class animation_player:
   r"""
-An instance of this class holds a widget :attr:`w_main` for running an abstract animation.
+An instance of this class holds a widget :attr:`main` to control abstract animations. An animation is any callback which can be passed a frame number, enumerated by the animation widgets. The set of frame numbers is split into contiguous intervals called tracks. Parameter *track* is a function which returns, for each valid frame number, the bounds of its track interval.
+
+* If *track* is an :class:`int` instance, the intervals are of constant length *track*
+* If *track* is an increasing sequence of :class:`int` instances, the intervals are the consecutive pairs in the sequence
+* Otherwise, *track* must be a function of one :class:`int` input returning two :class:`int` outputs
+
+A number of other widgets are accessible in addition to :attr:`main`: :attr:`toolbar`, :attr:`w_console`
+
+:param track: track function
+:param children: passed as children of the :attr:`main` widget, which is a :class:`ipywidgets.VBox`
   """
 #==================================================================================================
-  def __init__(self,*children,**ka):
-    self.w_play = w_play = Play(0,min=0,**ka)
-    w_ind = IntSlider(w_play.value,min=w_play.min,readout=False)
+  def __init__(self,children=(),track=None,**ka):
+    if not callable(track):
+      if isinstance(track,int):
+        assert track>0
+        def track(n,N=track): m = n-n%N; return m,m+N
+      else:
+        L = tuple((0,*track))
+        assert len(L)>1 and all(isinstance(n,int) for n in L) and all(n<n_ for (n,n_) in zip(L[:-1],L[1:]))
+        from bisect import bisect
+        def track(n,L=L,imax=len(L)): i = bisect(L,n); return (L[i-1],L[i]) if i<imax else None
+    self.track = track
+    self.w_play = w_play = Play(0,min=0,max=track(0)[1],show_repeat=False,**ka)
+    w_ind = IntSlider(0,readout=False)
     self.w_closeb = w_closeb = SimpleButton(icon='close',tooltip='Close player')
-    self.w_console = w_console = Output(layout={'border':'thin solid'})
     self.w_clearb = w_clearb = SimpleButton(icon='trash',tooltip='Clear console',layout={'display':'none'})
+    self.w_console = w_console = Output(layout={'border':'thin solid'})
     self.toolbar = toolbar = HBox([w_closeb,w_play,w_ind,w_clearb])
-    self.w_main = w_main = VBox([toolbar,w_console,*children])
+    self.main = main = VBox([toolbar,w_console,*children])
     jslink((w_play,'value'),(w_ind,'value'))
     jslink((w_play,'min'),(w_ind,'min'))
     jslink((w_play,'max'),(w_ind,'max'))
-    w_closeb.on_click(lambda b: w_main.close())
+    def continuity(c):
+      if c.new == w_play.max and (tr:=track(c.new)) is not None and tr[0] == c.new:
+        w_play.max = tr[1]; w_play.min = tr[0]
+    w_play.observe(continuity,'value')
+    w_closeb.on_click(lambda b: main.close())
     w_closeb.on_click(lambda b: w_play.close()) # does not seem to be done by default!
     def console_clear():
       from IPython.display import clear_output
       with w_console: clear_output()
-      w_clearb.layout.display = 'none'
-    def console_show():
-      if w_console.outputs: w_clearb.layout.display = ''
-    w_console.observe((lambda c: console_show()),'outputs')
+    def clearb_display():
+      w_clearb.layout.display = '' if w_console.outputs else 'none'
     w_clearb.on_click(lambda b: console_clear())
-  def bind(self,f):
+    w_console.observe((lambda c: clearb_display()),'outputs')
+
+  def bind(self,f,trait='value'):
+    r"""Assigns a callback *f* to a trait on the :attr:`w_play` widget."""
+    @wraps(f)
     def F(c):
-      with self.w_console: f(c.new)
-    self.w_play.observe(F,'value')
+      try: f(c.new)
+      except:
+        with self.w_console: traceback.print_exc()
+        self.pause()
+        raise
+    self.w_play.observe(F,trait)
     return F
-  def unbind(self,F):
-    self.w_play.unobserve(F,'value')
+  def unbind(self,F,trait='value'):
+    r"""Unassigns a callback assigned by method :meth:`bind`."""
+    self.w_play.unobserve(F,trait)
+
+  def pause(self):
+    r"""Pauses the animation"""
+    self.w_play._playing = False
+
   @property
-  def vmin(self): return self.w_play.min
-  @vmin.setter
-  def vmin(self,n): self.w_play.min = n
-  @property
-  def vmax(self): return self.w_play.max
-  @vmax.setter
-  def vmax(self,n): self.w_play.max = n
-  @property
-  def value(self): return self.w_play.value
+  def value(self):
+    r"""Value of the current frame number; uses the track function to redefine the current track interval"""
+    return self.w_play.value
   @value.setter
-  def value(self,n): self.w_play.value = n
-  def _ipython_display_(self): self.w_main._ipython_display_()
+  def value(self,n):
+    tmin,tmax = self.track(n)
+    w = self.w_play
+    # the intervals (tmin,tmax) and (w.min,w.max) must be disjoint or identical
+    if w.max > tmax: w.min = tmin; w.value = n; w.max = tmax
+    else: w.max = tmax; w.value = n; w.min = tmin
+  def _ipython_display_(self): self.main._ipython_display_()
 
 #==================================================================================================
 class SelectMultipleOrdered (VBox):

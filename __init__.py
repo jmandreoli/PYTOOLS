@@ -924,11 +924,11 @@ def versioned(v)->Callable[[Callable],Callable]:
 A decorator which assigns attribute :attr:`version` of the target function to *v*. The function must be defined at the toplevel of its module. The version must be a simple value.
   """
 #==================================================================================================
-  def transf(f):
+  def transform(f):
     from inspect import isfunction
     assert isfunction(f)
     f.version = v; return f
-  return transf
+  return transform
 
 #==================================================================================================
 # Utilities

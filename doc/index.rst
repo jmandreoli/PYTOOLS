@@ -10,11 +10,13 @@ PYTOOLS package documentation
    :maxdepth: 2
    :caption: Contents:
 
+   mod_animation.rst
    mod_cache.rst
    mod_ipywidgets.rst
    mod_polling.rst
-   mod_torch.rst
+   mod_simpy.rst
    mod_tensorboard_manager.rst
+   mod_torch.rst
 
 Available types and functions
 -----------------------------

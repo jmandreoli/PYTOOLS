@@ -256,10 +256,10 @@ which displays roughly as:
 #==================================================================================================
   _html_style = '''
 #toplevel { border-collapse: collapse; }
-#toplevel > thead > tr > td, #toplevel > tbody > tr > td { border: thin solid black; background-color:white; text-align:left; }
-#toplevel > thead > tr { border-bottom: thick solid black; }
+#toplevel > thead > tr > td, #toplevel > tbody > tr > td { border: thin solid; text-align:left; }
+#toplevel > thead > tr { border-bottom: thick solid; }
 #toplevel > thead > tr > td > div, #toplevel > tbody > tr > td > div { padding:0; max-height: 5cm; overflow-y: auto; }
-#toplevel span.pointer { color: blue; background-color: #e0e0e0; font-weight:bold; }
+#toplevel span.pointer { padding: 0; color: blue; background-color: #e0e0e0; font-weight:bold; }
 '''
   _html_limit = 50
   def _repr_html_(self):
@@ -292,7 +292,7 @@ class HtmlPluginPointer:
     self.name = '?'+str(k)
     tref = f'document.getElementById(\'{tid}\').rows[{k}]'
     self.attrs = dict(
-      onmouseenter=tref+'.style.outline=\'thick solid red\'',
+      onmouseenter=tref+'.style.outline=\'thin solid red\'',
       onmouseleave=tref+'.style.outline=\'\'',
       onclick=tref+'.scrollIntoView()',
       )

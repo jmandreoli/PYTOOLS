@@ -31,7 +31,7 @@ author = 'Jean-Marc Andreoli'
 # ones.
 extensions = [
     'sphinx.ext.autodoc',
-    #'sphinx_autodoc_typehints', # temporarily broken (2020-07-13); see https://github.com/agronholm/sphinx-autodoc-typehints/issues/129
+    'sphinx_autodoc_typehints', # temporarily broken (2020-07-13); see https://github.com/agronholm/sphinx-autodoc-typehints/issues/129
     'sphinx.ext.mathjax',
     'sphinx.ext.viewcode',
 ]

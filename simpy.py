@@ -66,7 +66,7 @@ Note that the *interval* is bounded below by the real time needed to construct a
 
 :param content: list of environments with displayers
 :type content: :class:`Sequence[Tuple[simpy.Environment,Callable[[simpy.Environment,Any],Callable[[],None]],...]]`
-:param play_kw: a dictionary of keyword arguments, passed to method :meth:`init_player`
+:param play_kw: a dictionary of keyword arguments, passed to the player constructor (attribute :attr:`factory`)
 :param frame_per_stu: the number of frames per stu
 :param ka: passed to method :meth:`parts`
   """
@@ -80,46 +80,20 @@ Note that the *interval* is bounded below by the real time needed to construct a
     assert all((isinstance(env,RobustEnvironment) and all(callable(f) for f in L)) for env,*L in content)
     self.frame_per_stu = frame_per_stu = float(frame_per_stu)
     assert frame_per_stu > 0
-    play_kw = dict(play_kw)
-    track = play_kw.pop('track')
-    assert track is not None
-    if callable(track):
-      track = lambda n,track_=track: None if (tr:=track_(n/frame_per_stu)) is None else tuple(int(t*frame_per_stu) for t in tr)
-    elif isinstance(track,float):
-      track = int(track*frame_per_stu)
-    else:
-      track = (int(t*frame_per_stu) for t in tuple(track))
-    play_kw['track'] = track
-    self.player = self.make_player(**dict(self.play_default,**play_kw))
+    self.player = self.factory(self.display_content,rate=1./self.frame_per_stu,**dict(self.play_default,**play_kw))
     board = self.player.board
     self.content = [(env,tuple(f(env,part) for f in L)) for (env,*L),part in zip(content,self.parts(board,**ka))]
-    self.player.bind(self.display_content)
-    self.display_content(0)
 
-  def display_content(self,n):
-    dt = n/self.frame_per_stu
+  def display_content(self,v):
     for env,L in self.content:
-      env.run_robust(env.init_t+dt)
+      env.run_robust(env.init_t+v)
       for disp in L: disp()
 
-  def make_player(self,**ka):
-    r"""
-Instantiate attribute :attr:`player`. This implementation uses an instance of class :class:`animation_player`.
-    """
+  @cached_property
+  def factory(self):
     from matplotlib import get_backend
-    backend = get_backend()
-    if 'ipympl' in backend:
-      from .animation import widget_animation_player
-      fig_kw = ka.pop('fig_kw',{})
-      player = widget_animation_player(**ka).add_clock(self.frame_per_stu)
-      player.board = player.mpl_figure(**fig_kw)
-    else:
-      from .animation import mpl_animation_player
-      player = mpl_animation_player(rate=self.frame_per_stu,**ka) # board attribute is already included
-    return player
-
-  def bind(self,*a): self.player.bind(*a)
-  def unbind(self,*a): self.player.unbind(*a)
+    from .animation import widget_animation_player, mpl_animation_player
+    return widget_animation_player if 'ipympl' in get_backend() else mpl_animation_player
 
   ax_default = {'aspect':'equal','gridlines':True}
   r"""The default arguments passed to the ``ax_kw`` parameter in method :meth:`parts`"""
@@ -127,7 +101,7 @@ Instantiate attribute :attr:`player`. This implementation uses an instance of cl
     r"""
 Generator of parts. This implementation assumes the board is a :mod:`matplotlib` grid-figure, and yields its subplots (each subplot is a part). The number of parts must be at least equal to the number of environments to which they are assigned, otherwise some environments are not processed.
 
-:param ax_kw: a dictionary of keyword arguments passed to the :meth:`set` method of each part (key ``gridlines`` is also allowed and denotes whether gridlines should be displayed)
+:param ka: a dictionary of keyword arguments passed to the :meth:`add_subplot` method of each part (key ``gridlines`` is also allowed and denotes whether gridlines should be displayed)
     """
     from numpy import zeros
     share = dict(all=(lambda row,col: (0,0)),row=(lambda row,col: (row,0)),col=(lambda row,col: (0,col)),none=(lambda row,col: (-1,-1)))

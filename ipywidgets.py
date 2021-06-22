@@ -438,6 +438,103 @@ class hastrait_editor_trait:
     self.widget = HBox([resetb,label,w])
 
 #==================================================================================================
+class widget_animation_player (app):
+  r"""
+An instance of this class holds a widget :attr:`main` to control abstract animations. An animation is any callback which can be passed a frame number, enumerated by the animation widgets. The set of frame numbers is split into a sequence of contiguous intervals called tracks. Parameter *track* is a function which returns, for each valid frame number, the bounds of its track interval, and :const:`None` for invalid frame numbers.
+
+* If *track* is an :class:`int` instance, the intervals are of constant length *track*
+* If *track* is an increasing sequence of :class:`int` instances, the intervals are the consecutive pairs in the sequence
+* Otherwise, *track* must be a function of one :class:`int` input returning two :class:`int` outputs
+
+A number of other widgets are accessible in addition to :attr:`main`: :attr:`toolbar`, :attr:`w_console`
+
+:param track: track function
+:param children: passed as children of the :attr:`main` widget, which is a :class:`VBox`
+:param continuity: if :const:`True` (default), proceeds to the next track at the end of each track
+:param ka: passed to the :class:`Play` constructor
+  """
+#==================================================================================================
+
+  def __init__(self,children=(),toolbar=(),track:Union[int,Sequence[int],Callable[[int],Tuple[int,int]]]=None,continuity:bool=True,**ka):
+    from ipywidgets import Play, IntSlider, jslink
+    if not callable(track):
+      if isinstance(track,int):
+        assert track>0
+        def track(n,N=track): m = n-n%N; return m,m+N
+      else:
+        L = tuple((0,*track))
+        assert len(L)>1 and all(isinstance(n,int) for n in L) and all(n<n_ for (n,n_) in zip(L[:-1],L[1:]))
+        from bisect import bisect
+        def track(n,L=L,imax=len(L)): i = bisect(L,n); return (L[i-1],L[i]) if i<imax else None
+    self.track = track
+    self.w_play = w_play = Play(0,min=0,max=track(0)[1],show_repeat=False,**ka)
+    w_ind = IntSlider(0,readout=False)
+    super().__init__(children,toolbar=[w_play,w_ind,*toolbar])
+    self.on_close(w_play.close)
+    jslink((w_play,'value'),(w_ind,'value'))
+    jslink((w_play,'min'),(w_ind,'min'))
+    jslink((w_play,'max'),(w_ind,'max'))
+    if continuity:
+      def _continuity(c):
+        if c.new == w_play.max and (tr:=track(c.new)) is not None:
+          w_play.max = tr[1]; w_play.min = tr[0]
+      w_play.observe(_continuity,'value')
+
+  def add_clock(self,rate:float=None):
+    r"""Adds a clock to the player, displaying (and allowing edition of) an index quantity proportional to the frame number. *rate* is the proportion in index per frame."""
+    from ipywidgets import Text, FloatText
+    if rate is None: rate = 1000/self.w_play.interval # frame/sec
+    w_clockb = SimpleButton(icon='stopwatch',tooltip='manually reset clock')
+    w_clock = Text('',layout=dict(width='1.6cm',padding='0cm'),disabled=True)
+    w_clock2 = FloatText(0,min=0,layout=dict(width='1.6cm',padding='0cm',display='none'))
+    w_clock2.active = False
+    def tick(n): w_clock.value = f'{n/rate:.2f}'
+    def set_clock():
+      self.pause()
+      w_clock2.value = self.value/rate
+      w_clockb.layout.visibility,w_clock.layout.display,w_clock2.layout.display,w_clock2.active = 'hidden','none','',True
+    w_clockb.on_click(lambda b: set_clock())
+    def clock_set():
+      if not w_clock2.active: return
+      w_clockb.layout.visibility,w_clock.layout.display,w_clock2.layout.display,w_clock2.active = 'visible','','none',False
+      self.value = int(w_clock2.value*rate)
+    w_clock2.observe((lambda c: clock_set()),'value')
+    self.toolbar.children += (w_clockb, w_clock, w_clock2)
+    self.bind(tick)
+    return self
+
+  def bind(self,f:Callable[[int],None],trait:str='value'):
+    r"""Assigns a callback *f* to a trait on the :attr:`w_play` widget."""
+    @wraps(f)
+    def F(c):
+      try: f(c.new)
+      except:
+        with self: traceback.print_exc() # using the implicit console
+        self.pause()
+        raise
+    self.w_play.observe(F,trait)
+    return F
+  def unbind(self,F,trait='value'):
+    r"""Unassigns a callback assigned by method :meth:`bind`."""
+    self.w_play.unobserve(F,trait)
+
+  def pause(self):
+    r"""Pauses the animation"""
+    self.w_play._playing = False
+
+  @property
+  def value(self):
+    r"""Value of the current frame number; uses the track function to redefine the current track interval when set"""
+    return self.w_play.value
+  @value.setter
+  def value(self,n:int):
+    tmin,tmax = self.track(n)
+    w = self.w_play
+    # by construction, the intervals (tmin,tmax) and (w.min,w.max) are either disjoint or identical
+    if w.max > tmax: w.min = tmin; w.value = n; w.max = tmax
+    else: w.max = tmax; w.value = n; w.min = tmin
+
+#==================================================================================================
 class SelectMultipleOrdered (VBox):
   r"""
 Essentially like :class:`SelectMultiple` but preserves order of selection.

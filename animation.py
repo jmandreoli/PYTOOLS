@@ -8,7 +8,7 @@ r"""
 :mod:`PYTOOLS.animation` --- Animation utilities
 ================================================
 
-This module provides basic utilities for animations (in matplotlib), controlled either through :mod:`ipywidgets` widgets or home grown :mod:`matplotlib` widgets.
+This module provides basic utilities to play animations (in matplotlib). An animation is any callback which can be passed a frame number, enumerated by the player. The set of frame numbers is split into a sequence of contiguous intervals called tracks. A track function is a function of frame numbers which returns, for each valid frame number, the bounds of its track interval, and :const:`None` for invalid frame numbers.
 
 Available types and functions
 -----------------------------
@@ -22,285 +22,217 @@ import logging; logger = logging.getLogger(__name__)
 import traitlets, traceback
 from functools import wraps, partial
 from matplotlib import rcParams
-from matplotlib.pyplot import figure
+from matplotlib.pyplot import figure, Figure
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Rectangle
-from matplotlib.axes import Axes
 from matplotlib.backend_bases import MouseButton
-try: from .ipywidgets import app, SimpleButton # so this owrks even if ipywidgets is not available
+try: from .ipywidgets import app, SimpleButton # so this works even if ipywidgets is not available
 except: app = object
 
 #==================================================================================================
-class widget_animation_player (app):
+def track_function(track:Union[float,Sequence[float],Callable[[float],Tuple[float,float]]],stype:type):
   r"""
-An instance of this class holds a widget :attr:`main` to control abstract animations. An animation is any callback which can be passed a frame number, enumerated by the animation widgets. The set of frame numbers is split into a sequence of contiguous intervals called tracks. Parameter *track* is a function which returns, for each valid frame number, the bounds of its track interval, and :const:`None` for invalid frame numbers.
+A track function decomposes an interval of scalar (containing 0) into contiguous intervals. It can be specified either as a callable of one scalar input returning two scalar outputs (bounds of its track interval), or as
 
-* If *track* is an :class:`int` instance, the intervals are of constant length *track*
-* If *track* is an increasing sequence of :class:`int` instances, the intervals are the consecutive pairs in the sequence
-* Otherwise, *track* must be a function of one :class:`int` input returning two :class:`int` outputs
+* a scalar, in which case the intervals are of constant length equal to that scalar, starting at 0
+* or an increasing sequence of scalars, in which case the intervals are the consecutive pairs in the sequence
+  """
+# ==================================================================================================
+  if not callable(track):
+    if isinstance(track,stype):
+      assert track>0
+      def track(x,T=track): x -= x%T; return x,x+T
+    else:
+      L = tuple((0,*track))
+      assert len(L)>1 and all(isinstance(x,stype) for x in L[1:]) and all(x<x_ for (x,x_) in zip(L[:-1],L[1:]))
+      from bisect import bisect
+      def track(x,L=L,imax=len(L)): i = bisect(L,x); return (L[i-1],L[i]) if i<imax else None
+  return track
 
-A number of other widgets are accessible in addition to :attr:`main`: :attr:`toolbar`, :attr:`w_console`
+#==================================================================================================
+class animation_player_base:
+  r"""
+Instances of this class are players for :mod:`matplotlib` animations.
 
-:param track: track function
-:param children: passed as children of the :attr:`main` widget, which is a :class:`VBox`
-:param continuity: if :const:`True` (default), proceeds to the next track at the end of each track
-:param ka: passed to the :class:`Play` constructor
+:param display: the function which takes a simulation time and displays the corresponding (closest) frame
+:param track: track generator decomposing the simulation interval into contiguous simulation time periods (tracks)
+:param rate: frames per simulation time
+:param ka: passed to the :func:`matplotlib.animation.FuncAnimation` constructor
   """
 #==================================================================================================
-  def __init__(self,children=(),toolbar=(),track:Union[int,Sequence[int],Callable[[int],Tuple[int,int]]]=None,continuity:bool=True,**ka):
-    from ipywidgets import Play, IntSlider, jslink
-    if not callable(track):
-      if isinstance(track,int):
-        assert track>0
-        def track(n,N=track): m = n-n%N; return m,m+N
-      else:
-        L = tuple((0,*track))
-        assert len(L)>1 and all(isinstance(n,int) for n in L) and all(n<n_ for (n,n_) in zip(L[:-1],L[1:]))
-        from bisect import bisect
-        def track(n,L=L,imax=len(L)): i = bisect(L,n); return (L[i-1],L[i]) if i<imax else None
-    self.track = track
-    self.w_play = w_play = Play(0,min=0,max=track(0)[1],show_repeat=False,**ka)
-    w_ind = IntSlider(0,readout=False)
-    super().__init__(children,toolbar=[w_play,w_ind,*toolbar])
-    self.on_close(w_play.close)
-    jslink((w_play,'value'),(w_ind,'value'))
-    jslink((w_play,'min'),(w_ind,'min'))
-    jslink((w_play,'max'),(w_ind,'max'))
-    if continuity:
-      def _continuity(c):
-        if c.new == w_play.max and (tr:=track(c.new)) is not None:
-          w_play.max = tr[1]; w_play.min = tr[0]
-      w_play.observe(_continuity,'value')
+  board: Figure
+  r"""The figure on which to start the animation"""
+  running: bool
+  r"""The running state of the animation"""
+  frame: int
+  r"""The current frame displayed by the animation"""
+  anim: FuncAnimation
+  r"""The animation"""
+  rate: float
+  r"""The frame rate, in frames per simulation time"""
 
-  def add_clock(self,rate:float=None):
-    r"""Adds a clock to the player, displaying (and allowing edition of) an index quantity proportional to the frame number. *rate* is the proportion in index per frame."""
-    from ipywidgets import Text, FloatText
-    if rate is None: rate = 1000/self.w_play.interval # frame/sec
+  def __init__(self,display:Callable[[float],None],track=None,rate:float=None,**ka):
+    self.track = track_function(track,float)
+    def frames():
+      self.setrunning(False)
+      yield self.setval(0.)
+      while (n:=self.setval()) is not None: yield n
+    self.anim = anim = FuncAnimation(self.board,(lambda n: display(n*rate)),frames,init_func=(lambda:None),repeat=False,**ka)
+    if rate is None: rate = anim._interval/1000. # real time
+    self.rate = rate
+
+  def animation_running(self,b:bool):
+    self.running = b = ((not self.running) if b is None else b)
+    if b: self.anim.resume()
+    else: self.anim.pause()
+    return b
+
+  def setrunning(self,b:bool):
+    r"""Sets the running state of the animation. Must be refined in subclasses or in instances."""
+    raise NotImplementedError()
+
+  def setval(self,v:float):
+    r"""Sets the current frame to be displayed by the animation. Must be refined in subclasses or in instances."""
+    raise NotImplementedError()
+
+#==================================================================================================
+class widget_animation_player (app,animation_player_base):
+  r"""
+Instances of this class are players for :mod:`matplotlib` animations controlled from `mod:ipywidgets` widgets.
+
+:param fig_kw: configuration of the animation figure
+  """
+#==================================================================================================
+  def __init__(self,display:Callable[[float],None],fig_kw={},children=(),toolbar=(),**ka):
+    from ipywidgets import Text, FloatText, IntSlider
+    w_play_toggler = SimpleButton(icon='')
+    w_track_manager = IntSlider(0,min=0,readout=False)
+    w_track_manager.active = True
     w_clockb = SimpleButton(icon='stopwatch',tooltip='manually reset clock')
     w_clock = Text('',layout=dict(width='1.6cm',padding='0cm'),disabled=True)
     w_clock2 = FloatText(0,min=0,layout=dict(width='1.6cm',padding='0cm',display='none'))
     w_clock2.active = False
-    def tick(n): w_clock.value = f'{n/rate:.2f}'
+    app.__init__(self,children,toolbar=[w_play_toggler,w_track_manager,w_clockb,w_clock,w_clock2,*toolbar])
+    self.board = board = self.mpl_figure(**fig_kw)
+    w_play_toggler.on_click(lambda b: setrunning())
     def set_clock():
-      self.pause()
-      w_clock2.value = self.value/rate
+      w_clock2.value = self.frame*self.rate
       w_clockb.layout.visibility,w_clock.layout.display,w_clock2.layout.display,w_clock2.active = 'hidden','none','',True
     w_clockb.on_click(lambda b: set_clock())
-    def clock_set():
-      if not w_clock2.active: return
+    def clock_set(v):
       w_clockb.layout.visibility,w_clock.layout.display,w_clock2.layout.display,w_clock2.active = 'visible','','none',False
-      self.value = int(w_clock2.value*rate)
-    w_clock2.observe((lambda c: clock_set()),'value')
-    self.toolbar.children += (w_clockb, w_clock, w_clock2)
-    self.bind(tick)
-    return self
+      setval(v,submit=True)
+    w_clock2.observe((lambda c: clock_set(c.new) if w_clock2.active else None),'value')
+    w_track_manager.observe((lambda c: setval(d=c.new,submit=True) if w_track_manager.active else None),'value')
+    ctrack = -1,0,1
+    def setval(v=None,d=None,submit=False):
+      nonlocal ctrack
+      if v is None:
+        if d is None: self.frame += 1
+        else: self.frame = ctrack[0]+d
+        v = self.frame*self.rate
+      else: self.frame = int(v/self.rate)
+      w_clock.value = f'{v:.02f}'
+      x = self.frame-ctrack[0]
+      w_track_manager.active = False
+      if x<0 or x>=ctrack[2]:
+        track_ = self.track(v)
+        if track_ is None: return
+        ctrack = tuple(int(v_/self.rate) for v_ in track_)
+        w_track_manager.max = span = ctrack[1]-ctrack[0]
+        ctrack += (span,)
+        x = self.frame-ctrack[0]
+      w_track_manager.value = x
+      w_track_manager.active = True
+      if submit:
+        display(v)
+        board.canvas.draw_idle()
+      return self.frame
+    self.setval = setval
+    def setrunning(b=None):
+      w_play_toggler.icon = 'pause' if self.animation_running(b) else 'play'
+    self.setrunning = setrunning
+    animation_player_base.__init__(self,display,**ka)
 
-  def bind(self,f:Callable[[int],None],trait:str='value'):
-    r"""Assigns a callback *f* to a trait on the :attr:`w_play` widget."""
-    @wraps(f)
-    def F(c):
-      try: f(c.new)
-      except:
-        with self: traceback.print_exc() # using the implicit console
-        self.pause()
-        raise
-    self.w_play.observe(F,trait)
-    return F
-  def unbind(self,F,trait='value'):
-    r"""Unassigns a callback assigned by method :meth:`bind`."""
-    self.w_play.unobserve(F,trait)
-
-  def pause(self):
-    r"""Pauses the animation"""
-    self.w_play._playing = False
-
-  @property
-  def value(self):
-    r"""Value of the current frame number; uses the track function to redefine the current track interval when set"""
-    return self.w_play.value
-  @value.setter
-  def value(self,n:int):
-    tmin,tmax = self.track(n)
-    w = self.w_play
-    # by construction, the intervals (tmin,tmax) and (w.min,w.max) are either disjoint or identical
-    if w.max > tmax: w.min = tmin; w.value = n; w.max = tmax
-    else: w.max = tmax; w.value = n; w.min = tmin
-
-class Button:
+#==================================================================================================
+class mpl_animation_player (animation_player_base):
   r"""
-Instances of this class are press buttons in :mod:`matplotlib`.
-  """
-  def __init__(self,ax:Axes,label:str):
-    self.enabled = True; self.ax = ax; ax.set(xticks=(),yticks=())
-    ax.text(.5,.5,label,ha='center',va='center',transform=ax.transAxes)
-    def clicked(f,ev): return f(ev) if self.enabled and ev.inaxes is ax else None
-    self.on_clicked = lambda f: ax.figure.canvas.mpl_connect('button_press_event',partial(clicked,f))
-  def set_enabled(self,b:bool=True): self.enabled = b
+Instances of this class are players for :mod:`matplotlib` animations, controlled within matplotlib.
 
-class Slider:
-  r"""
-Instances of this class are normalised sliders in :mod:`matplotlib`. Range is always 0-1.
-  """
-  def __init__(self,ax:Axes,**ka):
-    self.ax = ax
-    self.enabled = True; ax.set(xticks=(),yticks=())
-    canvas = ax.figure.canvas
-    pix2pc = ax.transAxes.inverted().transform
-    rect = ax.add_patch(Rectangle((0.,0.),0.,1.,fill=True,transform=ax.transAxes,**ka))
-    def set_val(v): rect.set(width=v); canvas.draw_idle()
-    self.set_val = set_val
-    def set_val_from_click(ev):
-      if ev.button == MouseButton.LEFT and ev.key is None and not ev.dblclick and self.enabled and ev.inaxes is ax:
-        set_val(pix2pc((ev.x,ev.y))[0])
-    canvas.mpl_connect('button_press_event',set_val_from_click)
-    def clicked(f,ev): return f(ev,pix2pc((ev.x,ev.y))[0]) if self.enabled and ev.inaxes is ax else None
-    self.on_clicked = lambda f: canvas.mpl_connect('button_press_event', partial(clicked,f))
-  def set_enabled(self,b:bool=True): self.enabled = b
-
-class TextBox:
-  r"""
-Instances of this class are basic text boxes in :mod:`matplotlib`.
-
-:param v: initial value
-:param format: from value to string representation (can be a format string)
-:param parse: from string representation to value
-  """
-  def __init__(self,ax,v,format:Union[str,Callable[[Any],str]]=(lambda v:v),parse:Callable[[str],Any]=(lambda v:v),**ka):
-    self.ax = ax; self.value = v
-    format = format.format if isinstance(format,str) else format
-    self.enabled = True; self.active = False; ax.set(xticks=(),yticks=())
-    submit_callbacks = []
-    canvas = ax.figure.canvas
-    self.content = content = ax.text(.5,.5,format(v),ha='center',va='center',transform=ax.transAxes,**ka)
-    content.colour = content.get_color()
-    def set_val(v):
-      self.value = v
-      if not self.active or not current: content.set(text=format(v)); canvas.draw_idle()
-    self.set_val = set_val
-    current = ''
-    def keypress(ev):
-      nonlocal current
-      if self.enabled and self.active and ev.inaxes == ax:
-        key = ev.key
-        if (enter:=(key == 'enter')) or key == 'escape':
-          if enter:
-            try:
-              self.value = v = parse(current)
-              for f in submit_callbacks: f(v)
-            except: return
-          content.set_text(format(v))
-          current = ''
-          self.active = False; content.set(color=content.colour)
-        else:
-          if key == 'backspace': new = current[:-1]
-          else: new = current+key
-          current = new
-          content.set_text(current or format(self.value))
-        canvas.draw_idle()
-    canvas.mpl_connect('key_press_event',keypress)
-    def activate_from_click(ev):
-      if ev.button == MouseButton.LEFT and ev.key is None and not ev.dblclick and self.enabled and ev.inaxes is ax:
-        self.active = True; content.set(color='r'); canvas.draw_idle()
-    canvas.mpl_connect('button_press_event',activate_from_click)
-    self.on_submit = submit_callbacks.append
-  def set_enabled(self,b:bool=True): self.enabled = b
-
-class mpl_animation_player (traitlets.HasTraits):
-  r"""
-Instances of this class are animation players for :mod:`matplotlib`.
-
-:param figsize: size of the content figure (excluding the toolbar)
+:param display: the function which takes a frame number and displays the corresponding frame
+:param track: track generator decomposing the simulation interval into contiguous simulation time periods (tracks)
+:param fig_kw: configuration of the animation figure (excluding the toolbar)
 :param tbsize: size of the toolbar
-:param interval: passed to the animation
-:param track: track generator
-:param rate: coefficient to multiply by frame number for clock display (default: sec per frames)
-:param ka: passed to the :func:`matplotlib.pyplot.figure` constructor
   """
-  value_ = traitlets.Integer()
-  def __init__(self,figsize=None,interval=None,track=None,rate=None,tbsize=((.15,1.,.8),.15),**ka):
-    if rate is None: rate = 1000./interval
-    if not callable(track):
-      if isinstance(track,int):
-        assert track>0
-        def track(n,N=track): m = n-n%N; return m,m+N
-      else:
-        L = tuple((0,*track))
-        assert len(L)>1 and all(isinstance(n,int) for n in L) and all(n<n_ for (n,n_) in zip(L[:-1],L[1:]))
-        from bisect import bisect
-        def track(n,L=L,imax=len(L)): i = bisect(L,n); return (L[i-1],L[i]) if i<imax else None
-    self.track = track
+# ==================================================================================================
+  def __init__(self,display:Callable[[float],None],fig_kw={},tbsize=((.15,1.,.8),.15),**ka):
     tbsize_ = sum(tbsize[0])
+    figsize = fig_kw.pop('figsize',None)
     if figsize is None: figsize = rcParams['figure.figsize']
     figsize_ = list(figsize); figsize_[1] += tbsize[1]; figsize_[0] = max(figsize_[0],tbsize_)
-    self.main = main = figure(figsize=figsize_,**ka)
+    self.main = main = figure(figsize=figsize_,**fig_kw)
     r = tbsize[1],figsize[1]
-    g = main.add_gridspec(nrows=2,ncols=1,height_ratios=r,bottom=0.,top=1.,left=0.,right=1.)
-    toolbar = main.add_subfigure(g[0])
-    for hid in (toolbar.canvas.manager.key_press_handler_id,toolbar.canvas.manager.button_press_handler_id):
-      if hid is not None: toolbar.canvas.mpl_disconnect(hid)
-    self.board = main.add_subfigure(g[1])
+    toolbar,self.board = main.subfigures(nrows=2,height_ratios=r)
+    # widget definition
     r = list(tbsize[0])
     r[1] += figsize_[0]-tbsize_
-    g = toolbar.add_gridspec(nrows=1,ncols=3,width_ratios=r,wspace=0.,bottom=0.,top=1.,left=0.,right=1.)
-    # widget definition
-    self.playb = playb = Button(toolbar.add_subplot(g[0]),'>')
-    self.slider = slider = Slider(toolbar.add_subplot(g[1]))
-    self.clock = clock = TextBox(toolbar.add_subplot(g[2]),0.,format='{:.02f}',parse=float)
-    # main callback
-    self.offset = 0; self.running = True; tmin = tmax = tspan = 0
-    def reset_track(v):
-      nonlocal tmin,tmax,tspan
-      tr = track(v)
-      if tr is None: anim.pause(); self.running = False; return
-      if tr[1] != tmax: tmin,tmax = tr; tspan = tmax-tmin
-      return v
-    self.reset_track = reset_track
-    def advance(n):
-      v = n+self.offset
-      if v>=tmax: reset_track(v)
-      self.value_ = v
-    self.anim = anim = FuncAnimation(main,advance,init_func=(lambda:None),repeat=False,interval=interval)
-    #anim.pause(); self.running = False; # ignored!
-    # callbacks
-    def set_val(v): self.offset += v-self.value_; self.value_ = v
-    def tick(c): slider.set_val((c.new-tmin)/tspan); clock.set_val(c.new/rate)
-    def slider_set(ev,v):
-      if ev.button == MouseButton.LEFT and ev.key is None and not ev.dblclick: set_val(int(tmin+tspan*v))
-    def clock_set(v):
-      v = int(v*rate)
-      if reset_track(v) is None: return
-      set_val(v)
-    def playb_clicked(ev):
-      if ev.button == MouseButton.LEFT and ev.key is None and not ev.dblclick:
-        if self.running: anim.pause(); self.running = False
-        else: anim.resume(); self.running = True
-    self.observe(tick,'value_')
-    playb.on_clicked(playb_clicked)
-    slider.on_clicked(slider_set)
-    clock.on_submit(clock_set)
-  def set_enabled(self,b:bool=True):
-    for a in (self.playb,self.slider,self.clock): a.set_enabled(b)
-  def on_close(self,f):
-    self.main.canvas.mpl_connect('close_event',(lambda ev: f()))
-  def bind(self,f):
-    @wraps(f)
-    def F(c):
-      try: f(c.new)
-      except: self.pause(); raise
-    self.observe(F,'value_')
-    return F
-  def unbind(self,f):
-    self.unobserve(f,'value_')
-  def pause(self):
-    self.anim.pause(); self.running = False
-  @property
-  def value(self):
-    r"""Value of the current frame number; uses the track function to redefine the current track interval when set"""
-    return self.value_
-  @value.setter
-  def value(self,v:int):
-    if self.reset_track(v) is None: raise ValueError(v)
-    self.offset += v-self.value_; self.value_ = v
-  def __enter__(self): pass
-  def __exit__(self,*a): pass
+    g = dict(width_ratios=r,wspace=0.,bottom=0.,top=1.,left=0.,right=1.)
+    axes = toolbar.subplots(ncols=3,subplot_kw=dict(xticks=(),yticks=(),navigate=False),gridspec_kw=g)
+    play_toogler = axes[0].text(.5,.5,'',ha='center',va='center',transform=axes[0].transAxes)
+    track_manager = axes[1].add_patch(Rectangle((0.,0.),0.,1.,fill=True,transform=axes[1].transAxes))
+    clock = axes[2].text(.5,.5,'',ha='center',va='center',transform=axes[2].transAxes)
+    pix2pc = track_manager.axes.transAxes.inverted().transform
+    def on_button_press(ev):
+      if ev.button == MouseButton.LEFT and ev.key is None:
+        if ev.inaxes is play_toogler.axes: setrunning()
+        elif ev.inaxes is track_manager.axes: setval(ctrack[0]+pix2pc((ev.x,ev.y))[0]*ctrack[2],submit=True)
+    edit_value = ''
+    def on_key_press(ev):
+      nonlocal edit_value
+      key = ev.key
+      if key == 'left' or key == 'right':
+        if ev.inaxes is not None: setval(d=(+1 if key=='right' else -1),submit=True)
+      elif ev.inaxes is clock.axes:
+        v,c = f'{self.frame*self.rate:.02f}','k'
+        if key=='enter':
+          try: v_ = float(edit_value)
+          except: return
+          edit_value = ''
+          if setval(v_,submit=True) is not None: return
+        else:
+          if key=='escape': edit_value = ''
+          elif key=='backspace':
+            edit_value = edit_value[:-1]
+            if edit_value: v,c = edit_value,'b'
+          elif key in '0123456789' or (key=='.' and '.' not in edit_value):
+            edit_value += key; v,c = edit_value,'b'
+          else: return
+        clock.set(text=v,color=c)
+        toolbar.canvas.draw_idle()
+    ctrack = -1.,0.,1.
+    def setval(v=None,d=+1,submit=False):
+      nonlocal ctrack
+      if v is None: self.frame += d; v = self.frame*self.rate
+      else: self.frame = int(v/self.rate)
+      x = (v-ctrack[0])/ctrack[2]
+      if x<0 or x>=1:
+        track_ = self.track(v)
+        if track_ is None: return
+        ctrack = tuple(track_)+(track_[1]-track_[0],)
+        x = (v-ctrack[0])/ctrack[2]
+      if not edit_value: clock.set(text=f'{v:.02f}',color='k')
+      track_manager.set(width=x)
+      if submit:
+        display(v)
+        main.canvas.draw_idle()
+      return self.frame
+    self.setval = setval
+    def setrunning(b=None):
+      play_toogler.set(text='II' if self.animation_running(b) else '|>')
+      toolbar.canvas.draw_idle()
+    self.setrunning = setrunning
+    toolbar.canvas.mpl_connect('button_press_event',on_button_press)
+    toolbar.canvas.mpl_connect('key_press_event',on_key_press)
+    super().__init__(display,**ka)
+
   def _ipython_display_(self): return repr(self)

@@ -5,8 +5,8 @@
 # Purpose:              Utilities for ipywidgets
 #
 r"""
-:mod:`PYTOOLS.animation` --- Widget utilities
-=============================================
+:mod:`PYTOOLS.ipywidgets` --- Widget utilities
+==============================================
 
 This module provides basic utilities for :mod:`ipywidgets` object manipulations.
 
@@ -19,21 +19,32 @@ from __future__ import annotations
 from typing import Any, Union, Callable, Iterable, Mapping, Sequence, Tuple
 import logging; logger = logging.getLogger(__name__)
 
-import pandas
+import pandas, traceback
 import sqlalchemy.engine
 from pathlib import Path
 import traitlets
 from ipywidgets import Widget, Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, VBox, HBox, Box, Layout, Valid, Play, jslink
 
-__all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'SelectMultipleOrdered', 'SimpleButton', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
+__all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'animation_player', 'SelectMultipleOrdered', 'SimpleButton', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
 
 AutoWidthStyle = dict(description_width='auto')
 
 #==================================================================================================
 class app:
+  r"""
+An instance of this class is an app based on module :mod:`ipywidgets`, consisting of a toolbar, a console and additional child widgets.
+
+:param toolbar: widgets added at the end of the toolbar (in addition to the default toolbar widgets)
+:param children: additional children widgets appended to the main widget
+  """
 #==================================================================================================
 
-  def __init__(self,children=(),toolbar=()):
+  main: VBox
+  r"""The main widget"""
+  toolbar: HBox
+  r"""The toolbar widget (first child of :attr:`main`)"""
+
+  def __init__(self,children:Tuple[Widget,...]=(),toolbar:Tuple[Widget,...]=()):
     self.console = None
     w_closeb = SimpleButton(icon='close',tooltip='Close app')
     self.toolbar = HBox([w_closeb,*toolbar])
@@ -61,10 +72,18 @@ class app:
   def __exit__(self,*a):
     self.console.__exit__(*a)
 
-  def on_close(self,f):
+  def on_close(self,f:Callable[[],None]):
+    r"""
+Registers a callback for app termination.
+
+:param f: the callback function
+    """
     self.close_callbacks.append(f)
 
   def mpl_figure(self,*a,**ka):
+    r"""
+Adds a :mod:`matplotlib` figure to this app.
+    """
     from matplotlib.pyplot import close
     fig,w = mpl_figure(*a,asapp=False,**ka)
     self.main.children += (w,)
@@ -76,7 +95,7 @@ class app:
 #==================================================================================================
 class seq_browser (app):
   r"""
-An instance of this class holds a widget :attr:`main` displaying a (long) sequence object in pagination mode.
+An instance of this class is an app to display a (long) sequence object in pagination mode.
 
 :param D: a sequence object
 :param start: the index of the initial page
@@ -109,7 +128,7 @@ An instance of this class holds a widget :attr:`main` displaying a (long) sequen
 #==================================================================================================
 class file_browser (app):
   r"""
-An instance of this class holds a widget :attr:`main` for browsing the file at *path*, possibly while it expands. If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
+An instance of this class is an app to browse the file at *path*, possibly while it expands. If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
 
 :param path: a path to an existing file
 :param start: index of start pointed
@@ -202,7 +221,7 @@ An instance of this class holds a widget :attr:`main` for browsing the file at *
 #==================================================================================================
 class db_browser (app):
   r"""
-An instance of this class holds a widget :attr:`main` for exploring a database specified by *spec*. If a metadata structure is specified, it must be bound to an existing engine and reflected.
+An instance of this class is an app to explore a database specified by *spec*. If a metadata structure is specified, it must be bound to an existing engine and reflected.
 
 :param spec: an sqlalchemy url or engine or metadata structure, defining the database to explore
   """
@@ -346,7 +365,7 @@ class db_browser_table:
 class hastrait_editor (app):
 #==================================================================================================
   r"""
-An instance of this class holds a widget :attr:`main` for editing a traitlets structure. The construction of the widget is directed by metadata which must be associated to each editable trait in *target* under the key ``widget``. This is either a callable, which produces a widget for that trait, or a :class:`dict`, passed as keyword arguments to a widget guesser. Guessing is based on the trait class. Each property in *default_trait_layout* is applied to all the trait widget layouts which assign a :const:`None` value to that property. The overall editor widget can be further customised using the following attributes:
+An instance of this class is an app to edit a traitlets structure. The construction of the widget is directed by metadata which must be associated to each editable trait in *target* under the key ``widget``. This is either a callable, which produces a widget for that trait, or a :class:`dict`, passed as keyword arguments to a widget guesser. Guessing is based on the trait class. Each property in *default_trait_layout* is applied to all the trait widget layouts which assign a :const:`None` value to that property. The overall editor widget can be further customised using the following attributes:
 
 .. attribute:: header,footer
 
@@ -438,9 +457,9 @@ class hastrait_editor_trait:
     self.widget = HBox([resetb,label,w])
 
 #==================================================================================================
-class widget_animation_player (app):
+class animation_player (app):
   r"""
-An instance of this class holds a widget :attr:`main` to control abstract animations. An animation is any callback which can be passed a frame number, enumerated by the animation widgets. The set of frame numbers is split into a sequence of contiguous intervals called tracks. Parameter *track* is a function which returns, for each valid frame number, the bounds of its track interval, and :const:`None` for invalid frame numbers.
+An instance of this class is an app to control abstract animations. An animation is any callback which can be passed a frame number, enumerated by the animation widgets. The set of frame numbers is split into a sequence of contiguous intervals called tracks. Parameter *track* is a function which returns, for each valid frame number, the bounds of its track interval, and :const:`None` for invalid frame numbers.
 
 * If *track* is an :class:`int` instance, the intervals are of constant length *track*
 * If *track* is an increasing sequence of :class:`int` instances, the intervals are the consecutive pairs in the sequence
@@ -449,7 +468,8 @@ An instance of this class holds a widget :attr:`main` to control abstract animat
 A number of other widgets are accessible in addition to :attr:`main`: :attr:`toolbar`, :attr:`w_console`
 
 :param track: track function
-:param children: passed as children of the :attr:`main` widget, which is a :class:`VBox`
+:param children: additional children widgets
+:param toolbar: additional toolbar widgets
 :param continuity: if :const:`True` (default), proceeds to the next track at the end of each track
 :param ka: passed to the :class:`Play` constructor
   """

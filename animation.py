@@ -30,12 +30,15 @@ try: from .ipywidgets import app, SimpleButton # so this works even if ipywidget
 except: app = object
 
 #==================================================================================================
-def track_function(track:Union[float,Sequence[float],Callable[[float],Tuple[float,float]]],stype:type):
+def track_function(track:Union[float,Sequence[float],Callable[[float],Tuple[float,float]]],stype:type)->Callable[[float],Tuple[float,float]]:
   r"""
-A track function decomposes an interval of scalar (containing 0) into contiguous intervals. It can be specified either as a callable of one scalar input returning two scalar outputs (bounds of its track interval), or as
+A track map decomposes an interval of scalar (containing 0) into contiguous intervals. It can be specified either as a callable of one scalar input returning two scalar outputs (bounds of its track interval), or as
 
 * a scalar, in which case the intervals are of constant length equal to that scalar, starting at 0
 * or an increasing sequence of scalars, in which case the intervals are the consecutive pairs in the sequence
+
+:param track: the track map specification
+:param stype: the type of scalars passed to the track map
   """
 # ==================================================================================================
   if not callable(track):
@@ -55,7 +58,7 @@ class animation_player_base:
 Instances of this class are players for :mod:`matplotlib` animations.
 
 :param display: the function which takes a simulation time and displays the corresponding (closest) frame
-:param track: track generator decomposing the simulation interval into contiguous simulation time periods (tracks)
+:param track: track map decomposing the simulation interval into contiguous simulation time periods (tracks)
 :param rate: frames per simulation time
 :param ka: passed to the :func:`matplotlib.animation.FuncAnimation` constructor
   """
@@ -64,12 +67,18 @@ Instances of this class are players for :mod:`matplotlib` animations.
   r"""The figure on which to start the animation"""
   running: bool
   r"""The running state of the animation"""
+  setrunning: Callable[[bool],None]
+  r"""The function to set the running state of the animation"""
   frame: int
   r"""The current frame displayed by the animation"""
+  setval: Callable[[float],None]
+  r"""The function to set the current frame to be displayed by the animation"""
   anim: FuncAnimation
   r"""The animation"""
   rate: float
   r"""The frame rate, in frames per simulation time"""
+  track: Callable[[float],Tuple[float,float]]
+  r"""The track map"""
 
   def __init__(self,display:Callable[[float],None],track=None,rate:float=None,**ka):
     self.track = track_function(track,float)
@@ -86,14 +95,6 @@ Instances of this class are players for :mod:`matplotlib` animations.
     if b: self.anim.resume()
     else: self.anim.pause()
     return b
-
-  def setrunning(self,b:bool):
-    r"""Sets the running state of the animation. Must be refined in subclasses or in instances."""
-    raise NotImplementedError()
-
-  def setval(self,v:float):
-    r"""Sets the current frame to be displayed by the animation. Must be refined in subclasses or in instances."""
-    raise NotImplementedError()
 
 #==================================================================================================
 class widget_animation_player (app,animation_player_base):
@@ -115,14 +116,14 @@ Instances of this class are players for :mod:`matplotlib` animations controlled 
     app.__init__(self,children,toolbar=[w_play_toggler,w_track_manager,w_clockb,w_clock,w_clock2,*toolbar])
     self.board = board = self.mpl_figure(**fig_kw)
     w_play_toggler.on_click(lambda b: setrunning())
-    def set_clock():
+    def on_clockb_clicked():
       w_clock2.value = self.frame*self.rate
       w_clockb.layout.visibility,w_clock.layout.display,w_clock2.layout.display,w_clock2.active = 'hidden','none','',True
-    w_clockb.on_click(lambda b: set_clock())
-    def clock_set(v):
+    w_clockb.on_click(lambda b: on_clockb_clicked())
+    def on_clock2_changed(v):
       w_clockb.layout.visibility,w_clock.layout.display,w_clock2.layout.display,w_clock2.active = 'visible','','none',False
       setval(v,submit=True)
-    w_clock2.observe((lambda c: clock_set(c.new) if w_clock2.active else None),'value')
+    w_clock2.observe((lambda c: on_clock2_changed(c.new) if w_clock2.active else None),'value')
     w_track_manager.observe((lambda c: setval(d=c.new,submit=True) if w_track_manager.active else None),'value')
     ctrack = -1,0,1
     def setval(v=None,d=None,submit=False):
@@ -209,6 +210,8 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
           else: return
         clock.set(text=v,color=c)
         toolbar.canvas.draw_idle()
+    toolbar.canvas.mpl_connect('button_press_event',on_button_press)
+    toolbar.canvas.mpl_connect('key_press_event',on_key_press)
     ctrack = -1.,0.,1.
     def setval(v=None,d=+1,submit=False):
       nonlocal ctrack
@@ -231,8 +234,6 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
       play_toogler.set(text='II' if self.animation_running(b) else '|>')
       toolbar.canvas.draw_idle()
     self.setrunning = setrunning
-    toolbar.canvas.mpl_connect('button_press_event',on_button_press)
-    toolbar.canvas.mpl_connect('key_press_event',on_key_press)
     super().__init__(display,**ka)
 
   def _ipython_display_(self): return repr(self)

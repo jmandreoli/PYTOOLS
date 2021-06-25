@@ -45,9 +45,7 @@ Instances of this class are :class:`simpy.Environment` instances with method :me
       self.reset()
       if s!=self.now: self.run(s)
 
-class NaturalSpanMixin (RobustEnvironment):
-  @cached_property # for environments which end naturally
-  def span(self):
+  def span(self): # caution: only for environments which end naturally
     self.run_robust()
     return self.now-self.init_t
 
@@ -56,13 +54,6 @@ class SimpySimulation:
   """
 An instance of this class controls the rollout of a set *content* of pairs where the first component is a :class:`RobustEnvironment` instance and the second component is display specification. Attribute :attr:`player` holds a player object, created by the instance, which executes the rollout in a timely fashion.
 A display specification is a function which takes as input an environment and a part as returned by generator method :math:`parts`, and returns a display function with no input which displays the environment (at time of invocation) on the part.
-
-The speed of the simulation is controlled by two parameters whose product determines the number of real milli-seconds per simulation time unit (stu):
-
-* parameter *frame_per_stu*: the number of frames per stu
-* parameter *interval*: the number of real milli-seconds per frame (in the player)
-
-Note that the *interval* is bounded below by the real time needed to construct and display the frames. Furthermore, below 40ms per frame, the human eye tends to loose vision persistency.
 
 :param content: list of environments with displayers
 :type content: :class:`Sequence[Tuple[simpy.Environment,Callable[[simpy.Environment,Any],Callable[[],None]],...]]`
@@ -76,11 +67,9 @@ Note that the *interval* is bounded below by the real time needed to construct a
   play_default = {'interval':40}
   r"""The default arguments passed to the player factory"""
 
-  def __init__(self,*content,play_kw:Mapping={},frame_per_stu:float=None,**ka):
+  def __init__(self,*content,play_kw:Mapping={},**ka):
     assert all((isinstance(env,RobustEnvironment) and all(callable(f) for f in L)) for env,*L in content)
-    self.frame_per_stu = frame_per_stu = float(frame_per_stu)
-    assert frame_per_stu > 0
-    self.player = self.factory(self.display_content,rate=1./self.frame_per_stu,**dict(self.play_default,**play_kw))
+    self.player = self.player_factory(self.display_content,**dict(self.play_default,**play_kw))
     board = self.player.board
     self.content = [(env,tuple(f(env,part) for f in L)) for (env,*L),part in zip(content,self.parts(board,**ka))]
 
@@ -90,7 +79,7 @@ Note that the *interval* is bounded below by the real time needed to construct a
       for disp in L: disp()
 
   @cached_property
-  def factory(self):
+  def player_factory(self):
     from matplotlib import get_backend
     from .animation import widget_animation_player, mpl_animation_player
     return widget_animation_player if 'ipympl' in get_backend() else mpl_animation_player

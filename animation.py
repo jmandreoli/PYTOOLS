@@ -19,8 +19,6 @@ from __future__ import annotations
 from typing import Any, Union, Callable, Iterable, Mapping, Sequence, Tuple
 import logging; logger = logging.getLogger(__name__)
 
-import traitlets, traceback
-from functools import wraps, partial
 from matplotlib import rcParams
 from matplotlib.pyplot import figure, Figure
 from matplotlib.animation import FuncAnimation
@@ -30,7 +28,7 @@ try: from .ipywidgets import app, SimpleButton # so this works even if ipywidget
 except: app = object
 
 #==================================================================================================
-def track_function(track:Union[float,Sequence[float],Callable[[float],Tuple[float,float]]],stype:type)->Callable[[float],Tuple[float,float]]:
+def track_function(track:Union[float,Sequence[float],Callable[[float],Tuple[float,float]]],stype:type=float)->Callable[[float],Tuple[float,float]]:
   r"""
 A track map decomposes an interval of scalar (containing 0) into contiguous intervals. It can be specified either as a callable of one scalar input returning two scalar outputs (bounds of its track interval), or as
 
@@ -41,13 +39,18 @@ A track map decomposes an interval of scalar (containing 0) into contiguous inte
 :param stype: the type of scalars passed to the track map
   """
 # ==================================================================================================
-  if not callable(track):
-    if isinstance(track,stype):
-      assert track>0
-      def track(x,T=track): x -= x%T; return x,x+T
+  assert stype is int or stype is float
+  if callable(track):
+    track_ = track(stype(0))
+    assert track_ is not None and len(track_)==2 and track_[0]<=0<=track_[1]
+  else:
+    try: L = tuple(map(stype,(0,*track)))
+    except:
+      T = stype(track)
+      assert T>0
+      def track(x,T=T): x -= x%T; return x,x+T
     else:
-      L = tuple((0,*track))
-      assert len(L)>1 and all(isinstance(x,stype) for x in L[1:]) and all(x<x_ for (x,x_) in zip(L[:-1],L[1:]))
+      assert len(L)>1 and all(x<x_ for (x,x_) in zip(L[:-1],L[1:]))
       from bisect import bisect
       def track(x,L=L,imax=len(L)): i = bisect(L,x); return (L[i-1],L[i]) if i<imax else None
   return track
@@ -55,11 +58,16 @@ A track map decomposes an interval of scalar (containing 0) into contiguous inte
 #==================================================================================================
 class animation_player_base:
   r"""
-Instances of this class are players for :mod:`matplotlib` animations.
+Instances of this class are players for :mod:`matplotlib` animations. The speed of the animation is controlled by two parameters whose product determines the number of real milli-seconds per simulation time unit (stu):
+
+* parameter *frame_per_stu*: the number of frames per stu
+* parameter *interval*: the number of real milli-seconds per frame
+
+Note that the *interval* is bounded below by the real time needed to construct and display the frames. Furthermore, below 40ms per frame, the human eye tends to loose vision persistency.
 
 :param display: the function which takes a simulation time and displays the corresponding (closest) frame
 :param track: track map decomposing the simulation interval into contiguous simulation time periods (tracks)
-:param rate: frames per simulation time
+:param frame_per_stu: frame rate, in frames per simulation time (in :const:`None` use animation real time rate)
 :param ka: passed to the :func:`matplotlib.animation.FuncAnimation` constructor
   """
 #==================================================================================================
@@ -75,20 +83,22 @@ Instances of this class are players for :mod:`matplotlib` animations.
   r"""The function to set the current frame to be displayed by the animation"""
   anim: FuncAnimation
   r"""The animation"""
-  rate: float
-  r"""The frame rate, in frames per simulation time"""
+  frame_per_stu: float
+  r"""The frame rate, in frames per simulation time units"""
   track: Callable[[float],Tuple[float,float]]
   r"""The track map"""
 
-  def __init__(self,display:Callable[[float],None],track=None,rate:float=None,**ka):
-    self.track = track_function(track,float)
+  def __init__(self,display:Callable[[float],None],frame_per_stu:float=None,track=None,**ka):
     def frames():
-      self.setrunning(False)
-      yield self.setval(0.)
-      while (n:=self.setval()) is not None: yield n
-    self.anim = anim = FuncAnimation(self.board,(lambda n: display(n*rate)),frames,init_func=(lambda:None),repeat=False,**ka)
-    if rate is None: rate = anim._interval/1000. # real time
-    self.rate = rate
+      self.setval(0.)
+      while True:
+        self.setrunning(False); yield self.frame
+        while self.setval() is None: yield self.frame
+    self.track = track_function(track,float)
+    self.anim = anim = FuncAnimation(self.board,(lambda n: display(n/frame_per_stu)),frames,init_func=(lambda:None),repeat=False,**ka)
+    if frame_per_stu is None: frame_per_stu = 1000./anim._interval
+    else: frame_per_stu = float(frame_per_stu); assert frame_per_stu > 0
+    self.frame_per_stu = frame_per_stu
 
   def animation_running(self,b:bool):
     self.running = b = ((not self.running) if b is None else b)
@@ -117,38 +127,37 @@ Instances of this class are players for :mod:`matplotlib` animations controlled 
     self.board = board = self.mpl_figure(**fig_kw)
     w_play_toggler.on_click(lambda b: setrunning())
     def on_clockb_clicked():
-      w_clock2.value = self.frame*self.rate
-      w_clockb.layout.visibility,w_clock.layout.display,w_clock2.layout.display,w_clock2.active = 'hidden','none','',True
+      if w_clock2.active: z = '','none',False
+      else: w_clock2.value = self.frame/self.frame_per_stu; z = 'none','',True
+      w_clock.layout.display,w_clock2.layout.display,w_clock2.active = z
     w_clockb.on_click(lambda b: on_clockb_clicked())
     def on_clock2_changed(v):
-      w_clockb.layout.visibility,w_clock.layout.display,w_clock2.layout.display,w_clock2.active = 'visible','','none',False
-      setval(v,submit=True)
-    w_clock2.observe((lambda c: on_clock2_changed(c.new) if w_clock2.active else None),'value')
+      if w_clock2.active:
+        w_clock.layout.display,w_clock2.layout.display,w_clock2.active = '','none',False
+        setval(v,submit=True)
+    w_clock2.observe((lambda c: on_clock2_changed(c.new)),'value')
     w_track_manager.observe((lambda c: setval(d=c.new,submit=True) if w_track_manager.active else None),'value')
     ctrack = -1,0,1
     def setval(v=None,d=None,submit=False):
       nonlocal ctrack
       if v is None:
-        if d is None: self.frame += 1
-        else: self.frame = ctrack[0]+d
-        v = self.frame*self.rate
-      else: self.frame = int(v/self.rate)
+        if d is None: n = self.frame+1; d = n-ctrack[0]
+        else: n = ctrack[0]+d
+        v = n/self.frame_per_stu
+      else: n = int(v*self.frame_per_stu); d = n-ctrack[0]
       w_clock.value = f'{v:.02f}'
-      x = self.frame-ctrack[0]
       w_track_manager.active = False
-      if x<0 or x>=ctrack[2]:
+      if d<0 or d>=ctrack[2]:
         track_ = self.track(v)
-        if track_ is None: return
-        ctrack = tuple(int(v_/self.rate) for v_ in track_)
+        if track_ is None: w_track_manager.active = True; return True
+        ctrack = tuple(int(v_*self.frame_per_stu) for v_ in track_)
         w_track_manager.max = span = ctrack[1]-ctrack[0]
         ctrack += (span,)
-        x = self.frame-ctrack[0]
-      w_track_manager.value = x
+        d = n-ctrack[0]
+      w_track_manager.value = d
       w_track_manager.active = True
-      if submit:
-        display(v)
-        board.canvas.draw_idle()
-      return self.frame
+      self.frame = n
+      if submit: display(v); board.canvas.draw_idle()
     self.setval = setval
     def setrunning(b=None):
       w_play_toggler.icon = 'pause' if self.animation_running(b) else 'play'
@@ -180,13 +189,13 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
     g = dict(width_ratios=r,wspace=0.,bottom=0.,top=1.,left=0.,right=1.)
     axes = toolbar.subplots(ncols=3,subplot_kw=dict(xticks=(),yticks=(),navigate=False),gridspec_kw=g)
     play_toogler = axes[0].text(.5,.5,'',ha='center',va='center',transform=axes[0].transAxes)
-    track_manager = axes[1].add_patch(Rectangle((0.,0.),0.,1.,fill=True,transform=axes[1].transAxes))
+    axes[1].set(xlim=(0,1),ylim=(0,1))
+    track_manager = axes[1].add_patch(Rectangle((0.,0.),0.,1.,fill=True))
     clock = axes[2].text(.5,.5,'',ha='center',va='center',transform=axes[2].transAxes)
-    pix2pc = track_manager.axes.transAxes.inverted().transform
     def on_button_press(ev):
       if ev.button == MouseButton.LEFT and ev.key is None:
         if ev.inaxes is play_toogler.axes: setrunning()
-        elif ev.inaxes is track_manager.axes: setval(ctrack[0]+pix2pc((ev.x,ev.y))[0]*ctrack[2],submit=True)
+        elif ev.inaxes is track_manager.axes: setval(ctrack[0]+ev.xdata*ctrack[2],submit=True)
     edit_value = ''
     def on_key_press(ev):
       nonlocal edit_value
@@ -194,12 +203,12 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
       if key == 'left' or key == 'right':
         if ev.inaxes is not None: setval(d=(+1 if key=='right' else -1),submit=True)
       elif ev.inaxes is clock.axes:
-        v,c = f'{self.frame*self.rate:.02f}','k'
+        v,c = f'{self.frame/self.frame_per_stu:.02f}','k'
         if key=='enter':
           try: v_ = float(edit_value)
           except: return
           edit_value = ''
-          if setval(v_,submit=True) is not None: return
+          if setval(v_,submit=True) is None: return
         else:
           if key=='escape': edit_value = ''
           elif key=='backspace':
@@ -215,20 +224,18 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
     ctrack = -1.,0.,1.
     def setval(v=None,d=+1,submit=False):
       nonlocal ctrack
-      if v is None: self.frame += d; v = self.frame*self.rate
-      else: self.frame = int(v/self.rate)
+      if v is None: n = self.frame+d; v = n/self.frame_per_stu
+      else: n = int(v*self.frame_per_stu)
       x = (v-ctrack[0])/ctrack[2]
       if x<0 or x>=1:
         track_ = self.track(v)
-        if track_ is None: return
+        if track_ is None: return True
         ctrack = tuple(track_)+(track_[1]-track_[0],)
         x = (v-ctrack[0])/ctrack[2]
       if not edit_value: clock.set(text=f'{v:.02f}',color='k')
       track_manager.set(width=x)
-      if submit:
-        display(v)
-        main.canvas.draw_idle()
-      return self.frame
+      self.frame = n
+      if submit: display(v); main.canvas.draw_idle()
     self.setval = setval
     def setrunning(b=None):
       play_toogler.set(text='II' if self.animation_running(b) else '|>')

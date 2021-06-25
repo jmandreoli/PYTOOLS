@@ -21,11 +21,12 @@ import logging; logger = logging.getLogger(__name__)
 
 import pandas, traceback
 import sqlalchemy.engine
+from functools import wraps
 from pathlib import Path
 import traitlets
 from ipywidgets import Widget, Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, VBox, HBox, Box, Layout, Valid, Play, jslink
 
-__all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'animation_player', 'SelectMultipleOrdered', 'SimpleButton', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
+__all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'animator', 'SelectMultipleOrdered', 'SimpleButton', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
 
 AutoWidthStyle = dict(description_width='auto')
 
@@ -47,30 +48,24 @@ An instance of this class is an app based on module :mod:`ipywidgets`, consistin
   def __init__(self,children:Tuple[Widget,...]=(),toolbar:Tuple[Widget,...]=()):
     self.console = None
     w_closeb = SimpleButton(icon='close',tooltip='Close app')
+    self.console = console = Output()
+    w_clearb = SimpleButton(icon='trash',tooltip='Clear console')
+    w_console = HBox([w_clearb,console],layout={'border': 'thin solid', 'display': 'none'})
+    def _console_clear(b):
+      from IPython.display import clear_output
+      with console: clear_output()
+    w_clearb.on_click(_console_clear)
+    def _console_display(c): w_console.layout.display = '' if c.new else 'none'
+    console.observe(_console_display,'outputs')
     self.toolbar = HBox([w_closeb,*toolbar])
-    self.close_callbacks = close_callbacks = [(lambda: main.close())]
+    self.close_callbacks = close_callbacks = [(lambda: main.close()),console.close]
     def _closeall(b):
       for f in close_callbacks: f()
     w_closeb.on_click(_closeall)
-    self.main = main = VBox([self.toolbar,*children])
+    self.main = main = VBox([self.toolbar,w_console,*children])
 
-  def __enter__(self):
-    if self.console is None:
-      self.console = console = Output()
-      w_clearb = SimpleButton(icon='trash',tooltip='Clear console')
-      w_console = HBox([w_clearb,console],layout={'border':'thin solid','display':'none'})
-      L = list(self.main.children); i = L.index(self.toolbar); L[i:i+1] = (w_console,)
-      self.main.children = tuple(L)
-      def _console_clear(b):
-        from IPython.display import clear_output
-        with console: clear_output()
-      w_clearb.on_click(_console_clear)
-      def _console_display(c): w_console.layout.display = '' if c.new else 'none'
-      console.observe(_console_display, 'outputs')
-      self.on_close(console.close)
-    return self.console.__enter__()
-  def __exit__(self,*a):
-    self.console.__exit__(*a)
+  def __enter__(self): return self.console.__enter__()
+  def __exit__(self,*a): self.console.__exit__(*a)
 
   def on_close(self,f:Callable[[],None]):
     r"""
@@ -457,7 +452,7 @@ class hastrait_editor_trait:
     self.widget = HBox([resetb,label,w])
 
 #==================================================================================================
-class animation_player (app):
+class animator (app):
   r"""
 An instance of this class is an app to control abstract animations. An animation is any callback which can be passed a frame number, enumerated by the animation widgets. The set of frame numbers is split into a sequence of contiguous intervals called tracks. Parameter *track* is a function which returns, for each valid frame number, the bounds of its track interval, and :const:`None` for invalid frame numbers.
 
@@ -624,7 +619,7 @@ def mpl_figure(*a,asapp=True,**ka):
   with w: fig = figure(*a, **ka)
   if asapp:
     from IPython.display import display
-    a = app([w])
+    fig.app = a = app([w])
     a.on_close(lambda: close(fig))
     display(a)
     return fig

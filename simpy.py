@@ -69,14 +69,14 @@ A display specification is a function which takes as input an environment and a 
 
   def __init__(self,*content,play_kw:Mapping={},**ka):
     assert all((isinstance(env,RobustEnvironment) and all(callable(f) for f in L)) for env,*L in content)
-    self.player = self.player_factory(self.display_content,**dict(self.play_default,**play_kw))
-    board = self.player.board
-    self.content = [(env,tuple(f(env,part) for f in L)) for (env,*L),part in zip(content,self.parts(board,**ka))]
-
-  def display_content(self,v):
-    for env,L in self.content:
-      env.run_robust(env.init_t+v)
-      for disp in L: disp()
+    def displayer(board):
+      content_ = [(env,tuple(f(env,part) for f in L)) for (env,*L),part in zip(content,self.parts(board,**ka))]
+      def disp_(v):
+        for env,L in content_:
+          env.run_robust(env.init_t+v)
+          for disp in L: disp()
+      return disp_
+    self.player = self.player_factory(displayer,**dict(self.play_default,**play_kw))
 
   @cached_property
   def player_factory(self):
@@ -95,14 +95,14 @@ Generator of parts. This implementation assumes the board is a :mod:`matplotlib`
     from numpy import zeros
     share = dict(all=(lambda row,col: (0,0)),row=(lambda row,col: (row,0)),col=(lambda row,col: (0,col)),none=(lambda row,col: (-1,-1)))
     share.update({True:share['all'],False:share['none']}) # aliases
-    share = dict((dim,share[s]) for dim,s in (('sharex',sharex),('sharey',sharey)))
+    share = tuple((dim,share[s]) for dim,s in (('sharex',sharex),('sharey',sharey)))
     ka = dict(self.ax_default,**ka)
     gridlines = ka.pop('gridlines')
     gridspec = fig.add_gridspec(nrows=nrows,ncols=ncols,**gridspec_kw)
     self.axes = axes = zeros((nrows,ncols),dtype=object); axes[...] = None
     for row in range(nrows):
       for col in range(ncols):
-        ax = fig.add_subplot(gridspec[row,col],**dict((dim,axes[s(row,col)]) for dim,s in share.items()),**ka)
+        ax = fig.add_subplot(gridspec[row,col],**dict((dim,axes[s(row,col)]) for dim,s in share),**ka)
         ax.grid(gridlines)
         axes[row,col] = ax
         yield ax

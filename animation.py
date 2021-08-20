@@ -8,7 +8,7 @@ r"""
 :mod:`PYTOOLS.animation` --- Animation utilities
 ================================================
 
-This module provides basic utilities to play animations (in matplotlib). An animation is any callback which can be passed a simulation time, enumerated by a player object. The set of simulation times is split into a sequence of contiguous intervals called tracks. A track function is a function of simulation times which returns, for each valid simulation time, the bounds of its track interval, and :const:`None` for invalid simulation times.
+This module provides basic utilities to play animations in :mod:`matplotlib`. An animation is any callback which can be passed a simulation time, enumerated by a player object. The set of simulation times is split into a sequence of contiguous intervals called tracks. A track map is a function of simulation time which returns the bounds of its track interval if the simulation time is valid, and :const:`None` otherwise.
 
 Available types and functions
 -----------------------------
@@ -31,12 +31,15 @@ except: app = object
 #==================================================================================================
 def track_function(track:Union[float,Sequence[float],Callable[[float],Tuple[float,float]]],stype:type=float)->Callable[[float],Tuple[float,float]]:
   r"""
-A track map decomposes an interval of scalar (containing 0) into contiguous intervals. It can be specified either as a callable of one scalar input returning two scalar outputs (bounds of its track interval), or as
+Builds a track map from a specification *track*. A track map is a callable of one scalar input returning two scalar outputs (bounds of its track interval), or :const:`None` (when input is out of domain).
 
-* a scalar, in which case the intervals are of constant length equal to that scalar, starting at 0
-* or an increasing sequence of scalars, in which case the intervals are the consecutive pairs in the sequence
+* Its domain must be an interval (not necessarily bounded) containing 0
+* The mapping of a scalar to the lower bound of its track interval should be non decreasing and right-continuous.
 
-The function which maps a scalar to the lower bound of its track interval should be right-continuous.
+The specification *track* can be the track map itself, returned as such after minimal checks. As a helper, *track* can also be
+
+* a positive scalar, in which case the track map is based on intervals of constant length equal to that scalar, starting at 0 and never ending
+* an increasing sequence of positive scalars, in which case the track map is based on intervals which are the consecutive pairs in that sequence (prefixed with 0)
 
 :param track: the track map specification
 :param stype: the type of scalars passed to the track map
@@ -45,7 +48,7 @@ The function which maps a scalar to the lower bound of its track interval should
   assert stype is int or stype is float
   if callable(track):
     track_ = track(stype(0))
-    assert track_ is not None and len(track_)==2 and track_[0]<=0<=track_[1] and track(track_[1])[0] == track_[1]
+    assert track_ is not None and len(track_)==2 and isinstance((t0:=track_[0]),stype) and isinstance((t1:=track_[1]),stype) and t0<=0<t1 and track(t0) == track_ and ((t:=track(t1)[0]) is None or t == t1)
   else:
     try: L = tuple(map(stype,(0,*track)))
     except:
@@ -61,7 +64,9 @@ The function which maps a scalar to the lower bound of its track interval should
 #==================================================================================================
 class animation_player_base:
   r"""
-Instances of this class are players for :mod:`matplotlib` animations. The speed of the animation is controlled by two parameters whose product determines the number of real milli-seconds per simulation time unit (stu):
+An instance of this class is a controllable :mod:`matplotlib` animation, created by this constructor and attached to a :class:`Figure` instance stored as attribute :attr:`board`. The board creation is not performed in this class, so it must be performed in the constructor of a subclass, prior to invoking this constructor.
+
+The speed of the animation is controlled by two parameters whose product determines the number of real milli-seconds per simulation time unit (stu):
 
 * parameter *frame_per_stu*: the number of frames per stu
 * parameter *interval*: the number of real milli-seconds per frame
@@ -69,9 +74,9 @@ Instances of this class are players for :mod:`matplotlib` animations. The speed 
 Note that the *interval* is bounded below by the real time needed to construct and display the frames. Furthermore, below 40ms per frame, the human eye tends to loose vision persistency.
 
 :param display: the function which takes a simulation time and displays the corresponding (closest) frame
-:param track: track map decomposing the simulation interval into contiguous simulation time periods (tracks)
-:param frame_per_stu: frame rate, in frames per simulation time (in :const:`None` use animation real time rate)
-:param ka: passed to the :func:`matplotlib.animation.FuncAnimation` constructor
+:param track: track map decomposing the simulation domain into tracks (typically obtained by :func:`track_function`)
+:param frame_per_stu: frame rate, in frames per simulation time (if :const:`None` use animation real time rate)
+:param ka: passed to the :class:`FuncAnimation` constructor
   """
 #==================================================================================================
   board: Figure
@@ -118,12 +123,14 @@ Note that the *interval* is bounded below by the real time needed to construct a
 #==================================================================================================
 class widget_animation_player (app,animation_player_base):
   r"""
-Instances of this class are players for :mod:`matplotlib` animations controlled from `mod:ipywidgets` widgets.
+A instance of this class is a player for :mod:`matplotlib` animations controlled from `mod:ipywidgets` widgets. The animation board is created by invoking :func:`figure` with arguments *fig_kw*. The frame display function is obtained by calling function *displayer* on the board.
 
+:param displayer: the frame display factory
 :param fig_kw: configuration of the animation figure
+:param ka: passed to the superclass accepting the corresponding keys
   """
 #==================================================================================================
-  def __init__(self,displayer:Callable[[Figure],Callable[[float],None]],fig_kw={},children=(),toolbar=(),**ka):
+  def __init__(self,displayer:Callable[[Figure],Callable[[float],None]],fig_kw={},**ka):
     from ipywidgets import Text, FloatText, IntSlider
     ctrack = -1,0,1
     def setval(v=None,d=None,submit=False):
@@ -157,7 +164,8 @@ Instances of this class are players for :mod:`matplotlib` animations controlled 
     w_clock = Text('',layout=dict(width='1.6cm',padding='0cm'),disabled=True)
     w_clock2 = FloatText(0,min=0,layout=dict(width='1.6cm',padding='0cm',display='none'))
     w_clock2.active = False
-    super().__init__(children,toolbar=[w_play_toggler,w_track_manager,w_clockb,w_clock,w_clock2,*toolbar])
+    toolbar = ka.pop('toolbar',())
+    super().__init__(children=ka.pop('children',()),toolbar=[w_play_toggler,w_track_manager,w_clockb,w_clock,w_clock2,*toolbar])
     self.board = board = self.mpl_figure(**fig_kw)
     display = displayer(board)
     # callbacks
@@ -178,12 +186,12 @@ Instances of this class are players for :mod:`matplotlib` animations controlled 
 #==================================================================================================
 class mpl_animation_player (animation_player_base):
   r"""
-Instances of this class are players for :mod:`matplotlib` animations, controlled within matplotlib.
+Instances of this class are players for :mod:`matplotlib` animations, controlled within matplotlib. The animation board is created by invoking :func:`figure` with arguments *fig_kw*. The frame display function is obtained by calling function *displayer* on the board.
 
-:param display: the function which takes a frame number and displays the corresponding frame
-:param track: track generator decomposing the simulation interval into contiguous simulation time periods (tracks)
+:param displayer: the frame display factory
 :param fig_kw: configuration of the animation figure (excluding the toolbar)
-:param tbsize: size of the toolbar
+:param tbsize: size (inches) of the toolbar as ((hsize(play-button),hsize(track-manager),hsize(clock)),vsize(toolbar))
+:param ka: passed to the superclass
   """
 # ==================================================================================================
   def __init__(self,displayer:Callable[[Figure],Callable[[float],None]],fig_kw={},tbsize=((.15,1.,.8),.15),**ka):

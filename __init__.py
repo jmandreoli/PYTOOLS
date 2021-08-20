@@ -453,7 +453,7 @@ Returns an HTML table object (as understood by :mod:`lxml`) with one row for eac
 
 html_table.style = '''
   #toplevel { border-collapse: collapse; }
-  #toplevel > thead > tr > th, #toplevel > thead > tr > td, #toplevel > tbody > tr > th, #toplevel > tbody > tr > td, #toplevel > tfoot > tr > td  { background-color: white; text-align: left; vertical-align: top; border: thin solid black; }
+  #toplevel > thead > tr > th, #toplevel > thead > tr > td, #toplevel > tbody > tr > th, #toplevel > tbody > tr > td, #toplevel > tfoot > tr > td  { background-color: white; color:black; text-align: left; vertical-align: top; border: thin solid black; }
   #toplevel > thead > tr > th, #toplevel > thead > tr > td { background-color: gray; color: white }
   #toplevel > tfoot > tr > td { background-color: #f0f0f0; color: navy; }
 '''

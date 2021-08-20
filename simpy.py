@@ -52,13 +52,13 @@ Instances of this class are :class:`simpy.Environment` instances with method :me
 # ==================================================================================================
 class SimpySimulation:
   """
-An instance of this class controls the rollout of a set *content* of pairs where the first component is a :class:`RobustEnvironment` instance and the second component is display specification. Attribute :attr:`player` holds a player object, created by the instance, which executes the rollout in a timely fashion.
-A display specification is a function which takes as input an environment and a part as returned by generator method :math:`parts`, and returns a display function with no input which displays the environment (at time of invocation) on the part.
+An instance of this class controls the rollout of a set *content* of pairs where the first component is a :class:`RobustEnvironment` instance and the second component is display specification. Attribute :attr:`player` holds a player object, created by method :math:`player_factory` with keyword arguments provided by *play_kw*. The player object executes the rollout in a timely fashion under user control on a display board (typically a :mod:`matplotlib` figure).
+
+A display specification is a function which takes as input a :mod:`simpy.Environment` instance and a part of the display board as returned by generator method :meth:`parts`, and returns a display function with no input which displays the environment on the specified part as of the time of invocation.
 
 :param content: list of environments with displayers
 :type content: :class:`Sequence[Tuple[simpy.Environment,Callable[[simpy.Environment,Any],Callable[[],None]],...]]`
 :param play_kw: a dictionary of keyword arguments, passed to the player constructor (attribute :attr:`factory`)
-:param frame_per_stu: the number of frames per stu
 :param ka: passed to method :meth:`parts`
   """
 # ==================================================================================================
@@ -90,7 +90,7 @@ A display specification is a function which takes as input an environment and a 
     r"""
 Generator of parts. This implementation assumes the board is a :mod:`matplotlib` grid-figure, and yields its subplots (each subplot is a part). The number of parts must be at least equal to the number of environments to which they are assigned, otherwise some environments are not processed.
 
-:param ka: a dictionary of keyword arguments passed to the :meth:`add_subplot` method of each part (key ``gridlines`` is also allowed and denotes whether gridlines should be displayed)
+:param ka: a dictionary of keyword arguments passed to the :meth:`matplotlib.figure.add_subplot` method of each part (key ``gridlines`` is also allowed and denotes whether gridlines should be displayed)
     """
     from numpy import zeros
     share = dict(all=(lambda row,col: (0,0)),row=(lambda row,col: (row,0)),col=(lambda row,col: (0,col)),none=(lambda row,col: (-1,-1)))

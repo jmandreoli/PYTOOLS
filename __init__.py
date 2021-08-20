@@ -5,6 +5,8 @@
 # Purpose:              Some utilities in Python
 #
 from __future__ import annotations
+
+import pickle
 from typing import Any, Union, Callable, Iterable, Mapping, MutableMapping, Tuple
 import logging; logger = logging.getLogger(__name__)
 
@@ -970,6 +972,9 @@ class pickleclass:
 This namespace class defines class methods :meth:`load`, :meth:`loads`, :meth:`dump`, :meth:`dumps`, similar to those of the standard :mod:`pickle` module, but with class specific Pickler/Unpickler which must be defined in subclasses.
   """
 #--------------------------------------------------------------------------------------------------
+
+  Pickler: Callable[[Any],pickle.Pickler]
+  Unpickler: Callable[[Any],pickle.Unpickler]
 
   @classmethod
   def dump(cls,obj,v): cls.Pickler(v).dump(obj)

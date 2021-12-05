@@ -833,6 +833,40 @@ Returns an instance of :class:`pyspark.SparkContext` created with the predefined
     del D
 
 #==================================================================================================
+class ImapFolder:
+  r"""
+An instance of this class is an iterable enumerating the unread messages in a folder of an IMAP server. On calling method :meth:`commit`, the messages which have been enumerated since the last commit or rollback (triggered by method :meth:`rollback`) are marked as read. The total number of messages in the folder is held in attribute :attr:`total`, and the number of unread message is given by function :func:`len`.
+  """
+# ==================================================================================================
+  def __init__(self,server:imaplib.IMAP4,folder:str):
+    from email import message_from_bytes
+    from email.message import EmailMessage
+    from email.policy import default as DefaultEmailPolicy
+    def message(n):
+      t,v = server.fetch(n,'(RFC822)')
+      assert t=='OK'
+      x = message_from_bytes(v[0][1],_class=EmailMessage,policy=DefaultEmailPolicy)
+      seen.append(n)
+      return x
+    t,v = server.select(folder)
+    assert t=='OK'
+    self.total = v[0].decode()
+    t,v = server.search(None,'UNSEEN')
+    assert t=='OK'
+    selected = v[0].decode().split()
+    self.content_len = len(selected)
+    self.content = (message(n) for n in selected)
+    seen = []
+    def commit():
+      server.store(','.join(seen),'+FLAGS',r'\Seen')
+      self.content_len -= len(seen)
+      seen.clear()
+    self.commit = commit
+    self.rollback = seen.clear
+  def __iter__(self): yield from self.content
+  def __len__(self): return self.content_len
+
+#==================================================================================================
 class basic_stats:
   r"""
 Instances of this class maintain basic statistics about a group of values.

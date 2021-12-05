@@ -159,7 +159,7 @@ Returns the main wsgi application object (to be used by the wsgi server).
   else: store = Path(store).resolve()
   for proc in psutil.process_iter():
     if proc.name() == 'tensorboard': proc.kill()
-  app = falcon.API(middleware=[LoggingMiddleware(sys.stderr)])
+  app = falcon.App(middleware=[LoggingMiddleware(sys.stderr)])
   app.req_options.auto_parse_form_urlencoded = True
   rsc = ExperimentResource(store)
   class HardwiredResource:

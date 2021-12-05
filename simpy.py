@@ -52,7 +52,7 @@ Instances of this class are :class:`simpy.Environment` instances with method :me
 # ==================================================================================================
 class SimpySimulation:
   """
-An instance of this class controls the rollout of a set *content* of pairs where the first component is a :class:`RobustEnvironment` instance and the second component is display specification. Attribute :attr:`player` holds a player object, created by method :math:`player_factory` with keyword arguments provided by *play_kw*. The player object executes the rollout in a timely fashion under user control on a display board (typically a :mod:`matplotlib` figure).
+An instance of this class controls the rollout of a set *content* of pairs where the first component is a :class:`RobustEnvironment` instance and the second component is display specification. Attribute :attr:`player` holds a player object, created by invoking method :meth:`player_factory` with keyword arguments *play_kw*. The player object executes the rollout in a timely fashion under user control on a display board (typically a :class:`matplotlib.Figure`).
 
 A display specification is a function which takes as input a :mod:`simpy.Environment` instance and a part of the display board as returned by generator method :meth:`parts`, and returns a display function with no input which displays the environment on the specified part as of the time of invocation.
 

@@ -5,11 +5,6 @@
 # Purpose:              Some utilities for pytorch
 #
 r"""
-:mod:`PYTOOLS.torch` --- Utilities for pytorch
-==============================================
-
-This module provides some utilities for pytorch development.
-
 Available types and functions
 -----------------------------
 """

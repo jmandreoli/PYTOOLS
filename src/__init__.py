@@ -6,9 +6,6 @@
 #
 
 r"""
-:mod:`PYTOOLS` (top level) --- Generic utilities
-================================================
-
 Available types and functions
 -----------------------------
 """
@@ -434,7 +431,7 @@ Returns a default HTML representation of a compound object, where *La,Lka* are t
 def html_table(
   irows:Iterable[Tuple[Any,Tuple[Any,...]]],fmts:Tuple[Callable[[Any],str],...],
   hdrs:Tuple[str,...]=None,opening:str=None,closing:str=None,encoding:type|str=None
-  )->str|'lxml.html.HtmlElement':
+  )->Union[str,'lxml.html.HtmlElement']:
   r"""
 :param irows: a generator of pairs of an object (key) and a tuple of objects (value)
 :param fmts: a tuple of format functions matching the length of the value tuples

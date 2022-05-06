@@ -6,17 +6,9 @@
 #
 
 r"""
-:mod:`PYTOOLS.animation` --- Animation utilities
-================================================
-
-This module provides basic utilities to play animations in :mod:`matplotlib`. An animation is any callback which can be passed a simulation time, enumerated by a player object. The set of simulation times is split into a sequence of contiguous intervals called tracks. A track map is a function of simulation time which returns the bounds of its track interval if the simulation time is valid, and :const:`None` otherwise.
-
 Available types and functions
 -----------------------------
 """
-
-from typing import Any, Union, Callable, Iterable, Mapping, Sequence, Tuple
-import logging; logger = logging.getLogger(__name__)
 
 from matplotlib import rcParams
 from matplotlib.pyplot import figure
@@ -26,9 +18,11 @@ from matplotlib.patches import Rectangle
 from matplotlib.backend_bases import MouseButton
 try: from .ipywidgets import app, SimpleButton # so this works even if ipywidgets is not available
 except: app = object
+from typing import Any, Callable, Iterable, Mapping, Sequence, Tuple
+import logging; logger = logging.getLogger(__name__)
 
 #==================================================================================================
-def track_function(track:Union[float,Sequence[float],Callable[[float],Tuple[float,float]]],stype:type=float)->Callable[[float],Tuple[float,float]]:
+def track_function(track:float|Sequence[float]|Callable[[float],Tuple[float,float]],stype:type=float)->Callable[[float],Tuple[float,float]]:
   r"""
 Builds a track map from a specification *track*. A track map is a callable of one scalar input returning two scalar outputs (bounds of its track interval), or :const:`None` (when input is out of domain).
 

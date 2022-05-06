@@ -5,11 +5,6 @@
 # Purpose:              Utilities for ipywidgets
 #
 r"""
-:mod:`PYTOOLS.ipywidgets` --- Widget utilities
-==============================================
-
-This module provides basic utilities for :mod:`ipywidgets` object manipulations.
-
 Available types and functions
 -----------------------------
 """

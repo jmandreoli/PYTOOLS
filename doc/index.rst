@@ -11,6 +11,13 @@ PYTOOLS package documentation
    :caption: Contents:
 
    mod_init.rst
+   mod_animation.rst
+   mod_cache.rst
+   mod_ipywidgets.rst
+   mod_polling.rst
+   mod_simpy.rst
+   mod_tensorboard_manager.rst
+   mod_torch.rst
 
 Indices and tables
 ==================

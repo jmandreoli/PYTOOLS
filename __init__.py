@@ -4,13 +4,18 @@
 # Language:             python
 # Purpose:              Some utilities in Python
 #
-from __future__ import annotations
 
-import pickle
-from typing import Any, Union, Callable, Iterable, Mapping, MutableMapping, Tuple
+r"""
+:mod:`PYTOOLS` (top level) --- Generic utilities
+================================================
+
+Available types and functions
+-----------------------------
+"""
+
+import os, re, pickle, collections
+from typing import Any, Union, Callable, Iterable, Mapping, MutableMapping, Tuple, Optional
 import logging; logger = logging.getLogger(__name__)
-
-import os, re, collections
 
 #==================================================================================================
 class owrap:
@@ -31,10 +36,12 @@ Keys in the reference are turned into attributes of the proxy. If *__ref__* is :
   """
 #==================================================================================================
   __slot__ = '__ref__',
+  __ref__:Mapping[str,Any]
+  r"""The proxy object"""
   def __init__(self,__ref__:Mapping[str,Any]=None,**ka):
-    r = __ref__
-    if r is None: r = dict(ka)
+    if __ref__ is None: r = dict(ka)
     else:
+      r:Mapping[str,Any] = __ref__
       if isinstance(r,owrap): r = r.__ref__
       else: assert isinstance(r,collections.abc.Mapping)
       if ka: r.update(ka)
@@ -404,9 +411,9 @@ Symbolic expressions of this class are also callables, and trigger incarnation o
 
 #==================================================================================================
 def html_parlist(
-  html:Callable[[Any],lxml.html.Element],La:Iterable[Any],Lka:Iterable[Tuple[str,Any]],
-  opening:Iterable[lxml.html.Element]=(),closing:Iterable[lxml.html.Element]=(),style:str='padding: 5px'
-  )->lxml.html.HtmlElement:
+  html:Callable[[Any],'lxml.html.Element'],La:Iterable[Any],Lka:Iterable[Tuple[str,Any]],
+  opening:Iterable['lxml.html.Element']=(),closing:Iterable['lxml.html.Element']=(),style:str='padding: 5px'
+  )->'lxml.html.HtmlElement':
   r"""
 :param html: callable to use on components to get their HTML representation
 :param La: anonymous components
@@ -426,8 +433,8 @@ Returns a default HTML representation of a compound object, where *La,Lka* are t
 #==================================================================================================
 def html_table(
   irows:Iterable[Tuple[Any,Tuple[Any,...]]],fmts:Tuple[Callable[[Any],str],...],
-  hdrs:Tuple[str,...]=None,opening:str=None,closing:str=None,encoding:Union[type,str]=None
-  )->Union[str,lxml.html.HtmlElement]:
+  hdrs:Tuple[str,...]=None,opening:str=None,closing:str=None,encoding:type|str=None
+  )->str|'lxml.html.HtmlElement':
   r"""
 :param irows: a generator of pairs of an object (key) and a tuple of objects (value)
 :param fmts: a tuple of format functions matching the length of the value tuples
@@ -563,7 +570,7 @@ Assumes that *pkgname* is the name of a python regular (non namespace) package a
   return c
 
 #==================================================================================================
-def SQLinit(engine:Union[str,sqlalchemy.Engine],meta:sqlalchemy.MetaData)->sqlalchemy.Engine:
+def SQLinit(engine:Union[str,'sqlalchemy.Engine'],meta:'sqlalchemy.MetaData')->'sqlalchemy.Engine':
   r"""
 :param engine: a sqlalchemy engine (or its url)
 :param meta: a sqlalchemy metadata structure
@@ -618,7 +625,7 @@ class SQLHandler (logging.Handler):
 A logging handler class which writes the log messages into a database.
   """
 #==================================================================================================
-  def __init__(self,engine:Union[str,sqlalchemy.Engine],label:str,*a,**ka):
+  def __init__(self,engine:Union[str,'sqlalchemy.Engine'],label:str,*a,**ka):
     from datetime import datetime
     from sqlalchemy.sql import select, insert, update, delete, and_
     meta = SQLHandlerMetadata()
@@ -642,7 +649,7 @@ A logging handler class which writes the log messages into a database.
     self.dbrecord(rec)
 
 #--------------------------------------------------------------------------------------------------
-def SQLHandlerMetadata(info:Mapping[str,Any]=dict(origin=__name__+'.SQLHandler',version=1))->sqlalchemy.MetaData:
+def SQLHandlerMetadata(info:Mapping[str,Any]=dict(origin=__name__+'.SQLHandler',version=1))->'sqlalchemy.MetaData':
 #--------------------------------------------------------------------------------------------------
   from sqlalchemy import Table, Column, ForeignKey, MetaData
   from sqlalchemy.types import DateTime, Text, Integer
@@ -838,7 +845,7 @@ class ImapFolder:
 An instance of this class is an iterable enumerating the unread messages in a folder of an IMAP server. On calling method :meth:`commit`, the messages which have been enumerated since the last commit or rollback (triggered by method :meth:`rollback`) are marked as read. The total number of messages in the folder is held in attribute :attr:`total`, and the number of unread message is given by function :func:`len`.
   """
 # ==================================================================================================
-  def __init__(self,server:imaplib.IMAP4,folder:str):
+  def __init__(self,server:'imaplib.IMAP4',folder:str):
     from email import message_from_bytes
     from email.message import EmailMessage
     from email.policy import default as DefaultEmailPolicy
@@ -881,7 +888,7 @@ Instances of this class maintain basic statistics about a group of values.
   def __add__(self,other):
     w,a,v = (other.weight,other.avg,other.var) if isinstance(other,basic_stats) else (1.,other,0.)
     W = self.weight+w; r_self = self.weight/W; r_other = w/W; d = a-self.avg
-    return basic_stat(weight=W,avg=r_self*self.avg+r_other*a,var=r_self*self.var+r_other*v+(r_self*d)*(r_other*d))
+    return basic_stats(weight=W,avg=r_self*self.avg+r_other*a,var=r_self*self.var+r_other*v+(r_self*d)*(r_other*d))
   def __iadd__(self,other):
     w,a,v = (other.weight,other.avg,other.var) if isinstance(other,basic_stats) else (1.,other,0.)
     self.weight += w; r = w/self.weight; d = a-self.avg
@@ -894,7 +901,7 @@ Instances of this class maintain basic statistics about a group of values.
     return sqrt(self.var)
 
 #==================================================================================================
-def iso2date(iso:Tuple[int,int,int])->datetime.date:
+def iso2date(iso:Tuple[int,int,int])->'datetime.date':
   r"""
 :param iso: triple as returned by :meth:`datetime.date.isocalendar`
 
@@ -960,7 +967,7 @@ def versioned(v)->Callable[[Callable],Callable]:
 A decorator which assigns attribute :attr:`version` of the target function to *v*. The function must be defined at the toplevel of its module. The version must be a simple value.
   """
 #==================================================================================================
-  def transform(f):
+  def transform(f:Callable):
     from inspect import isfunction
     assert isfunction(f)
     f.version = v; return f
@@ -980,7 +987,7 @@ Returns a "unique" id for miscellanous uses.
   return (pre+str(time())+post).replace('.','_')
 
 #--------------------------------------------------------------------------------------------------
-def printast(x:Union[str,ast.AST]):
+def printast(x:Union[str,'ast.AST']):
   r"""
 :param x: an AST or string (parsed into an AST)
 

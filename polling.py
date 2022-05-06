@@ -89,30 +89,26 @@ Each field descriptor is a pair of an sql column specification and a function wi
     super().__init__(target=run_,daemon=True)
     NoneFunc = lambda: None
     DefaultTypes={int:'INTEGER',float:'FLOAT',str:'TEXT',datetime:'DATETIME',bytes:'BLOB'}
-    def field(cdef,upd,upd_error=NoneFunc):
-      cdef = cdef.strip().split(' ',1); name = cdef[0]
-      return name,(DefaultTypes.get(type(upd()),'BLOB') if len(cdef)==1 else cdef[1]),upd,upd_error
-    def staticfield(name,value):
+    def field(cdef:str,upd:Callable[[],Any],upd_error:Callable[[],Any]=NoneFunc)->tuple[str,str,Callable[[],Any],Callable[[],Any]]:
+      cdef_ = cdef.strip().split(' ',1)
+      return cdef_[0],(DefaultTypes.get(type(upd()),'BLOB') if len(cdef_)==1 else cdef_[1]),upd,upd_error
+    def staticfield(name:str,value)->tuple[str,str,Any]:
       return name,DefaultTypes.get(type(value),'BLOB'),value
     started = time.time(); elapsed = lambda started=started:time.time()-started
-    staticfields = list(staticfields.items())
-    staticfields[0:0] = ('started',datetime.fromtimestamp(started)), ('pid', f'{socket.getfqdn()}:{os.getpid()}')
-    staticfields = [staticfield(*x) for x in staticfields]
-    fields = list(fields)
-    fields[0:0] = ('elapsed',elapsed,elapsed),('error TEXT',NoneFunc,traceback.format_exc)
-    fields = [field(*x) for x in fields]
-    sql_create = 'CREATE TABLE Status ({})'.format(', '.join(f'{f[0]} {f[1]}' for l in (staticfields, fields) for f in l))
-    sql_init = 'INSERT INTO Status ({}) VALUES ({})'.format(','.join(f[0] for f in staticfields),','.join(len(staticfields)*'?'))
-    sql_update = 'UPDATE Status SET {}'.format(', '.join(f'{f[0]}=?' for f in fields))
+    staticfields_ = [staticfield(*x) for x in (('started',datetime.fromtimestamp(started)), ('pid', f'{socket.getfqdn()}:{os.getpid()}'),*staticfields.items())]
+    fields_ = [field(*x) for x in (('elapsed',elapsed,elapsed),('error TEXT',NoneFunc,traceback.format_exc),*fields)]
+    sql_create = 'CREATE TABLE Status ({})'.format(', '.join(f'{f[0]} {f[1]}' for l in (staticfields_, fields_) for f in l))
+    sql_init = 'INSERT INTO Status ({}) VALUES ({})'.format(','.join(f[0] for f in staticfields_),','.join(len(staticfields_)*'?'))
+    sql_update = 'UPDATE Status SET {}'.format(', '.join(f'{f[0]}=?' for f in fields_))
     conn:Optional[sqlite3.Connection] = None
-    def init_(sql_create=sql_create,sql_init=sql_init,initv=tuple(f[2] for f in staticfields)):
+    def init_(sql_create=sql_create,sql_init=sql_init,initv=tuple(f[2] for f in staticfields_)):
       conn.execute(sql_create)
       conn.execute(sql_init,initv)
       conn.commit()
-    def updates_(updf=tuple(f[2] for f in fields),sql_update=sql_update):
+    def updates_(updf=tuple(f[2] for f in fields_),sql_update=sql_update):
       conn.execute(sql_update,tuple(u() for u in updf))
       conn.commit()
-    def updates_error(updf=tuple(f[3] for f in fields)): updates_(updf)
+    def updates_error(updf=tuple(f[3] for f in fields_)): updates_(updf)
     self.stop_requested = threading.Event()
     if isinstance(path,str): path = Path(path)
   def __enter__(self):

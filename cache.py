@@ -4,6 +4,7 @@
 # Language:             python
 # Purpose:              Persistent cache management
 #
+
 r"""
 :mod:`PYTOOLS.cache` --- A persistent cache mechanism
 =====================================================
@@ -81,7 +82,6 @@ Available types and functions
 -----------------------------
 """
 
-from __future__ import annotations
 from typing import Any, Union, Callable, Iterable, Mapping, Tuple
 import logging; logger = logging.getLogger(__name__)
 
@@ -179,7 +179,7 @@ Methods:
 
   timeout = 120.
 
-  def __new__(cls,spec:Union[CacheDB,Path,str],listing={},lock=threading.Lock()):
+  def __new__(cls,spec:Union['CacheDB',Path,str],listing={},lock=threading.Lock()):
     r"""
 Generates a :class:`CacheDB` object.
 
@@ -340,7 +340,7 @@ Methods:
   """
 #==================================================================================================
 
-  def __init__(self,db:Union[CacheDB,Path,str]=None,functor:AbstractFunctor=None,block:int=None,cacheonly:bool=False):
+  def __init__(self,db:Union[CacheDB,Path,str]='',functor:'AbstractFunctor'=None,block:int=None,cacheonly:bool=False):
     self.db = db = CacheDB(db)
     self.functor = functor
     self.block = db.getblock(functor) if block is None else block

@@ -583,7 +583,7 @@ Instances of this class are data sources for classification training. Attributes
   r"""(\*)The test split of the data source"""
 
 #--------------------------------------------------------------------------------------------------
-  def mpl(self,ax:matplotlib.Axes)->Callable[[torch.Tensor],None]:
+  def mpl(self,ax:'matplotlib.Axes')->Callable[[torch.Tensor],None]:
     r"""
 Returns a callable, which, when passed a data instance, displays it on *ax* (its label is also used as title of *ax*). This implementation raises a :class:`NotImplementedError`.
 

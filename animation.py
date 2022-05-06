@@ -4,6 +4,7 @@
 # Language:             python
 # Purpose:              Utilities for animations
 #
+
 r"""
 :mod:`PYTOOLS.animation` --- Animation utilities
 ================================================
@@ -13,8 +14,6 @@ This module provides basic utilities to play animations in :mod:`matplotlib`. An
 Available types and functions
 -----------------------------
 """
-
-from __future__ import annotations
 
 from typing import Any, Union, Callable, Iterable, Mapping, Sequence, Tuple
 import logging; logger = logging.getLogger(__name__)

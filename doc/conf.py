@@ -15,7 +15,7 @@
 # sys.path.insert(0, os.path.abspath('.'))
 
 import sys,pathlib
-sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().with_name('_syspath')))
 
 # -- Project information -----------------------------------------------------
 

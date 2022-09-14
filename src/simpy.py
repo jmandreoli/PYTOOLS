@@ -4,13 +4,9 @@
 # Language:             python
 # Purpose:              utilities for simpy based simulation
 #
-r"""
-Available types and functions
------------------------------
-"""
 
 from __future__ import annotations
-from typing import Mapping
+from typing import Mapping, Callable
 from functools import cached_property
 
 import simpy
@@ -62,7 +58,7 @@ A display specification is a function which takes as input a :mod:`simpy.Environ
   play_default = {'interval':40}
   r"""The default arguments passed to the player factory"""
 
-  def __init__(self,*content,play_kw:Mapping={},**ka):
+  def __init__(self,*content,play_kw:Mapping=None,**ka):
     assert all((isinstance(env,RobustEnvironment) and all(callable(f) for f in L)) for env,*L in content)
     def displayer(board):
       content_ = [(env,tuple(f(env,part) for f in L)) for (env,*L),part in zip(content,self.parts(board,**ka))]
@@ -71,36 +67,42 @@ A display specification is a function which takes as input a :mod:`simpy.Environ
           env.run_robust(env.init_t+v)
           for disp in L: disp()
       return disp_
-    self.player = self.player_factory(displayer,**dict(self.play_default,**play_kw))
+    self.player = self.player_factory(displayer,**dict(self.play_default,**(play_kw or {})))
+    try: self._repr_mimebundle_ = self.player._repr_mimebundle_
+    except: pass
 
   @cached_property
-  def player_factory(self):
+  def player_factory(self)->Callable:
     from matplotlib import get_backend
     from .animation import widget_animation_player, mpl_animation_player
     return widget_animation_player if 'ipympl' in get_backend() else mpl_animation_player
 
   ax_default = {'aspect':'equal','gridlines':True}
   r"""The default arguments passed to the ``ax_kw`` parameter in method :meth:`parts`"""
-  def parts(self,fig,nrows=1,ncols=1,sharex=False,sharey=False,gridspec_kw={},**ka):
+  def parts(self,fig,nrows:int=1,ncols:int=1,sharex:str|bool=False,sharey:str|bool=False,gridspec_kw:Mapping=None,**ka):
     r"""
 Generator of parts. This implementation assumes the board is a :mod:`matplotlib` grid-figure, and yields its subplots (each subplot is a part). The number of parts must be at least equal to the number of environments to which they are assigned, otherwise some environments are not processed.
 
 :param ka: a dictionary of keyword arguments passed to the :meth:`matplotlib.figure.add_subplot` method of each part (key ``gridlines`` is also allowed and denotes whether gridlines should be displayed)
     """
     from numpy import zeros
-    share = dict(all=(lambda row,col: (0,0)),row=(lambda row,col: (row,0)),col=(lambda row,col: (0,col)),none=(lambda row,col: (-1,-1)))
-    share.update({True:share['all'],False:share['none']}) # aliases
-    share = tuple((dim,share[s]) for dim,s in (('sharex',sharex),('sharey',sharey)))
+    share:dict[str|bool,Callable[[int,int],tuple[int,int]]] = {
+      'all': (lambda row,col: (0,0)),
+      True:  (lambda row,col: (0,0)),   # alias
+      'row': (lambda row,col: (row,0)),
+      'col': (lambda row,col: (0,col)),
+      'none':(lambda row,col: (-1,-1)),
+      False: (lambda row,col: (-1,-1)), # alias
+    }
+    share_ = tuple((dim,share[s]) for dim,s in (('sharex',sharex),('sharey',sharey)))
     ka = dict(self.ax_default,**ka)
     gridlines = ka.pop('gridlines')
-    gridspec = fig.add_gridspec(nrows=nrows,ncols=ncols,**gridspec_kw)
+    gridspec = fig.add_gridspec(nrows=nrows,ncols=ncols,**(gridspec_kw or {}))
     self.axes = axes = zeros((nrows,ncols),dtype=object); axes[...] = None
     for row in range(nrows):
       for col in range(ncols):
-        ax = fig.add_subplot(gridspec[row,col],**dict((dim,axes[s(row,col)]) for dim,s in share),**ka)
+        ax = fig.add_subplot(gridspec[row,col],**dict((dim,axes[s(row,col)]) for dim,s in share_),**ka)
         ax.grid(gridlines)
         axes[row,col] = ax
         yield ax
     raise Exception(f'Insufficient number of parts on this board: {nrows*ncols}')
-
-  def _ipython_display_(self): return self.player._ipython_display_()

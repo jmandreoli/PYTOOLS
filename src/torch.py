@@ -4,13 +4,9 @@
 # Language:             python
 # Purpose:              Some utilities for pytorch
 #
-r"""
-Available types and functions
------------------------------
-"""
 
 from __future__ import annotations
-from typing import Sequence, Any, Union, Callable, Iterable, Mapping, Tuple
+from typing import Sequence, Any, Callable, Iterable, Mapping, Tuple
 import logging; logger = logging.getLogger(__name__)
 
 from collections import namedtuple
@@ -47,7 +43,7 @@ Attributes (\*) must be explicitly instantiated at creation time.
   _events_ = 'open','batch','epoch','close', 'pre_loss','post_loss','pre_optim','post_optim'
 
   ## set at instantiation
-  device: Union[torch.device,str] = None
+  device: torch.device|str = None
   r"""(\*)The device on which to run the model"""
   net: torch.nn.Module
   r"""(\*)The model (initially on cpu, but loaded on :attr:`device` at the beginning of the run and restored to cpu at the end)"""
@@ -80,6 +76,8 @@ Attributes (\*) must be explicitly instantiated at creation time.
   r"""Process time elapsed (in sec) between last invocations of :meth:`reset` and :meth:`tick` on :attr:`stepper`"""
   step: int
   r"""Number of invocations of :meth:`tick` since last invocation of :meth:`reset` on :attr:`stepper`"""
+  process_info: ProcessInfo
+  r"""Infor about the process, set by the stepper"""
   eval_valid: Callable[[],Tuple[float,float]]
   r"""Function returning the validation performance at the end of the last completed step (cached)"""
   eval_test: Callable[[],Tuple[float,float]]
@@ -136,7 +134,7 @@ Executes the run. Must be defined in subclasses. This implementation raises an e
         self.emit('close',self)
 
 #--------------------------------------------------------------------------------------------------
-  def eval(self,data:Iterable[Tuple[float,Tuple[torch.Tensor,...],Tuple[torch.Tensor,...]]])->Tuple[float,...]:
+  def eval(self,data:Iterable[Tuple[float,Tuple[torch.Tensor,...],Tuple[torch.Tensor,...]]])->dict[str,float]:
     r"""
 Evaluates the embedding part of model :attr:`net` on *data* according to :attr:`measures`. The batches are not assumed constant sized.
 
@@ -245,8 +243,8 @@ Instances of this class are runs in which the role of data and parameters are in
   """
 #==================================================================================================
   protos:Tuple[torch.Tensor,...]
-  projection:Callable[[torch.Tensor,...],None]
-  train_data = (),
+  projection:Callable[[torch.Tensor],None]
+  train_data = ()
   valid_data = ()
   test_data = ()
   class InvNet (torch.nn.Module):
@@ -343,7 +341,7 @@ Instances of this class provide basic logging/monitoring for runs.
     status_fmt:Tuple[str,str]=('%6s %6s %4s/%5s','%6.1f %6d %4d/%5d'),
     itrain:Callable[[Run],Mapping[str,Any]]=(lambda run: dict(tloss=run.loss.val())),
     ivalid:Callable[[Run],Mapping[str,Any]]=(lambda run: run.eval_valid()),
-    itest:Callable[[Run],Mapping[Any]]=(lambda run: run.eval_test()),
+    itest:Callable[[Run],Mapping[str,Any]]=(lambda run: run.eval_test()),
     fmt:Mapping[str,Callable[[Any],str]]={},
     **ka
   ):
@@ -353,7 +351,9 @@ Instances of this class provide basic logging/monitoring for runs.
 :param logger: logger to use for logging information
 :param status: pair of a tuple of headers and a function returning the status of a run as a tuple matching those headers
 :param status_fmt: pair of format strings for the components of *status*
-:param itrain,ivalid,itest: function returning various info on a run
+:param itrain: function returning train info on a run
+:param ivalid: function returning validation info on a run
+:param itest: function returning test info on a run
 :param fmt: dictionary associating measure names to their formats
 
 Computes a number of information loggers, stored in attributes :attr:`itrain`, :attr:`ivalid`, :attr:`itest`, :attr:`iprogress`, :attr:`iheader`, as well as the main monitoring function, stored as attribute :attr:`progress`. At least one of *max_epoch* or *max_time* must be set, or the run never ends.
@@ -379,8 +379,8 @@ Computes a number of information loggers, stored in attributes :attr:`itrain`, :
 
 #--------------------------------------------------------------------------------------------------
   def set2(self,
-    train_p:Union[Callable[[Run],bool],bool]=False,
-    valid_p:Union[Callable[[Run],bool],bool]=False,
+    train_p:Callable[[Run],bool]|bool=False,
+    valid_p:Callable[[Run],bool]|bool=False,
     **ka
   ):
     r"""
@@ -414,7 +414,9 @@ Instances of this class provide mlflow logging.
     r"""
 :param uri: mlflow tracking uri
 :param exp: experiment name
-:param itrain,ivalid,itest: function returning various info on a run
+:param itrain: function returning train info on a run
+:param ivalid: function returning validation info on a run
+:param itest: function returning test info on a run
 
 Computes a number of information loggers, stored in attributes :attr:`itrain`, :attr:`ivalid`, :attr:`itest`, :attr:`iprogress`, :attr:`open_mlflow`, :attr:`close_mlflow`. The *uri* must refer to a valid mlflow experiment storage.
     """
@@ -434,9 +436,9 @@ Computes a number of information loggers, stored in attributes :attr:`itrain`, :
 
 #--------------------------------------------------------------------------------------------------
   def set2(self,
-    train_p:Union[Callable[[Run],bool],bool]=False,
-    valid_p:Union[Callable[[Run],bool],bool]=False,
-    checkpoint_p:Union[Callable[[Run],bool],bool]=False,
+    train_p:Callable[[Run],bool]|bool=False,
+    valid_p:Callable[[Run],bool]|bool=False,
+    checkpoint_p:Callable[[Run],bool]|bool=False,
     **ka
   ):
     r"""
@@ -500,7 +502,9 @@ Instances of this class provide tensorboard logging for runs. Limited functional
     r"""
 :param uri: mlflow tracking uri
 :param exp: experiment name
-:param itrain,ivalid,itest: function returning various info on a run
+:param itrain: function returning train info on a run
+:param ivalid: function returning validation info on a run
+:param itest: function returning test info on a run
 
 Computes a number of information loggers, stored in attributes :attr:`itrain`, :attr:`ivalid`, :attr:`itest`, :attr:`iprogress`, :attr:`open_tb`, :attr:`close_tb`. The *uri* must refer to a valid tensorboard experiment storage.
     """
@@ -517,9 +521,9 @@ Computes a number of information loggers, stored in attributes :attr:`itrain`, :
 
 #--------------------------------------------------------------------------------------------------
   def set2(self,
-    train_p:Union[Callable[[Run],bool],bool]=False,
-    valid_p:Union[Callable[[Run],bool],bool]=False,
-    checkpoint_p:Union[Callable[[Run],bool],bool]=False,
+    train_p:Callable[[Run],bool]|bool=False,
+    valid_p:Callable[[Run],bool]|bool=False,
+    checkpoint_p:Callable[[Run],bool]|bool=False,
     **ka
   ):
     r"""
@@ -611,8 +615,8 @@ Returns a dictionary which can be passed as keyword arguments to the :class:`Run
 
 #--------------------------------------------------------------------------------------------------
   def display(self,
-    rowspec:Union[float,Tuple[float,int],Tuple[float,int,float]],
-    colspec:Union[float,Tuple[float,int],Tuple[float,int,float]],
+    rowspec:float|Tuple[float,int]|Tuple[float,int,float],
+    colspec:float|Tuple[float,int]|Tuple[float,int,float],
     dataset:Iterable[Tuple[Any,int]]=None,
     **ka
     ):
@@ -637,10 +641,11 @@ At most one of the number of rows or columns can be -1. When both are positive a
         if visible:
           update(value)
           ax.set_title(self.classes[label],fontsize='xx-small',pad=1)
-    def widget_control(dataset,K,disp):
+      fig.canvas.draw_idle()
+    def widget_control(dataset,K:int,disp:Callable):
       from ipywidgets import IntSlider,Label,HBox,Button
       disp_ = lambda: disp([dataset[k] for k in range(w_sel.value,min(w_sel.value+K,N))])
-      N = len(dataset)
+      N:int = len(dataset)
       w_closeb = Button(icon='close',tooltip='Close browser',layout=dict(width='.5cm',padding='0'))
       w_sel = IntSlider(value=0,min=0,step=K,max=(adj(N,K)-1)*K,layout=dict(width='10cm'))
       w_main = HBox((Label(str(self)),w_sel,Label(f'+[0-{K-1}]/ {N}',layout=dict(align_self='center')),w_closeb))
@@ -706,7 +711,7 @@ This class is meant to facilitate writing flexible pipelines of callable invocat
   def __abs__(self): return self.func
 
 #--------------------------------------------------------------------------------------------------
-def periodic(p:Union[int,float],counter:str=None)->Callable[[Run],bool]:
+def periodic(p:int|float,counter:str=None)->Callable[[Run],bool]:
   r"""
 Returns a run selector, i.e. a callable which takes a run as input and returns a boolean. The selection is based on the value of a counter held by attribute *counter* of the run.
 
@@ -822,3 +827,82 @@ class ListAccumulator (Accumulator):
 #--------------------------------------------------------------------------------------------------
   def _ini(self): return []
   def _inc(self,x): self._val.append(x)
+
+#--------------------------------------------------------------------------------------------------
+class MultiHeadAttention(torch.nn.Module):
+  r"""
+An instance of this class is a multi-head attention module. Parameters are
+
+.. math::
+
+   \begin{array}{ll|ll}
+   \Lambda^{\textrm{(x)}} & \langle K,P',D' \rangle & \Theta^{\textrm{(x)}} & \langle K,P,D \rangle \\
+   \Lambda^{\textrm{(y)}} & \langle K,Q',D' \rangle & \Theta^{\textrm{(y)}} & \langle K,Q,D \rangle \\
+   \Lambda^{\textrm{(o)}} & \langle K,D' \rangle & \Theta^{\textrm{(o)}} & \langle K,D \rangle
+   \end{array}
+
+:param K: number of heads
+:param dim: triple :math:`(P,Q,D)` with component defaults :math:`D=\left\lfloor\frac{Q}{K}\right\rfloor` and :math:`Q=P`
+:param dimʹ: triple :math:`(P',Q',D')` with same component defaults as *dim*, and default to *dim*
+:param bias: where to use bias (possible values are ``Lambda``, ``Theta``, ``both`` (or :const:`True`), ``none`` (or :const:`False`)
+  """
+#--------------------------------------------------------------------------------------------------
+  def __init__(self,K:int,dim:tuple[int],dimʹ:tuple[int]=None,bias:bool|str=False):
+    super().__init__()
+    P,Q,D = self._parsedim(dim,K); Pʹ,Qʹ,Dʹ = (P,Q,D) if dimʹ is None else self._parsedim(dimʹ,K)
+    bias = {'none':(False,False),False:(False,False),'Lambda':(True,False),'Λ':(True,False),'Theta':(False,True),'ϴ':(False,True),'both':(True,True),True:(True,True)}[bias]
+    self.K,self.P,self.Pʹ,self.Q,self.Qʹ,self.D,self.Dʹ = K,P,Pʹ,Q,Qʹ,D,Dʹ
+    self.Λ = torch.nn.ParameterList(torch.nn.Parameter(torch.FloatTensor(K,X,Dʹ)) for X in (Pʹ,Qʹ))
+    self.ϴ = torch.nn.ParameterList(torch.nn.Parameter(torch.FloatTensor(K,X,D)) for X in (P,Q))
+    self.Λₒ = torch.nn.Parameter(torch.FloatTensor(1,1,K,Dʹ)) if bias[0] is True else None
+    self.ϴₒ = torch.nn.Parameter(torch.FloatTensor(1,1,K,D)) if bias[1] is True else None
+    self._reset_params()
+    self.temperature = torch.sqrt(torch.tensor(self.Dʹ)) # applied to softmax
+
+  @staticmethod
+  def _parsedim(dim,K):
+    if isinstance(dim,int): P = dim; dim = P,P,P//K
+    else:
+      dim = tuple(dim)
+      assert 1 <= len(dim) <= 3 and all(isinstance(x,int) and x>1 for x in dim), 'Incorrect dim specification. Format (P,Q,D); default Q=P, default D=Q//K.'
+      if len(dim) == 2: P,Q = dim; dim = P,Q,Q//K
+      elif len(dim) == 1: P, = dim; dim = P,P,P//K
+    return dim
+
+  def _reset_params(self):
+    for Λ in self.Λ: torch.nn.init.xavier_uniform_(Λ)
+    for ϴ in self.ϴ: torch.nn.init.xavier_uniform_(ϴ)
+    if self.Λₒ is not None: torch.nn.init.xavier_uniform_(self.Λₒ)
+    if self.ϴₒ is not None: torch.nn.init.zeros_(self.ϴₒ)
+
+  def forward(self,yʹ,xʹ=None,x=None,mask=None):
+    r"""
+Formula:
+
+.. math::
+
+   \begin{align*}
+   y_b & = \sum_k \left[A_{bk}^\top x_b \Theta_k^{\textrm{(x)}}+\mathbf{1}_N\otimes\Theta_k^{\textrm{(o)}}\right]\Theta_k^{\textrm{(y)}\top}\\
+   A_{bk} & = \textrm{softmax}_{\textrm{row}}(\tilde{x}_{bk}\tilde{y}_{bk}^\top)\\
+   \tilde{x}_{bk} & = x'_b\Lambda_k^{\textrm{(x)}}+\mathbf{1}_M\otimes\Lambda_k^{\textrm{(o)}}\\
+   \tilde{y}_{bk} & = y'_b\Lambda_k^{\textrm{(y)}}
+   \end{align*}
+
+:param x: :math:`x` tensor of shape :math:`\langle B,M,P \rangle` (a.k.a. value input)
+:param xʹ: :math:`x'` tensor of shape :math:`\langle B,M,P' \rangle` (a.k.a. key input)
+:param yʹ: :math:`y'` tensor of shape :math:`\langle B,N,Q' \rangle` (a.k.a. query input)
+:return: :math:`y` tensor of shape :math:`\langle B,N,Q \rangle` (output)
+    """
+    if xʹ is None: xʹ = yʹ
+    if x is None: x = xʹ
+    r = torch.einsum('bmp,kpd->bmkd',xʹ,self.Λ[0]) # r: B,M,K,D'
+    if self.Λₒ is not None: r = r + self.Λₒ
+    r = torch.einsum('bmkd,kqd,bnq->kbmn',r,self.Λ[1],yʹ) # r: K,B,M,N
+    if mask is not None:
+      if len(mask.shape)==2: r = r + mask[None,None,...]
+      else: assert len(mask.shape)==3; r = r + mask[None,...]
+    r = torch.softmax(r/self.temperature,dim=-2)
+    r = torch.einsum('kbmn,bmp,kpd->bnkd',r,x,self.ϴ[0]) # r: B,N,K,D
+    if self.ϴₒ is not None: r = r + self.ϴₒ
+    r = torch.einsum('bnkd,kqd->bnq',r,self.ϴ[1]) # r: B,N,Q
+    return r

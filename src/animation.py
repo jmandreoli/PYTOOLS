@@ -5,11 +5,7 @@
 # Purpose:              Utilities for animations
 #
 
-r"""
-Available types and functions
------------------------------
-"""
-
+from __future__ import annotations
 from matplotlib import rcParams
 from matplotlib.pyplot import figure
 from matplotlib.figure import Figure
@@ -18,7 +14,7 @@ from matplotlib.patches import Rectangle
 from matplotlib.backend_bases import MouseButton
 try: from .ipywidgets import app, SimpleButton # so this works even if ipywidgets is not available
 except: app = object
-from typing import Any, Callable, Iterable, Mapping, Sequence, Tuple
+from typing import Any, Callable, Iterable, Mapping, Sequence, Tuple, Literal
 import logging; logger = logging.getLogger(__name__)
 
 #==================================================================================================
@@ -38,21 +34,21 @@ The specification *track* can be the track map itself, returned as such after mi
 :param stype: the type of scalars passed to the track map
   """
 # ==================================================================================================
-  assert stype is int or stype is float
+  assert stype in (int,float)
   if callable(track):
+    track_func = track
     track_ = track(stype(0))
     assert track_ is not None and len(track_)==2 and isinstance((t0:=track_[0]),stype) and isinstance((t1:=track_[1]),stype) and t0<=0<t1 and track(t0) == track_ and ((t:=track(t1)[0]) is None or t == t1)
+  elif isinstance(track,(int,float)):
+    T = stype(track)
+    assert T>0
+    def track_func(x,T=T): x -= x%T; return x,x+T
   else:
-    try: L = tuple(map(stype,(0,*track)))
-    except:
-      T = stype(track)
-      assert T>0
-      def track(x,T=T): x -= x%T; return x,x+T
-    else:
-      assert len(L)>1 and all(x<x_ for (x,x_) in zip(L[:-1],L[1:]))
-      from bisect import bisect
-      def track(x,L=L,imax=len(L)): i = bisect(L,x); return (L[i-1],L[i]) if i<imax else None
-  return track
+    L = tuple(map(stype,[0,*track]))
+    assert len(L)>1 and all(x<x_ for (x,x_) in zip(L[:-1],L[1:]))
+    from bisect import bisect
+    def track_func(x,L=L,imax=len(L)): i = bisect(L,x); return (L[i-1],L[i]) if i<imax else None
+  return track_func
 
 #==================================================================================================
 class animation_player_base:
@@ -158,7 +154,7 @@ A instance of this class is a player for :mod:`matplotlib` animations controlled
     w_clock2 = FloatText(0,min=0,layout=dict(width='1.6cm',padding='0cm',display='none'))
     w_clock2.active = False
     toolbar = ka.pop('toolbar',())
-    super().__init__(children=ka.pop('children',()),toolbar=[w_play_toggler,w_track_manager,w_clockb,w_clock,w_clock2,*toolbar])
+    super().__init__(children=ka.pop('children',()),toolbar=(w_play_toggler,w_track_manager,w_clockb,w_clock,w_clock2,*toolbar))
     self.board = board = self.mpl_figure(**fig_kw)
     display = displayer(board)
     # callbacks
@@ -258,5 +254,3 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
     toolbar.canvas.mpl_connect('button_press_event',on_button_press)
     toolbar.canvas.mpl_connect('key_press_event',on_key_press)
     super().__init__(display,**ka)
-
-  def _ipython_display_(self): return repr(self)

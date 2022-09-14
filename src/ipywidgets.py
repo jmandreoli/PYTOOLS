@@ -4,14 +4,9 @@
 # Language:             python
 # Purpose:              Utilities for ipywidgets
 #
-r"""
-Available types and functions
------------------------------
-"""
 
 from __future__ import annotations
-
-from typing import Any, Union, Callable, Iterable, Mapping, Sequence, Tuple
+from typing import Any, Callable, Iterable, Mapping, Sequence, Tuple
 import logging; logger = logging.getLogger(__name__)
 
 import pandas, traceback
@@ -40,7 +35,7 @@ An instance of this class is an app based on module :mod:`ipywidgets`, consistin
   toolbar: HBox
   r"""The toolbar widget (first child of :attr:`main`)"""
 
-  def __init__(self,children:Tuple[Widget,...]=(),toolbar:Tuple[Widget,...]=()):
+  def __init__(self,children:Sequence[Widget]=(),toolbar:Sequence[Widget]=()):
     self.console = None
     w_closeb = SimpleButton(icon='close',tooltip='Close app')
     self.console = console = Output()
@@ -58,6 +53,7 @@ An instance of this class is an app based on module :mod:`ipywidgets`, consistin
       for f in close_callbacks: f()
     w_closeb.on_click(_closeall)
     self.main = main = VBox([self.toolbar,w_console,*children])
+    self._repr_mimebundle_ = main._repr_mimebundle_
 
   def __enter__(self): return self.console.__enter__()
   def __exit__(self,*a): self.console.__exit__(*a)
@@ -80,7 +76,14 @@ Adds a :mod:`matplotlib` figure to this app.
     self.on_close(lambda:close(fig))
     return fig
 
-  def _ipython_display_(self): return self.main._ipython_display_()
+  def protect(self,f):
+    r"""A decorator to dispatch exceptions in the console."""
+    @wraps(f)
+    def F(*a,**ka):
+      try: f(*a,**ka)
+      except:
+        with self: traceback.print_exc(); raise
+    return F
 
 #==================================================================================================
 class seq_browser (app):
@@ -127,7 +130,7 @@ An instance of this class is an app to browse the file at *path*, possibly while
 :param context: pair of number of lines before and after to display around current position
   """
 #==================================================================================================
-  def __init__(self,path:Union[str,Path],start:Union[int,float]=None,step:int=50,track:bool=True,context:Tuple[int,int]=(10,5)):
+  def __init__(self,path:str|Path,start:int|float=None,step:int=50,track:bool=True,context:Tuple[int,int]=(10,5)):
     # content initialisation
     path = Path(path).absolute()
     file = path.open('rb')
@@ -217,7 +220,7 @@ An instance of this class is an app to explore a database specified by *spec*. I
   """
 #==================================================================================================
   style = 'background-color:gray; color:white; font-weight:bold; padding:.2cm'
-  def __init__(self,spec:Union[str,sqlalchemy.Engine,sqlalchemy.MetaData]):
+  def __init__(self,spec:str|sqlalchemy.engine.Engine|sqlalchemy.MetaData):
     from pandas import read_sql_query
     from sqlalchemy import select, func, MetaData, create_engine
     from sqlalchemy.engine import Engine
@@ -465,19 +468,23 @@ A number of other widgets are accessible in addition to :attr:`main`: :attr:`too
   """
 #==================================================================================================
 
-  def __init__(self,children=(),toolbar=(),track:Union[int,Sequence[int],Callable[[int],Tuple[int,int]]]=None,continuity:bool=True,**ka):
+  def __init__(self,children=(),toolbar=(),track:int|Sequence[int]|Callable[[int],Tuple[int,int]]=None,continuity:bool=True,**ka):
     from ipywidgets import Play, IntSlider, jslink
-    if not callable(track):
-      if isinstance(track,int):
-        assert track>0
-        def track(n,N=track): m = n-n%N; return m,m+N
-      else:
-        L = tuple((0,*track))
-        assert len(L)>1 and all(isinstance(n,int) for n in L) and all(n<n_ for (n,n_) in zip(L[:-1],L[1:]))
-        from bisect import bisect
-        def track(n,L=L,imax=len(L)): i = bisect(L,n); return (L[i-1],L[i]) if i<imax else None
-    self.track = track
-    self.w_play = w_play = Play(0,min=0,max=track(0)[1],show_repeat=False,**ka)
+    track_func: Callable[[int],Tuple[int, int]]
+    if callable(track):
+      track_func = track
+      track_ = track_func(0)
+      assert track_ is not None and len(track_) == 2 and isinstance((t0:=track_[0]),int) and isinstance((t1:=track_[1]),int) and t0<=0<t1 and track_func(t0)==track_ and ((t:=track(t1)[0]) is None or t==t1)
+    elif isinstance(track,int):
+      assert track>0
+      def track_func(x,T=track): x -= x%T; return x,x+T
+    else:
+      L = tuple((0,*track))
+      assert len(L)>1 and all(x<x_ for (x,x_) in zip(L[:-1],L[1:]))
+      from bisect import bisect
+      def track_func(x,L=L,imax=len(L)): i = bisect(L,x); return (L[i-1],L[i]) if i<imax else None
+    self.track = track_func
+    self.w_play = w_play = Play(0,min=0,max=track_func(0)[1],show_repeat=False,**ka)
     w_ind = IntSlider(0,readout=False)
     super().__init__(children,toolbar=[w_play,w_ind,*toolbar])
     self.on_close(w_play.close)
@@ -486,7 +493,7 @@ A number of other widgets are accessible in addition to :attr:`main`: :attr:`too
     jslink((w_play,'max'),(w_ind,'max'))
     if continuity:
       def _continuity(c):
-        if c.new == w_play.max and (tr:=track(c.new)) is not None:
+        if c.new == w_play.max and (tr:=track_func(c.new)) is not None:
           w_play.max = tr[1]; w_play.min = tr[0]
       w_play.observe(_continuity,'value')
 

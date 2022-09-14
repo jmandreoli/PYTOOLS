@@ -5,14 +5,11 @@
 # Purpose:              Some utilities in Python
 #
 
-r"""
-Available types and functions
------------------------------
-"""
-
-import os, re, pickle, collections
-from typing import Any, Union, Callable, Iterable, Mapping, MutableMapping, Tuple, Optional
+from __future__ import annotations
 import logging; logger = logging.getLogger(__name__)
+import os, re, pickle, collections
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Tuple
+if False: import ast,sqlalchemy,lxml
 
 #==================================================================================================
 class owrap:
@@ -164,7 +161,7 @@ Returns the content of the XDG resource named *rsc* or *dflt* if the resource is
   with open(p) as u: return u.read()
 
 #==================================================================================================
-def config_env(name:str,dflt:str=None,asfile:bool=False):
+def config_env(name:str,dflt:str=None,asfile:bool=False)->str|None:
   r"""
 :param name: the name of an environment variable
 :param dflt: a default value
@@ -176,8 +173,8 @@ Returns the string value of an environment variable (or the content of the file 
   x = os.environ.get(name)
   if x is None: return dflt
   if asfile:
-    with open(x) as u: x = u.read(x)
-  return x
+    with open(x) as u: return u.read()
+  else: return x
 
 #==================================================================================================
 def autoconfig(module:str,name:str,dflt:Any=None,asfile:bool=False):
@@ -192,7 +189,7 @@ Returns an object obtained from an environment variable whose name is derived fr
 #==================================================================================================
   x = config_env('{}_{}'.format(module.replace('.','_'),name).upper(),asfile=asfile)
   if x:
-    d = {}
+    d:dict[str,Any] = {}
     exec(x,d)
     return d[name]
   else: return dflt
@@ -408,9 +405,9 @@ Symbolic expressions of this class are also callables, and trigger incarnation o
 
 #==================================================================================================
 def html_parlist(
-  html:Callable[[Any],'lxml.html.Element'],La:Iterable[Any],Lka:Iterable[Tuple[str,Any]],
-  opening:Iterable['lxml.html.Element']=(),closing:Iterable['lxml.html.Element']=(),style:str='padding: 5px'
-  )->'lxml.html.HtmlElement':
+  html:Callable[[Any],lxml.html.Element],La:Iterable[Any],Lka:Iterable[Tuple[str,Any]],
+  opening:Iterable[lxml.html.Element]=(),closing:Iterable[lxml.html.Element]=(),style:str='padding: 5px'
+  )->lxml.html.HtmlElement:
   r"""
 :param html: callable to use on components to get their HTML representation
 :param La: anonymous components
@@ -429,9 +426,9 @@ Returns a default HTML representation of a compound object, where *La,Lka* are t
 
 #==================================================================================================
 def html_table(
-  irows:Iterable[Tuple[Any,Tuple[Any,...]]],fmts:Tuple[Callable[[Any],str],...],
-  hdrs:Tuple[str,...]=None,opening:str=None,closing:str=None,encoding:type|str=None
-  )->Union[str,'lxml.html.HtmlElement']:
+    irows:Iterable[Tuple[Any,Tuple[Any,...]]],fmts:Tuple[Callable[[Any],str],...],
+    hdrs:Tuple[str,...]=None,opening:str=None,closing:str=None,encoding:type|str=None
+  )->str|lxml.html.HtmlElement:
   r"""
 :param irows: a generator of pairs of an object (key) and a tuple of objects (value)
 :param fmts: a tuple of format functions matching the length of the value tuples
@@ -489,7 +486,7 @@ Objects of this class are aggregation functions which simply collect results in 
 prints pairs *school*, *L* where *L* is a list of pairs *age*, *height*.
   """
 #==================================================================================================
-  contents = {}
+  contents:dict[int,Any] = {}
   def __init__(self): self.content = []
   def step(self,*a): self.content.append(a)
   def finalize(self): n = id(self.content); self.contents[n] = self.content; return n
@@ -499,22 +496,27 @@ prints pairs *school*, *L* where *L* is a list of pairs *age*, *height*.
     return SQliteStack.contents.pop
 
 #==================================================================================================
-def SQliteNew(path:str,schema:Union[str,Iterable[str]]):
+def SQliteNew(path:str,schema:str):
   r"""
 :param path: a path to an sqlite database
-:param schema: the schema specification as a list of SQL queries (possibly joined by ``\n\n``)
+:param schema: the schema specification
 
 Makes sure the file at *path* is a SQlite3 database with schema exactly equal to *schema*.
   """
 #==================================================================================================
   import sqlite3
-  if isinstance(schema,str): schema = list(sql.strip() for sql in schema.split('\n\n'))
+  from string import whitespace
+  sep = whitespace+';'
   with sqlite3.connect(path,isolation_level='EXCLUSIVE') as conn:
-    S = list(sql for sql, in conn.execute('SELECT sql FROM sqlite_master WHERE name NOT LIKE \'sqlite%\''))
+    S = [sql for sql, in conn.execute('SELECT sql FROM sqlite_master WHERE name NOT LIKE \'sqlite%\'')]
     if S:
-      if S!=schema: raise Exception('database has a version conflict')
-    else:
-      for sql in schema: conn.execute(sql)
+      schema = schema.strip()
+      for sql in S:
+        if not schema.startswith(sql): raise Exception('database has a version conflict')
+        schema = schema[len(sql):].lstrip(sep)
+      else:
+        if schema.lstrip(sep): raise Exception('database has a version conflict')
+    else: conn.executescript(schema)
 
 #==================================================================================================
 def gitcheck(path:str,update:bool=False):
@@ -558,8 +560,8 @@ Assumes that *pkgname* is the name of a python regular (non namespace) package a
   from importlib.util import find_spec
   from importlib import reload
   from sys import modules
-  try: path, = find_spec(pkgname).submodule_search_locations
-  except: raise ValueError('Not a regular package',pkgname)
+  if (pkg:=find_spec(pkgname)) is None or (locs:=pkg.submodule_search_locations) is None or len(locs)!=1: raise ValueError('Not a regular package',pkgname)
+  path = locs[0]
   c = gitcheck(path,update)
   if c[0] == 'uptodate-now':
     m = modules.get(pkgname)
@@ -567,7 +569,7 @@ Assumes that *pkgname* is the name of a python regular (non namespace) package a
   return c
 
 #==================================================================================================
-def SQLinit(engine:Union[str,'sqlalchemy.Engine'],meta:'sqlalchemy.MetaData')->'sqlalchemy.Engine':
+def SQLinit(engine:str|sqlalchemy.engine.Engine,meta:sqlalchemy.MetaData)->sqlalchemy.engine.Engine:
   r"""
 :param engine: a sqlalchemy engine (or its url)
 :param meta: a sqlalchemy metadata structure
@@ -596,10 +598,10 @@ def SQLinit(engine:Union[str,'sqlalchemy.Engine'],meta:'sqlalchemy.MetaData')->'
       metainfo_table = meta_.tables['Metainfo']
       metainfo = dict(engine.execute(select(metainfo_table.c)).fetchone())
       del metainfo['created']
-    except: raise SQLinitMetainfoException('Not found')
+    except: raise SQLinit.MetainfoException('Not found')
     for k,v in meta.info.items():
       if metainfo.get(k) != str(v):
-        raise SQLinitMetainfoException(f'{k}[expected:{v},found:{metainfo.get(k)}]')
+        raise SQLinit.MetainfoException(f'{k}[expected:{v},found:{metainfo.get(k)}]')
   else:
     metainfo_table = Table(
       'Metainfo',meta_,
@@ -610,8 +612,7 @@ def SQLinit(engine:Union[str,'sqlalchemy.Engine'],meta:'sqlalchemy.MetaData')->'
     engine.execute(insert(metainfo_table).values(created=datetime.now(),**meta.info))
     meta.create_all(bind=engine)
   return engine
-class SQLinitMetainfoException (Exception): pass
-SQLinit.MetainfoException = SQLinitMetainfoException
+SQLinit.MetainfoException = type('SQLinitMetainfoException',(),{})
 
 #==================================================================================================
 class SQLHandler (logging.Handler):
@@ -622,7 +623,7 @@ class SQLHandler (logging.Handler):
 A logging handler class which writes the log messages into a database.
   """
 #==================================================================================================
-  def __init__(self,engine:Union[str,'sqlalchemy.Engine'],label:str,*a,**ka):
+  def __init__(self,engine:str|sqlalchemy.Engine,label:str,*a,**ka):
     from datetime import datetime
     from sqlalchemy.sql import select, insert, update, delete, and_
     meta = SQLHandlerMetadata()
@@ -646,7 +647,7 @@ A logging handler class which writes the log messages into a database.
     self.dbrecord(rec)
 
 #--------------------------------------------------------------------------------------------------
-def SQLHandlerMetadata(info:Mapping[str,Any]=dict(origin=__name__+'.SQLHandler',version=1))->'sqlalchemy.MetaData':
+def SQLHandlerMetadata(info:Mapping[str,Any]=dict(origin=__name__+'.SQLHandler',version=1))->sqlalchemy.MetaData:
 #--------------------------------------------------------------------------------------------------
   from sqlalchemy import Table, Column, ForeignKey, MetaData
   from sqlalchemy.types import DateTime, Text, Integer
@@ -880,7 +881,7 @@ Instances of this class maintain basic statistics about a group of values.
 :param var: weighted variance of the group
   """
 #==================================================================================================
-  def __init__(self,weight:Union[int,float,complex]=1.,avg:Union[int,float,complex]=0.,var:Union[int,float,complex]=0.):
+  def __init__(self,weight:int|float|complex=1.,avg:int|float|complex=0.,var:int|float|complex=0.):
     self.weight = weight; self.avg = avg; self.var = var
   def __add__(self,other):
     w,a,v = (other.weight,other.avg,other.var) if isinstance(other,basic_stats) else (1.,other,0.)
@@ -915,7 +916,7 @@ Returns the :class:`datetime.date` instance for which the :meth:`datetime.date.i
   return iso1+timedelta(days=isoday-1,weeks=isoweek-1)
 
 #==================================================================================================
-def size_fmt(size:int,binary:bool=True,precision:int=4,suffix:str='B')->str:
+def size_fmt(size:int|float,binary:bool=True,precision:int=4,suffix:str='B')->str:
   r"""
 :param size: a positive number representing a size
 :param binary: whether to use IEC binary or decimal convention
@@ -928,16 +929,16 @@ Returns the representation of *size* with IEC prefix. Each prefix is *K* times t
   """
 #==================================================================================================
   thr,mark = (1024.,'i') if binary else (1000.,'')
+  if size<thr: return f'{size}{suffix}'
   fmt = f'{{:.{precision}g}}{{}}{mark}{suffix}'.format
-  if size<thr: return str(size)+suffix
-  size /= thr
+  size_:float = size/thr
   for prefix in 'KMGTPEZ':
-    if size < thr: return fmt(size,prefix)
-    size /= thr
-  return fmt(size,'Y') # :-)
+    if size_ < thr: return fmt(size_,prefix)
+    size_ /= thr
+  return fmt(size_,'Y') # :-)
 
 #==================================================================================================
-def time_fmt(time:Union[int,float],precision:int=2)->str:
+def time_fmt(time:int|float,precision:int=2)->str:
   r"""
 :param time: a number representing a time in seconds
 :param precision: number of digits displayed
@@ -951,12 +952,12 @@ Returns the representation of *time* in one of days,hours,minutes,seconds,milli-
   fmt = f'{{:.{precision}f}}'.format
   if time < 1.: return f'{1000 * time:3.3g}msec'
   if time < 60.: return f'{fmt(time)}sec'
-  time /= 60.
-  if time < 60.: return f'{fmt(time)}min'
-  time /= 60.
-  if time < 24.: return f'{fmt(time)}hr'
-  time /= 24.
-  return f'{fmt(time)}day'
+  time_:float = time/60.
+  if time_ < 60.: return f'{fmt(time_)}min'
+  time_ /= 60.
+  if time_ < 24.: return f'{fmt(time_)}hr'
+  time_ /= 24.
+  return f'{fmt(time_)}day'
 
 #==================================================================================================
 def versioned(v)->Callable[[Callable],Callable]:
@@ -984,7 +985,7 @@ Returns a "unique" id for miscellanous uses.
   return (pre+str(time())+post).replace('.','_')
 
 #--------------------------------------------------------------------------------------------------
-def printast(x:Union[str,'ast.AST']):
+def printast(x:str|ast.AST):
   r"""
 :param x: an AST or string (parsed into an AST)
 
@@ -992,7 +993,7 @@ Pretty-prints the AST object (python abstract syntax tree).
   """
 #--------------------------------------------------------------------------------------------------
   import ast
-  def pp(x,pre,indent):
+  def pp(x,pre:str,indent:str):
     if isinstance(x,ast.AST):
       print(indent,pre,':',x.__class__.__name__)
       indent += ' | '

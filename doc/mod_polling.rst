@@ -16,6 +16,9 @@ Typical output:
 
 .. literalinclude:: ../demo/polling.out
 
+Available types and functions
+-----------------------------
+
 .. automodule:: PYTOOLS.polling
    :members:
    :member-order: bysource

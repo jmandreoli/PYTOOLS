@@ -5,12 +5,8 @@
 # Purpose:              Persistent cache management
 #
 
-r"""
-Available types and functions
------------------------------
-"""
-
-from typing import Any, Union, Callable, Iterable, Mapping, Tuple
+from __future__ import annotations
+from typing import Any, Callable, Iterable, Mapping, Tuple
 import logging; logger = logging.getLogger(__name__)
 
 import os, sqlite3, pickle, inspect, threading, abc
@@ -27,7 +23,7 @@ SCHEMA = '''
 CREATE TABLE Block (
   oid INTEGER PRIMARY KEY AUTOINCREMENT,
   functor PICKLE NOT NULL
-  )
+  );
 
 CREATE TABLE Cell (
   oid INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,29 +33,23 @@ CREATE TABLE Cell (
   hits INTEGER DEFAULT 0,
   size INTEGER DEFAULT 0,
   duration REAL
-  )
+  );
 
-CREATE UNIQUE INDEX BlockIndex ON Block (functor)
+CREATE UNIQUE INDEX BlockIndex ON Block (functor);
+CREATE UNIQUE INDEX CellIndex ON Cell (block, ckey);
+CREATE INDEX CellIndex2 ON Cell (tstamp);
 
-CREATE UNIQUE INDEX CellIndex ON Cell (block, ckey)
+CREATE TRIGGER BlockDeleteTrigger AFTER DELETE ON Block
+  BEGIN DELETE FROM Cell WHERE block=OLD.oid; END;
 
-CREATE INDEX CellIndex2 ON Cell (tstamp)
-
-CREATE TRIGGER BlockDeleteTrigger
-  AFTER DELETE ON Block
-  BEGIN
-    DELETE FROM Cell WHERE block=OLD.oid;
-  END
-
-CREATE TRIGGER CellDeleteTrigger
-  AFTER DELETE ON Cell
-  BEGIN
-    SELECT cellrm(OLD.oid,OLD.size);
-  END
+CREATE TRIGGER CellDeleteTrigger AFTER DELETE ON Cell
+  BEGIN SELECT cellrm(OLD.oid,OLD.size); END;
 '''
 
 sqlite3.register_converter('PICKLE',pickle.loads)
 sqlite3.enable_callback_tracebacks(True)
+
+BlockInfo = namedtuple('BlockInfo','hits ncell ncell_error ncell_pending')
 
 #==================================================================================================
 class CacheDB (MutableMapping,HtmlPlugin):
@@ -85,29 +75,19 @@ A :class:`CacheDB` instance acts as a mapping object, where the keys are block i
 
 Finally, :class:`CacheDB` instances have an HTML ipython display.
 
-Attributes:
-
-.. attribute:: path
-
-   the normalised path of this instance, as a :class:`pathlib.Path`
-
-.. attribute:: dbpath
-
-   the path to the sqlite database holding the index, as a string
-
-.. attribute:: storage
-
-   the object managing the actual storage of the values
-
-Methods:
-
 .. automethod:: __new__
   """
 #==================================================================================================
 
-  timeout = 120.
+  path:Path
+  r"""the normalised path of this instance"""
+  dbpath:str
+  r"""the path to the sqlite database holding the index"""
+  storage:'AbstractStorage'
+  r"""the object managing the actual storage of the values"""
+  timeout:float = 120.
 
-  def __new__(cls,spec:Union['CacheDB',Path,str],listing={},lock=threading.Lock()):
+  def __new__(cls,spec:CacheDB|Path|str,listing={},lock=threading.Lock()):
     r"""
 Generates a :class:`CacheDB` object.
 
@@ -240,35 +220,22 @@ Furthermore, a :class:`CacheBlock` instance acts as a mapping where the keys are
 
 Finally, :class:`CacheBlock` instances have an HTML ipython display.
 
-Attributes:
-
-.. attribute:: db
-
-   the :class:`CacheDB` instance this block belongs to
-
-.. attribute:: functor
-
-   the functor for this block (field ``functor`` in the ``Block`` table of the index is the functor's pickle)
-
-.. attribute:: block
-
-   the :class:`int` identifier of this block (field ``oid`` in the ``Block`` table of the index)
-
-.. attribute:: cacheonly
-
-   whether cell creation is disabled
-
-.. attribute:: memory
-
-   a :class:`weakref.WeakValueDictionary` implementing a local cache of calls within the current process
-
-Methods:
-
 .. automethod:: __call__
   """
 #==================================================================================================
 
-  def __init__(self,db:Union[CacheDB,Path,str]='',functor:'AbstractFunctor'=None,block:int=None,cacheonly:bool=False):
+  db: CacheDB
+  r"""the :class:`CacheDB` instance this block belongs to"""
+  functor:'AbstractFunctor'
+  r"""the functor for this block (field ``functor`` in the ``Block`` table of the index is the functor's pickle)"""
+  block:int
+  r"""the identifier of this block (field ``oid`` in the ``Block`` table of the index)"""
+  cacheonly:bool
+  r"""whether cell creation is disabled"""
+  memory: WeakValueDictionary
+  r"""a local cache of calls within the current process"""
+
+  def __init__(self,db:CacheDB|Path|str='',functor:'AbstractFunctor'=None,block:int=None,cacheonly:bool=False):
     self.db = db = CacheDB(db)
     self.functor = functor
     self.block = db.getblock(functor) if block is None else block
@@ -301,7 +268,7 @@ Clears all the cells from this block except the *n* most recent (lru policy).
     if deleted>0: logger.info('%s DELETED(%s)',self,deleted)
     return deleted
 
-  def info(self,typ=namedtuple('BlockInfo',('hits','ncell','ncell_error','ncell_pending'))):
+  def info(self):
     r"""
 Returns information about this block. Available attributes:
 :attr:`hits`, :attr:`ncell`, :attr:`ncell_error`, :attr:`ncell_pending`
@@ -309,7 +276,7 @@ Returns information about this block. Available attributes:
     with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
       ncell = dict(conn.execute('SELECT CASE WHEN size ISNULL THEN \'pending\' WHEN size<0 THEN \'error\' ELSE \'\' END AS status, count(*) FROM Cell WHERE block=? GROUP BY status',(self.block,)))
       hits, = conn.execute('SELECT sum(hits) FROM Cell WHERE block=?',(self.block,)).fetchone()
-    return typ((hits or 0),sum(ncell.values()),*(ncell.get(k,0) for k in ('error','pending')))
+    BlockInfo((hits or 0),sum(ncell.values()),ncell.get('error',0),ncell.get('pending',0))
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self,arg:Any):
@@ -492,19 +459,18 @@ class Functor (AbstractFunctor):
   r"""
 An instance of this class defines a functor attached to a python top-level versioned function. The functor is entirely defined by the name of the function, that of its module, its version and its signature. These components are saved on pickling and restored on unpickling, even if the function has disappeared or changed. This is not checked on unpickling, and method :meth:`getval` is disabled.
 
-Attributes:
-
-.. attribute:: func
-
-   the versioned function characterizing this functor
-
-Methods:
-
 .. automethod:: __new__
   """
 #===================================================================================================
 
   __slots__ = 'config', 'sig', 'func'
+
+  func:Callable
+  r"""the versioned function characterizing this functor"""
+  sig:inspect.Signature
+  r"""signature of this functor"""
+  config:tuple['Shadow',Any]
+  r"""configuration of this functor"""
 
   def __new__(cls,spec,fromfunc:bool=True):
     r"""
@@ -516,10 +482,10 @@ Generates a functor.
     if fromfunc:
       self.func = spec
       self.sig = sig = inspect.signature(spec)
-      spec = Shadow(spec),sig_dump(sig)
+      self.config = Shadow(spec),sig_dump(sig)
     else:
       self.sig = sig_load(spec[-1])
-    self.config = spec
+      self.config = spec
     return self
 
   def __getnewargs__(self): return self.config,False
@@ -577,16 +543,11 @@ Instances of this class manage the persistent storage of cached values using a f
 :param path: the directory to store cached values
 
 The storage for a cell consists of a content file which contains the value of the cell in pickled format and a cross process mechanism to synchronise access to the content file between writer and possibly multiple readers. The path of the content file as well as that of the file underlying the synch lock are built from the cell id, so as to be unique to that cell. They inherit the access rights of the :attr:`path` directory.
-
-Attributes:
-
-.. attribute:: path
-
-   Directory where values are stored, initialised from *path*
-
-Methods:
   """
 #==================================================================================================
+
+  path:Path
+  r"""Directory where values are stored"""
 
   def __init__(self,path:Path):
     self.path = path
@@ -619,13 +580,13 @@ Opens the content file path for *cell* in write mode, acquires the corresponding
 Opens the content file path for *cell* in read mode, then returns a getter function which waits for the corresponding synch lock to be released (if *wait* is True), then pickle-loads the content file and returns the obtained value.
     """
 #--------------------------------------------------------------------------------------------------
-    def getval():
-      wait()
-      try: return pickle.load(vfile)
-      finally: vfile.close()
     vpath = self.getpath(cell)
     vfile = vpath.open('rb')
-    wait = self.lookup_synch(vpath) if wait else lambda: None
+    wait_ = self.lookup_synch(vpath) if wait else lambda: None
+    def getval():
+      wait_()
+      try: return pickle.load(vfile)
+      finally: vfile.close()
     return getval
 
 #--------------------------------------------------------------------------------------------------
@@ -772,30 +733,30 @@ A simple tool to manage a set of :class:`CacheDB` instances, specified by their 
     wmsg.clear_output()
     with wout: clear_output(); display(db)
   def runc(c):
-    x = c.new
-    if x == autorun_: return
-    wautorun.value = autorun_
+    label,op = c.new
+    if op is None: return
+    wautorun.value = autorun[0]
     try:
       with wmsg:
         clear_output()
-        print('Operation:','clear'+x,f'(dryrun: {ivname} unchanged)' if wdryrun.value else '')
-        r = autorun[x]()
+        print('Operation:','clear'+label,f'(dryrun: {ivname} unchanged)' if wdryrun.value else '')
+        r = op()
         print('Result:',r)
     except: return
     if not wdryrun.value and r:
       with wout: clear_output(); display(db)
-  autorun = dict(
-    Error = (lambda: [x for x in ((c.block,c.clear_error(dry_run=wdryrun.value)) for c in list(db.values())) if x[1]]),
-    Obsolete = (lambda: db.clear_obsolete(False,dry_run=wdryrun.value)),
-    ObsoleteStrict = (lambda: db.clear_obsolete(True,dry_run=wdryrun.value)),
+  autorun = (
+    ('clear...',None),
+    ('Error',(lambda: [x for x in ((c.block,c.clear_error(dry_run=wdryrun.value)) for c in list(db.values())) if x[1]])),
+    ('Obsolete',(lambda: db.clear_obsolete(False,dry_run=wdryrun.value))),
+    ('ObsoleteStrict',(lambda: db.clear_obsolete(True,dry_run=wdryrun.value))),
   )
+  db:CacheDB|None = None
   interpreter = get_ipython()
-  autorun_ = 'clear...'
-  db = ()
   interpreter.push({ivname:db})
   wdb = ipywidgets.Dropdown(description=ivname,options=OrderedDict(chain((('...',()),),((p,CacheDB(p)) for p in paths))),style={'description_width':'initial'})
   wshow = ipywidgets.Button(tooltip='show db',icon='fa-refresh',layout=dict(width='.4cm',padding='0cm'))
-  wautorun = ipywidgets.Dropdown(options=(autorun_,'Error','Obsolete','ObsoleteStrict'),layout=dict(width='3cm'))
+  wautorun = ipywidgets.Dropdown(options=[(x[0],x) for x in autorun],layout=dict(width='3cm'))
   wdryrun = ipywidgets.Checkbox(description='dry-run',value=True,style={'description_width':'initial'})
   wout = ipywidgets.Output()
   wmsg = ipywidgets.Output(layout=dict(border='thin solid black'))

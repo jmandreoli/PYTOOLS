@@ -70,6 +70,9 @@ In both cases, the same key-value pairs are returned. There is an important diff
 * In the first solution, *E* is recursively incarnated by its conversion to a dict, so the cached value contains all the key-value pairs already typically assigned by the previous tasks, to which the new key-value pairs from *D* are appended. The advantage of that solution is that a single cache lookup gives access to the computed results of all the tasks up to the current one. On the other hand, the drawback is that this cached value is mostly redundant with the cached values of the previous tasks, and these may be very large.
 * In the second solution, the cached value essentially holds the new key-value pairs of *D* together with the configuration of *E*, not its recursive incarnation, and the former is usually much smaller than the latter. The price to pay is that access to the results of previous tasks now requires re-incarnating *E* hence re-accessing the cache, but that overhead is often small and worth the economy in overall cache redundancy.
 
+Available types and functions
+-----------------------------
+
 .. automodule:: PYTOOLS.cache
    :members:
    :member-order: bysource

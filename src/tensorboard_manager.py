@@ -4,11 +4,8 @@
 # Language:             python
 # Purpose:              A server of tensorboard servers
 #
-r"""
-Available types and functions
------------------------------
-"""
 
+from __future__ import annotations
 import falcon,time,psutil,sys,shutil,json
 from pathlib import Path
 from collections import namedtuple

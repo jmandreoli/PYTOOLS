@@ -23,6 +23,9 @@ This module implements a wsgi application which launches, then manages interacti
   See function :func:`main` for the supported APP-ARGS.
   Refer to the documentation of other wsgi servers for a similar command.
 
+Available types and functions
+-----------------------------
+
 .. automodule:: PYTOOLS.tensorboard_manager
    :members:
    :member-order: bysource

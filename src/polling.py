@@ -4,13 +4,9 @@
 # Language:             python
 # Purpose:              a thread which polls code at regular intervals
 #
-r"""
-Available types and functions
------------------------------
-"""
 
 from __future__ import annotations
-from typing import Any, Union, Callable, Iterable, Mapping, Tuple, Optional
+from typing import Any, Callable, Iterable, Mapping, Tuple, Optional
 import logging; logger = logging.getLogger(__name__)
 
 import os,socket,sqlite3,time,threading,traceback
@@ -29,7 +25,7 @@ Objects of this class are python contexts which can be used to encapsulate any p
 
 Each field descriptor is a pair of an sql column specification and a function with no input which returns a value compatible with the column type. An optional third component can specify an other function to be used in case of error.
   """
-  def __init__(self,path:Union[str,Path],*fields,interval:float=1.,maxerror:int=3,**staticfields):
+  def __init__(self,path:str|Path,*fields,interval:float=1.,maxerror:int=3,**staticfields):
     def open_():
       nonlocal conn
       if path.exists(): path.unlink()

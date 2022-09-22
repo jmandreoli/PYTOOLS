@@ -262,13 +262,22 @@ which displays roughly as:
 #toplevel > thead > tr > td, #toplevel > tbody > tr > td { border: thin solid; text-align:left; }
 #toplevel > thead > tr { border-bottom: thick solid; }
 #toplevel > thead > tr > td > div, #toplevel > tbody > tr > td > div { padding:0; max-height: 5cm; overflow-y: auto; }
-#toplevel span.pointer { padding: 0; color: blue; background-color: #e0e0e0; font-weight:bold; }
+#toplevel span.pointer { padding: 0; color: cyan; background-color: gray; font-weight:bold; }
 '''
   _html_limit = 50
+  class Pointer:
+    _slots__ = 'element', 'element_', 'html'
+    def __init__(self,tid,k):
+      from lxml.html.builder import E
+      name = f'_{k}'
+      tref = f'document.getElementById(\'{tid}\').rows[{k}]'
+      cls = {'class': 'pointer'}
+      cls_ = dict(cls,onmouseenter=f'{tref}.style.outline=\'thin solid red\'',onmouseleave=f'{tref}.style.outline=\'\'',onclick=f'{tref}.scrollIntoView()')
+      self.element = lambda: E.span(name, **cls)
+      self.element_ = lambda: E.span(name, **cls_)
   def _repr_html_(self):
     from lxml.html.builder import E
     from lxml.html import tostring
-    from collections import OrderedDict
     def hformat(p,*L,style=self._html_style):
       if L:
         table = E.table(E.thead(E.tr(E.td(p.html,colspan='2'))),E.tbody(*(E.tr(E.td(p.element()),E.td(p.html)) for p in L)),id=tid)
@@ -276,34 +285,17 @@ which displays roughly as:
       else: return p.html
     def _(v):
       try: p = ctx.get(v)
-      except: return E.span(repr(v)) # for unhashable objects
+      except TypeError: return E.span(repr(v)) # for unhashable objects
       if p is None:
         if isinstance(v,HtmlPlugin):
-          ctx[v] = p = HtmlPluginPointer(tid,len(ctx))
-          try: x = v.as_html(_)
-          except: x = E.span(repr(v)) # should not fail, but just in case
-          p.html = E.div(x)
+          ctx[v] = p = self.Pointer(tid,len(ctx))
+          p.html = E.div(v.as_html(_))
         else: return E.span(repr(v))
-      return p.element(asref=True)
+      return p.element_()
     tid = unid('htmlplugin')
-    ctx = OrderedDict()
+    ctx = dict()
     e = _(self)
     return tostring(hformat(*ctx.values()) if ctx else e,encoding=str)
-class HtmlPluginPointer:
-  __slots__ = 'name','attrs','html'
-  def __init__(self,tid,k):
-    self.name = '?'+str(k)
-    tref = f'document.getElementById(\'{tid}\').rows[{k}]'
-    self.attrs = dict(
-      onmouseenter=tref+'.style.outline=\'thin solid red\'',
-      onmouseleave=tref+'.style.outline=\'\'',
-      onclick=tref+'.scrollIntoView()',
-      )
-  def element(self,asref=False,**ka):
-    from lxml.html.builder import E
-    if asref: ka.update(self.attrs)
-    ka['class'] = 'pointer'
-    return E.span(self.name,**ka)
 
 #==================================================================================================
 class Expr (HtmlPlugin):

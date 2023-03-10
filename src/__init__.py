@@ -146,6 +146,31 @@ This object allows to name callable members of module/packages without loading t
 forward = forward()
 
 #==================================================================================================
+def namedtuple(*a,**ka):
+  r"""
+Returns a class of tuples with named fields. It is identical to :func:`collections.namedtuple`, with only two additions:
+
+* The returned class has an attribute :attr:`_field_index` which is an instance of that class where each field is set to its index in the field list. e.g.::
+
+   c = namedtuple('c','u v')
+   assert c._field_index.u == 0 and c._field_index.v == 1
+
+* Furthermore, if *f* and *x* are instances of the returned class *c*, then calling *f* with argument *x* returns a new instance of class *c* in which each field is set to the result of applying the corresponding field in *f* (which must be a callable) to the corresponding field in *x*. Additional keyword arguments can be passed to the calls. E.g.::
+
+   c = namedtuple('c','u v')
+   f = c(u=(lambda z,r=0.: 2.*z+r),v=(lambda z,r=0.: 3.*z+5.*r))
+   x = c(u=3,v=5)
+   k = dict(r=42)
+   assert f(x,**k) == c(u=f.u(x.u,**k),v=f.v(x.v,**k))
+  """
+#==================================================================================================
+  from collections import namedtuple
+  cls = namedtuple(*a,**ka)
+  cls.__call__ = lambda self,X,**k: cls(*(f(x,**k) for f,x in zip(self,X)))
+  cls._field_index = cls(*range(len(cls._fields)))
+  return cls
+
+#==================================================================================================
 def config_xdg(rsc:str,dflt:Any=None):
   r"""
 :param rsc: the name of an XDG resource

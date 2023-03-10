@@ -14,7 +14,7 @@ import sqlalchemy.engine
 from functools import wraps
 from pathlib import Path
 import traitlets
-from ipywidgets import Widget, Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, VBox, HBox, Box, Layout, Valid, Play, jslink
+from ipywidgets import Widget, Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, Password, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, VBox, HBox, Box, Layout, Valid, Play, jslink
 
 __all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'animator', 'SelectMultipleOrdered', 'SimpleButton', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
 
@@ -34,37 +34,33 @@ An instance of this class is an app based on module :mod:`ipywidgets`, consistin
   r"""The main widget"""
   toolbar: HBox
   r"""The toolbar widget (first child of :attr:`main`)"""
+  console: Output
+  r"""A console terminal (just below :attr:`toolbar`)"""
 
   def __init__(self,children:Sequence[Widget]=(),toolbar:Sequence[Widget]=()):
-    self.console = None
     w_closeb = SimpleButton(icon='close',tooltip='Close app')
     self.console = console = Output()
     w_clearb = SimpleButton(icon='trash',tooltip='Clear console')
     w_console = HBox([w_clearb,console],layout={'border': 'thin solid', 'display': 'none'})
+    self.toolbar = HBox([w_closeb,*toolbar])
+    self.main = main = VBox([self.toolbar,w_console,*children])
     def _console_clear(b):
       from IPython.display import clear_output
       with console: clear_output()
     w_clearb.on_click(_console_clear)
     def _console_display(c): w_console.layout.display = '' if c.new else 'none'
     console.observe(_console_display,'outputs')
-    self.toolbar = HBox([w_closeb,*toolbar])
-    self.close_callbacks = close_callbacks = [(lambda: main.close()),console.close]
-    def _closeall(b):
-      for f in close_callbacks: f()
-    w_closeb.on_click(_closeall)
-    self.main = main = VBox([self.toolbar,w_console,*children])
+    _close_callbacks = [main.close,console.close]
+    self.on_close = _close_callbacks.append
+    def _closeall():
+      for f in _close_callbacks: f()
+    self._closeall = _closeall
+    w_closeb.on_click(lambda b: _closeall())
     self._repr_mimebundle_ = main._repr_mimebundle_
+  def __del__(self): self._closeall()
 
   def __enter__(self): return self.console.__enter__()
   def __exit__(self,*a): self.console.__exit__(*a)
-
-  def on_close(self,f:Callable[[],None]):
-    r"""
-Registers a callback for app termination.
-
-:param f: the callback function
-    """
-    self.close_callbacks.append(f)
 
   def mpl_figure(self,*a,**ka):
     r"""
@@ -77,12 +73,12 @@ Adds a :mod:`matplotlib` figure to this app.
     return fig
 
   def protect(self,f):
-    r"""A decorator to dispatch exceptions in the console."""
+    r"""A decorator to redirect output and errors to the console."""
     @wraps(f)
     def F(*a,**ka):
-      try: f(*a,**ka)
-      except:
-        with self: traceback.print_exc(); raise
+      with self:
+        try: f(*a,**ka)
+        except: traceback.print_exc(); raise
     return F
 
 #==================================================================================================
@@ -550,6 +546,30 @@ A number of other widgets are accessible in addition to :attr:`main`: :attr:`too
     # by construction, the intervals (tmin,tmax) and (w.min,w.max) are either disjoint or identical
     if w.max > tmax: w.min = tmin; w.value = n; w.max = tmax
     else: w.max = tmax; w.value = n; w.min = tmin
+
+#==================================================================================================
+class Login (HBox):
+  r"""
+A widget holding a server,username,password. The passwords are protected and cached in memory.
+  """
+#==================================================================================================
+  _cache:dict[Tuple[str,str],str] = {}
+  def __init__(self,name,host='',user=''):
+    self._host = Text(description=name,value=host,style={'description_width':'auto'},layout={'width':'8cm'})
+    self._user = Text(description='user',value=user,style={'description_width':'auto'},layout={'width':'3cm'})
+    self._password = Password(description='password',value='',style={'description_width':'auto'},layout={'width':'5cm'})
+    super().__init__(children=(self._host,self._user,self._password))
+  @property
+  def host(self): return self._host.value
+  @property
+  def user(self): return self._user.value
+  @property
+  def password(self):
+    host_user = self.host,self.user
+    v = self._password.value
+    if v: self._cache[host_user] = v
+    else: v = self._password.value = self._cache.get(host_user,'')
+    return v
 
 #==================================================================================================
 class SelectMultipleOrdered (VBox):

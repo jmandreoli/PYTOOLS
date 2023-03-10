@@ -254,7 +254,7 @@ Instances of this class are runs in which the role of data and parameters are in
       *feats,labels = protos
       self.params = torch.nn.ParameterList(torch.nn.Parameter(x) for x in feats)
       self.labels = labels
-      super(torch.nn.Module,self).__setattr__('net',net) # so the net is not added as a submodule of the inv net
+      super().__setattr__('net',net) # so the net is not added as a submodule of the inv net
     def forward(self):
       r"""Simply invokes *net* with the appropriate arguments."""
       return self.net(*self.params,self.labels)

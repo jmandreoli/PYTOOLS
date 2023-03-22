@@ -6,7 +6,7 @@
 #
 
 from __future__ import annotations
-from typing import Sequence, Any, Callable, Iterable, Mapping, Tuple, Optional, MutableSequence, TypeVar, Generic
+from typing import Sequence, Any, Callable, Iterable, Mapping, Tuple, Optional, MutableSequence, IO, TypeVar, Generic
 import logging; logger = logging.getLogger(__name__)
 
 from collections import namedtuple
@@ -15,6 +15,7 @@ from functools import partial
 from itertools import count, zip_longest
 from copy import deepcopy
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from time import time, ctime
 from pydispatch import Dispatcher
 import torch
@@ -40,51 +41,51 @@ Instances of this class are callables, taking a :class:`Run` instance as argumen
 #--------------------------------------------------------------------------------------------------
   path: Optional[Path]
   r"""Checkpoint path"""
+  temporary: Optional[Callable[[],IO]] = None
+  r"""Opens a temporary file"""
   interval: float
-  r"""Time interval (in sec) between checkpoints (increased geometrically at each failure, reset at each success)"""
+  r"""Minimum time interval (in sec) between a successful checkpoint and a candidate checkpoint"""
+  penalty: float
+  r"""Multiplicative coefficient applied to the last interval when the last checkpoint failed"""
   progress: Callable[[Run],float]
   r"""Progress indicator (return value must be between 0. and 1.)"""
 
-  def __init__(self,path:Optional[str|Path]=None,interval:float=float('inf'),progress:Callable[[Run],float]=(lambda run: 0.)):
-    self.path = None if path is None else Path(path)
-    self.interval = interval
-    self.progress = progress
+  def __init__(self,path:Optional[str|Path]=None,interval:float=float('inf'),penalty:float=1.5,progress:Callable[[Run],float]=(lambda run: 0.)):
+    if path is not None:
+      path = Path(path)
+      self.temporary = tmp = partial(NamedTemporaryFile,dir=path.parent,prefix=path.stem+'-',suffix=path.suffix)
+      with tmp(): pass # just to check access rights
+    self.path,self.interval,self.penalty,self.progress = path,interval,penalty,progress
 
-  def __call__(self,run:Run):
+  def checkpoint(self,run:Run):
     from dill import dump
-    from tempfile import NamedTemporaryFile
-    run.progress = p = self.progress(run)
     if (path:=self.path) is not None:
       t = run.walltime(); l = len(run.checkpoint)
-      if p>=1. or (t if l==0 else t-run.checkpoint[-1][0]) >= (self.interval if l<=1 else 1.5**l*self.interval):
-        try:
-          with NamedTemporaryFile(dir=path.parent) as v:
-            dump((t,run.state_dict()),v)
-            v.flush()
-            try: path.unlink()
-            except: pass
-            path.hardlink_to(v.name)
+      if run.progress>=run.threshold or (t if l==0 else t-run.checkpoint[-1][0]) >= (self.interval if l<=1 else self.penalty**l*self.interval):
+        try: # checkpointing attempt
+          with self.temporary(delete=False) as v: dump((t,run.state_dict()),v)
+          # if a hard crash occurs in the next 2 lines, a manual recovery is still possible
+          path.unlink(missing_ok=True)
+          Path(v.name).rename(path)
         except Exception as exc: run.checkpoint.append((t,exc))
         else: run.checkpoint[:] = (t,None),
         run.emit('checkpoint',run)
 
   def initial(self,run:Run):
-    r"""Initialises *run* either from a checkpoint or from scratch."""
+    r"""Initialises *run* either from scratch or from a checkpoint."""
     from socket import getfqdn
     from os import getpid
     from datetime import datetime
     from dill import load
-    path = self.path
-    if path is None or not path.exists(): # from scratch
-      run.step = run.epoch = 0; t = 0.; run.checkpoint = []
-      init = None
-    else: # from checkpoint
+    if (path:=self.path) is not None and path.exists(): # from checkpoint
       with path.open('rb') as u: t,D = load(u)
       run.load_state_dict(D); run.checkpoint = [(t,None)]
       init = path,path.stat().st_mtime,t
-    run.walltime = lambda start=time(),offset=t: time()-start+offset
-    run.progress = self.progress(run)
+    else: # from scratch
+      run.step = run.epoch = 0; t = 0.; run.checkpoint = []
+      init = None
     run.process_info = ProcessInfo(init=init,host=getfqdn(),pid=getpid(),started=datetime.now())
+    run.walltime = lambda start=time()-t: time()-start
 
   def checkpoint_status(self,run:Run): return {'err':run.checkpoint[-1][1],'nerr':sum([1 for c in run.checkpoint if c[1] is not None]) or None}
 
@@ -135,6 +136,8 @@ Attributes (\*) must be explicitly instantiated at creation time.
   r"""Wall time elapsed (in sec) since real start of run, set by monitor"""
   progress: float = 0.
   r"""Progress as a number between 0. and 1., set by monitor"""
+  threshold: float = 1.-1.e-9
+  r"""Threshold on progress to stop the run"""
   checkpoint: MutableSequence[Tuple[float,Optional[Exception]]]
   r"""Checkpoint history, set by monitor"""
   r_step: int = 0
@@ -166,11 +169,12 @@ Executes the run. Must be defined in subclasses. This implementation raises an e
     self.eval_valid,self.eval_test = map(self.eval_cache,(self.valid_split,self.test_split))
     net.to(self.device)
     self.monitor.initial(self)
+    self.progress = self.monitor.progress(self)
     with training(net,True):
       try:
         self.r_loss = 0.; self.r_step = 0
         self.emit('open',self)
-        while self.progress<.9999999999: # iteration = epoch
+        while self.progress<self.threshold: # iteration = epoch
           self.emit('start_epoch',self)
           for inputs in self.train_split: # iteration = batch
             self.emit('start_batch',self)
@@ -183,9 +187,11 @@ Executes the run. Must be defined in subclasses. This implementation raises an e
             self.loss = loss.item()
             self.step += 1; self.r_step += 1
             self.r_loss += (self.loss-self.r_loss)/self.r_step
+            self.progress = self.monitor.progress(self)
             self.emit('end_batch',self)
           self.epoch += 1; self.r_loss = 0.; self.r_step = 0
-          self.monitor(self)
+          self.progress = self.monitor.progress(self)
+          self.monitor.checkpoint(self)
           self.emit('end_epoch',self)
       finally: self.emit('close',self)
 
@@ -301,6 +307,9 @@ Prints out the list of configuration attributes (with their values) as well as t
       print(tab,f'listeners.{k}:',sep='',file=file)
       x.config.describe(tab=tab+'  ',file=file,**ka)
 
+  @property
+  def time(self): return self.walltime()
+
   def __call__(self):
     with self.activate_listeners(): self.main()
   def __repr__(self):
@@ -378,10 +387,12 @@ class RunListener:
 Instances of this class are listener objects, which can be bound to a :class:`Run` instance. All parameters are processed by method :meth:`setup`.
   """
 
+  cond: Mapping[str,Callable[[Run],bool]]
+  r"""Filtering condition per stage"""
   schedule: Mapping[str,Schedule]
-  r"""Action schedule per stage (typically: train,valid)"""
+  r"""Schedule per stage"""
   info: Mapping[str,Callable[[Run],Any]]
-  r"""Run information generator per stage, available to the event listeners"""
+  r"""Run information generator per stage"""
   active: bool
   r"""Whether this instance is actively listening to events"""
 
@@ -397,6 +408,7 @@ Instances of this class are listener objects, which can be bound to a :class:`Ru
       ivalid:Callable[[Run],dict[str,Any]]=(lambda run: run.eval_valid()),
       itest:Callable[[Run],dict[str,Any]]=(lambda run: run.eval_test()),
       icheckpoint:Callable[[Run],dict[str,Any]]=(lambda run: run.monitor.checkpoint_status(run)),
+      cond:Mapping[str,Tuple[float|Iterable[float]|int|Iterable[int],Callable[[Run],float|int]]|str]={},
       active:bool=True,
   ):
     r"""
@@ -406,14 +418,23 @@ Processes the constructor parameters.
 :param ivalid: extracts valid information about a run
 :param itest: extracts test information about a run
 :param icheckpoint: extracts checkpoint information about a run
+:param cond: assignment of a schedule and a target to each stage
+:param active:
     """
 #==================================================================================================
     self.info = udict(train=itrain,valid=ivalid,test=itest,checkpoint=icheckpoint)
     self.active = active
-    self.schedule = udict()
+    self.schedule = {}
+    self.cond = udict()
+    for a,x in cond.items():
+      if isinstance(x,str): p_,t_ = x.split(' ',1); p,t = (float if '.' in p_ or 'e' in p_ else int)(p_),(lambda run,q=t_:getattr(run,q))
+      else: p,t = x
+      self.schedule[a] = s = Schedule(p)
+      self.cond[a] = lambda run,s=s,t=t: s(t(run))
   def describe(self,**ka): self.config.describe(**ka)
-  def state_dict(self): return {}
-  def load_state_dict(self,D): self.__dict__.update(D)
+  def state_dict(self): return {'schedule':{a:s.goal for a,s in self.schedule.items()}}
+  def load_state_dict(self,D):
+    for a,g in D['schedule'].items(): self.schedule[a].goal = g
 
 #==================================================================================================
 @Run.listener_factory('Base')
@@ -428,26 +449,21 @@ A :class:`RunListener` subclass with three types of actions: monitoring; logging
   def setup(
       self,
       logger:Optional[logging.Logger]=logger,
-      path:Optional[str|Path]=None,
-      train_schedule:float|Iterable[float]=float('inf'),
-      valid_schedule:int|Iterable[int]=1<<32,
       status: Tuple[Tuple[str,...],Callable[[Run],Tuple]] = (
           ('TIME','COMP','STEP','EPO','BAT'),
           (lambda run: (run.walltime(),100*(run.progress),run.step,run.epoch,run.r_step)),
       ),
       status_fmt: Tuple[str,str]=('%6s %5s%% %6s %4s/%5s','%6.1f %5.1f%% %6d %4d/%5d'),
-      fmt: Optional[Mapping[str,Callable[[Any],str]]]=None,
+      fmt: Optional[Mapping[str,str]]=None,
       **ka
   ):
     r"""
 :param logger: logger to use to report information
-:param max_epoch: stop after this number of epochs
-:param max_time: stop after this elapsed time (in seconds)
-:param train_schedule: time schedule for logging train information
-:param valid_schedule: epoch schedule for logging validation information
+:param status: a pair of a sequence of field names and a matching sequence of field retrievers
+:param status_fmt: a pair of format strings (% convention) for the sequence of field name and the sequences of retrieved field values
+:param fmt: a dictionary assigning a format to each free field name (default is .3f)
     """
     super().setup(**ka)
-    self.schedule.update(train=Schedule(train_schedule),valid=Schedule(valid_schedule))
     fmt_ = lambda x,fmt={'size':'d','err':'s','nerr':'d'}|(fmt or {}),default='.3f': ' '.join(f'{k}={v.__format__(fmt.get(k,default))}' for k,v in x.items() if v is not None)
     self.action = udict({
       k:(lambda run,a=a,fmt=f'{status_fmt[1]} {k.upper()}: %s',s=status[1]: logger.info(fmt,*s(run),fmt_(a(run))))
@@ -459,10 +475,10 @@ A :class:`RunListener` subclass with three types of actions: monitoring; logging
   def on_open(self,run): self.action.header(run); self.action.valid(run)
   def on_close(self,run): self.action.test(run)
   def on_end_epoch(self,run):
-    if self.schedule.valid(run.epoch): self.action.valid(run)
+    if self.cond.valid(run): self.action.valid(run)
   def on_end_batch(self,run):
-    if self.schedule.train(run.walltime()): self.action.train(run)
-  def on_checkpoint(self,run): self.action.checkpoint(run); self.action.valid(run)
+    if self.cond.train(run): self.action.train(run)
+  def on_checkpoint(self,run): self.action.checkpoint(run)
 
 #==================================================================================================
 @Run.listener_factory('Mlflow')
@@ -474,14 +490,7 @@ Instances of this class provide mlflow logging.
   tools = 'load_model',
   run_id = None
 #--------------------------------------------------------------------------------------------------
-  def setup(
-      self,
-      uri:str=None,
-      exp:str=None,
-      train_schedule:int|Iterable[int]=1<<32,
-      valid_schedule:int|Iterable[int]=1<<32,
-      **ka
-  ):
+  def setup(self,uri:str=None,exp:str=None,**ka):
     r"""
 :param uri: mlflow tracking uri
 :param exp: experiment name
@@ -493,7 +502,6 @@ Instances of this class provide mlflow logging.
     super().setup(**ka)
     mlflow.set_tracking_uri(uri)
     mlflow.set_experiment(exp)
-    self.schedule.update(train=Schedule(train_schedule),valid=Schedule(valid_schedule))
 
   def on_open(self,run):
     import mlflow
@@ -506,17 +514,18 @@ Instances of this class provide mlflow logging.
 
   def on_close(self,run):
     import mlflow
-    try: mlflow.pytorch.log_model(run.net,'model'); mlflow.set_tags(self.info.test(run))
+    try: mlflow.pytorch.log_model(run.net,'model'); mlflow.set_tags(self.info.test(run)); mlflow.set_tag('progress',run.progress)
     finally: mlflow.end_run()
 
   def on_end_batch(self,run):
     import mlflow
-    if self.schedule.train(run.step): mlflow.log_metrics(self.info.train(run),run.step)
+    if self.cond.train(run): mlflow.log_metrics(self.info.train(run),run.step); mlflow.set_tag('progress',run.progress)
   def on_end_epoch(self,run):
     import mlflow
-    if self.schedule.valid(run.epoch): mlflow.log_metrics(self.info.valid(run),run.step); mlflow.set_tag('progress',run.progress)
+    if self.cond.valid(run): mlflow.log_metrics(self.info.valid(run),run.step); mlflow.set_tag('progress',run.progress)
 
   def state_dict(self): return {'run_id':self.run_id,**super().state_dict()}
+  def load_state_dict(self,D): self.run_id = D['run_id']; super().load_state_dict(D)
 
 #--------------------------------------------------------------------------------------------------
   @classmethod

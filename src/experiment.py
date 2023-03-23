@@ -58,6 +58,7 @@ Instances of this class are callables, taking a :class:`Run` instance as argumen
     self.path,self.interval,self.penalty,self.progress = path,interval,penalty,progress
 
   def checkpoint(self,run:Run):
+    r"""Attempts to checkpoint *run* at regular interval."""
     from dill import dump
     if (path:=self.path) is not None:
       t = run.walltime(); l = len(run.checkpoint)
@@ -102,7 +103,7 @@ Attributes (\*) must be explicitly instantiated at creation time.
   """
 #==================================================================================================
 
-  _events_ = 'open','close','start_batch','end_batch','start_epoch','end_epoch','checkpoint'
+  _events_ = 'open','close','start_step','end_step','start_epoch','end_epoch','checkpoint'
 
   ## set at instantiation
   device: Optional[torch.device|str] = None
@@ -149,7 +150,7 @@ Attributes (\*) must be explicitly instantiated at creation time.
   eval_test: Callable[[],dict[str,float]]
   r"""Function returning the test performance at the end of the last completed step (cached)"""
 
-#--------------------------------------------------------------------------------------------------
+  #--------------------------------------------------------------------------------------------------
   def __init__(self,**ka):
 #--------------------------------------------------------------------------------------------------
     self.config = fmtwrap({})
@@ -176,9 +177,9 @@ Executes the run. Must be defined in subclasses. This implementation raises an e
         self.emit('open',self)
         while self.progress<self.threshold: # iteration = epoch
           self.emit('start_epoch',self)
-          for inputs in self.train_split: # iteration = batch
-            self.emit('start_batch',self)
-            inputs = to(inputs,self.device)
+          for inputs in self.train_split: # iteration = step
+            self.emit('start_step',self)
+            inputs = to(inputs,self.device) # one batch
             optimiser.zero_grad()
             loss = net(*inputs)
             loss.backward()
@@ -188,7 +189,7 @@ Executes the run. Must be defined in subclasses. This implementation raises an e
             self.step += 1; self.r_step += 1
             self.r_loss += (self.loss-self.r_loss)/self.r_step
             self.progress = self.monitor.progress(self)
-            self.emit('end_batch',self)
+            self.emit('end_step',self)
           self.epoch += 1; self.r_loss = 0.; self.r_step = 0
           self.progress = self.monitor.progress(self)
           self.monitor.checkpoint(self)
@@ -307,7 +308,7 @@ Prints out the list of configuration attributes (with their values) as well as t
       print(tab,f'listeners.{k}:',sep='',file=file)
       x.config.describe(tab=tab+'  ',file=file,**ka)
 
-  @property
+  @property # shorthand for walltime()
   def time(self): return self.walltime()
 
   def __call__(self):
@@ -387,12 +388,14 @@ class RunListener:
 Instances of this class are listener objects, which can be bound to a :class:`Run` instance. All parameters are processed by method :meth:`setup`.
   """
 
-  cond: Mapping[str,Callable[[Run],bool]]
-  r"""Filtering condition per stage"""
   schedule: Mapping[str,Schedule]
-  r"""Schedule per stage"""
+  r"""Schedule to control the action of the listener per (relevant) event"""
+  cond: Mapping[str,Callable[[Run],bool]]
+  r"""Filtering condition to control the action of the listener per (relevant) event, based on :attr:`schedule`"""
+  alias: Mapping[str,str] = {'step':'end_step','epoch':'end_epoch'}
+  r"""Alias for (relevant) events"""
   info: Mapping[str,Callable[[Run],Any]]
-  r"""Run information generator per stage"""
+  r"""Run information generator per info-type"""
   active: bool
   r"""Whether this instance is actively listening to events"""
 
@@ -418,23 +421,26 @@ Processes the constructor parameters.
 :param ivalid: extracts valid information about a run
 :param itest: extracts test information about a run
 :param icheckpoint: extracts checkpoint information about a run
-:param cond: assignment of a schedule and a target to each stage
-:param active:
+:param cond: assignment of a target and a schedule to control the actions of the listener
+:param active: whether to bind the listener on execution
     """
 #==================================================================================================
+    def parse(x):
+      if isinstance(x,str):
+        p,t = x.strip().split(' ',1); return (float if '.' in p or 'e' in p else int)(p),(lambda run,a=t.strip():getattr(run,a))
+      else: return x
     self.info = udict(train=itrain,valid=ivalid,test=itest,checkpoint=icheckpoint)
     self.active = active
     self.schedule = {}
     self.cond = udict()
-    for a,x in cond.items():
-      if isinstance(x,str): p_,t_ = x.split(' ',1); p,t = (float if '.' in p_ or 'e' in p_ else int)(p_),(lambda run,q=t_:getattr(run,q))
-      else: p,t = x
-      self.schedule[a] = s = Schedule(p)
-      self.cond[a] = lambda run,s=s,t=t: s(t(run))
+    for ev,x in cond.items(): self.register(self.alias.get(ev,ev),*parse(x))
+  def register(self,ev,p,t):
+    self.schedule[ev] = s = Schedule(p)
+    self.cond[ev] = lambda run,s=s,t=t: s(t(run))
   def describe(self,**ka): self.config.describe(**ka)
-  def state_dict(self): return {'schedule':{a:s.goal for a,s in self.schedule.items()}}
+  def state_dict(self): return {'schedule':{ev:s.goal for ev,s in self.schedule.items()}}
   def load_state_dict(self,D):
-    for a,g in D['schedule'].items(): self.schedule[a].goal = g
+    for ev,g in D['schedule'].items(): self.schedule[ev].goal = g
 
 #==================================================================================================
 @Run.listener_factory('Base')
@@ -474,10 +480,10 @@ A :class:`RunListener` subclass with three types of actions: monitoring; logging
 
   def on_open(self,run): self.action.header(run); self.action.valid(run)
   def on_close(self,run): self.action.test(run)
+  def on_end_step(self,run):
+    if self.cond.end_step(run): self.action.train(run)
   def on_end_epoch(self,run):
-    if self.cond.valid(run): self.action.valid(run)
-  def on_end_batch(self,run):
-    if self.cond.train(run): self.action.train(run)
+    if self.cond.end_epoch(run): self.action.valid(run)
   def on_checkpoint(self,run): self.action.checkpoint(run)
 
 #==================================================================================================
@@ -517,12 +523,12 @@ Instances of this class provide mlflow logging.
     try: mlflow.pytorch.log_model(run.net,'model'); mlflow.set_tags(self.info.test(run)); mlflow.set_tag('progress',run.progress)
     finally: mlflow.end_run()
 
-  def on_end_batch(self,run):
+  def on_end_step(self,run):
     import mlflow
-    if self.cond.train(run): mlflow.log_metrics(self.info.train(run),run.step); mlflow.set_tag('progress',run.progress)
+    if self.cond.end_step(run): mlflow.log_metrics(self.info.train(run),run.step); mlflow.set_tag('progress',run.progress)
   def on_end_epoch(self,run):
     import mlflow
-    if self.cond.valid(run): mlflow.log_metrics(self.info.valid(run),run.step); mlflow.set_tag('progress',run.progress)
+    if self.cond.end_epoch(run): mlflow.log_metrics(self.info.valid(run),run.step); mlflow.set_tag('progress',run.progress)
 
   def state_dict(self): return {'run_id':self.run_id,**super().state_dict()}
   def load_state_dict(self,D): self.run_id = D['run_id']; super().load_state_dict(D)

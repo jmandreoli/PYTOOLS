@@ -88,7 +88,7 @@ Note that the *interval* is bounded below by the real time needed to construct a
         self.setrunning(False); yield self.frame
         while self.setval() is None: yield self.frame
     self.track = track_function(track,float)
-    self.anim = anim = FuncAnimation(self.board,(lambda n: display(n/frame_per_stu)),frames,init_func=(lambda:None),repeat=False,**ka)
+    self.anim = anim = FuncAnimation(self.board,(lambda n: display(n/frame_per_stu)),frames,init_func=(lambda:None),repeat=False,cache_frame_data=False,**ka)
     if frame_per_stu is None: frame_per_stu = 1000./anim._interval
     else: frame_per_stu = float(frame_per_stu); assert frame_per_stu > 0
     self.frame_per_stu = frame_per_stu

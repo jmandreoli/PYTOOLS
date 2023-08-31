@@ -4,4 +4,7 @@ TARGET := cache.out polling.out
 all: ${TARGET}
 
 %.out: %.py
-	@export PYTHONPATH=../.. ; ${PYTHON} make.py $(patsubst %.py,%,$<) 2
+	@export PYTHONPATH=../.pythonpath ; ${PYTHON} make.py $(patsubst %.py,%,$<) 2
+
+clean:
+  @rm -f TARGET

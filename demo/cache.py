@@ -7,8 +7,8 @@ from make import RUN; RUN(__name__,__file__,2)
 
 import os,time,functools
 from collections import ChainMap
-from .. import MapExpr, versioned
-from ..cache import persistent_cache
+from PYTOOLS import MapExpr, versioned
+from PYTOOLS.cache import persistent_cache
 persistent_cache = functools.partial(persistent_cache,db=RUN.dir/'cache.dir')
 
 @persistent_cache
@@ -54,9 +54,10 @@ def demo(ind=None,ref=None):
     # we are in the master process: for each entry in DEMOS, launch 2 slave processes at 2 sec interval and wait for them
     import subprocess,os,time,sys
     for f in simplefunc,longfunc,vfunc,stepI,stepK: f.cache.clear()
+    cmd = [sys.executable,__file__,None,None]
     for ind in range(len(DEMOS)):
       print(80*'-')
-      cmd = [sys.executable,__file__,str(ind),None]
+      cmd[-2] = str(ind)
       cmd[-1] = 'A'; w1 = subprocess.Popen(cmd); time.sleep(2); cmd[-1] = 'B'; w2 = subprocess.Popen(cmd)
       w1.wait(); w2.wait()
       RUN.pause()

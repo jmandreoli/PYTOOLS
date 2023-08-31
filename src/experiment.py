@@ -6,55 +6,76 @@
 #
 
 from __future__ import annotations
-from typing import Sequence, Any, Callable, Iterable, Mapping, Tuple, Optional, MutableSequence, IO, TypeVar, Generic
+from typing import Sequence, Any, Callable, Iterable, Mapping, Tuple, Optional, MutableSequence, IO, NamedTuple, TypeVar, Generic
 import logging; logger = logging.getLogger(__name__)
 
-from collections import namedtuple
 from contextlib import contextmanager
-from functools import partial
+from functools import partial, cached_property
 from itertools import count, zip_longest
 from copy import deepcopy
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from time import time, ctime
+from datetime import datetime
 from pydispatch import Dispatcher
 import torch
 from . import fmtwrap, time_fmt
 
-#--------------------------------------------------------------------------------------------------
+#==================================================================================================
 class udict (dict): # a utility class reflecting a dictionary as an object (attributes=keys); must be at the top
-#--------------------------------------------------------------------------------------------------
+#==================================================================================================
   def __getattr__(self,a): return self[a]
   def __delattr__(self,a): del self[a]
   def __setattr__(self,a,v): self[a] = v
   def __getstate__(self): return dict(self)
   def __setstate__(self,d): self.update(d)
 
-ProcessInfo = namedtuple('ProcessInfo','init host pid started')
-DataInfo = namedtuple('DataInfo','source train valid test')
+#==================================================================================================
+class ProcessInfo (NamedTuple):
+#==================================================================================================
+  origin: OriginInfo
+  r"""Origin of a run"""
+  host: str
+  r"""Host from which the run is invoked"""
+  pid: int
+  r"""Process from which the run is invoked"""
+  started: datetime
+  r"""Date-time of a run invocation"""
+#==================================================================================================
+class OriginInfo (NamedTuple):
+#==================================================================================================
+  path: Path
+  r"""File path from which the run was initialised"""
+  mtime: int
+  r"""Last modified time of that file"""
+  walltime: int
+  r"""Walltime instant of the run when it was saved to that file"""
 
-#--------------------------------------------------------------------------------------------------
+#==================================================================================================
 class Monitor:
   r"""
-Instances of this class are callables, taking a :class:`Run` instance as argument and deciding whether to checkpoint and possibly stop it.
+An instance of this class controls a run. It can
+
+* initialise the run from scratch or from a previous checkpoint
+* attempt to save a checkpoint at regular time intervals
+* update the run's progress
   """
-#--------------------------------------------------------------------------------------------------
+#==================================================================================================
   path: Optional[Path]
   r"""Checkpoint path"""
-  temporary: Optional[Callable[[],IO]] = None
-  r"""Opens a temporary file"""
   interval: float
-  r"""Minimum time interval (in sec) between a successful checkpoint and a candidate checkpoint"""
+  r"""Minimum time interval (in sec) between a successful checkpoint and its next checkpoint attempt"""
   penalty: float
-  r"""Multiplicative coefficient applied to the last interval when the last checkpoint failed"""
+  r"""Multiplicative coefficient applied to the last interval when the last checkpoint attempt failed"""
   progress: Callable[[Run],float]
   r"""Progress indicator (return value must be between 0. and 1.)"""
+  temporary: Callable[[],IO] # helper function to open a temporary path to save checkpoints
 
   def __init__(self,path:Optional[str|Path]=None,interval:float=float('inf'),penalty:float=1.5,progress:Callable[[Run],float]=(lambda run: 0.)):
+    from tempfile import NamedTemporaryFile
     if path is not None:
       path = Path(path)
-      self.temporary = tmp = partial(NamedTemporaryFile,dir=path.parent,prefix=path.stem+'-',suffix=path.suffix)
-      with tmp(): pass # just to check access rights
+      self.temporary = f = partial(NamedTemporaryFile,dir=path.parent,prefix=path.stem+'-',suffix=path.suffix)
+      with f(): pass # checks access rights
     self.path,self.interval,self.penalty,self.progress = path,interval,penalty,progress
 
   def checkpoint(self,run:Run):
@@ -76,26 +97,23 @@ Instances of this class are callables, taking a :class:`Run` instance as argumen
     r"""Initialises *run* either from scratch or from a checkpoint."""
     from socket import getfqdn
     from os import getpid
-    from datetime import datetime
     from dill import load
     if (path:=self.path) is not None and path.exists(): # from checkpoint
       with path.open('rb') as u: t,D = load(u)
       run.load_state_dict(D); run.checkpoint = [(t,None)]
-      init = path,path.stat().st_mtime,t
+      origin = OriginInfo(path=path,mtime=path.stat().st_mtime,walltime=t)
     else: # from scratch
       run.step = run.epoch = 0; t = 0.; run.checkpoint = []
-      init = None
-    run.process_info = ProcessInfo(init=init,host=getfqdn(),pid=getpid(),started=datetime.now())
+      origin = None
+    run.process_info = ProcessInfo(origin=origin,host=getfqdn(),pid=getpid(),started=datetime.now())
     run.walltime = lambda start=time()-t: time()-start
-
-  def checkpoint_status(self,run:Run): return {'err':run.checkpoint[-1][1],'nerr':sum([1 for c in run.checkpoint if c[1] is not None]) or None}
 
 #==================================================================================================
 class Run (Dispatcher):
   r"""
-Instances of this class are callables, taking no argument and returning no value. The execution of a run only changes its attribute values. All the keyword arguments of the constructor are passed to method :meth:`set`.
+An instance of this class is a callable, taking no argument and returning no value. The execution of a run only changes its attribute values. All the keyword arguments of the constructor are passed to method :meth:`setup`.
 
-Runs may emit messages during their execution. Each message is passed a single argument, which is the run itself, so runs can be controlled by callbacks attached to messages. Listeners (instances of class :class:`RunListener`) are special cases of callbacks. A run can invoke a method :meth:`add<name>Listener` to attach a listener of type `<name>` to itself. Some such methods are defined in class :class:`Run` and its subclasses (see their documentation for details).
+Runs may emit messages during their execution. Callbacks attached to each message are passed a single argument, which is the run itself. Listeners (instances of class :class:`RunListener`) define sets of consistent callbacks. A run can invoke a method :meth:`add<name>Listener` to attach a listener of type `<name>` to itself. Some such methods are defined in class :class:`Run` and its subclasses (see their documentation for details).
 
 A typical event callback stores the result of a campaign of measures on the run. Measures (instances of class :class:`Measure`) are in charge of reporting individual measures. A run can invoke a method :meth:`add<name>Measure` to attach a measure of type `<name>` to itself. Some such methods are defined in class :class:`Run` and its subclasses (see their documentation for details). In particular, all the pytorch losses can be added in this way.
 
@@ -108,7 +126,7 @@ Attributes (\*) must be explicitly instantiated at creation time.
   ## set at instantiation
   device: Optional[torch.device|str] = None
   r"""(\*)The device on which to run the model"""
-  net: torch.nn.Module
+  net: Net
   r"""(\*)The model (initially on cpu, but loaded on :attr:`device` at the beginning of the run and restored to cpu at the end)"""
   train_split: Iterable[Tuple[torch.Tensor,torch.Tensor]]
   r"""(\*)Iterable of batches. Each batch is a tuple of input tensors (first dim = size of batch)"""
@@ -118,7 +136,7 @@ Attributes (\*) must be explicitly instantiated at creation time.
   r"""(\*)Same format as :attr:`train_data`"""
   optimiser_factory: Callable[[Sequence[torch.nn.Parameter]],torch.optim.Optimizer]
   r"""(\*)The optimiser factory"""
-  monitor: Monitor
+  monitor: Monitor = Monitor()
   r"""(\*)The monitor of the run, in charge of checkpoints and progress control"""
   listeners: Mapping[str,RunListener]
   r"""Named listener objects"""
@@ -149,8 +167,10 @@ Attributes (\*) must be explicitly instantiated at creation time.
   r"""Function returning the validation performance at the end of the last completed step (cached)"""
   eval_test: Callable[[],dict[str,float]]
   r"""Function returning the test performance at the end of the last completed step (cached)"""
+  process_info: ProcessInfo
+  r"""Information about the run"""
 
-  #--------------------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------------------
   def __init__(self,**ka):
 #--------------------------------------------------------------------------------------------------
     self.config = fmtwrap({})
@@ -162,7 +182,7 @@ Attributes (\*) must be explicitly instantiated at creation time.
 #--------------------------------------------------------------------------------------------------
   def main(self):
     r"""
-Executes the run. Must be defined in subclasses. This implementation raises an error.
+Executes the run.
     """
 #--------------------------------------------------------------------------------------------------
     net = self.net
@@ -196,7 +216,9 @@ Executes the run. Must be defined in subclasses. This implementation raises an e
           self.emit('end_epoch',self)
       finally: self.emit('close',self)
 
+#--------------------------------------------------------------------------------------------------
   def state_dict(self):
+#--------------------------------------------------------------------------------------------------
     return {
       'net': self.net.state_dict(),
       'optimiser': self.optimiser.state_dict(),
@@ -205,17 +227,25 @@ Executes the run. Must be defined in subclasses. This implementation raises an e
       'listeners': {k:v.state_dict() for k,v in self.listeners.items()},
     }
 
+#--------------------------------------------------------------------------------------------------
   def load_state_dict(self,D:dict[str,Any]):
+#--------------------------------------------------------------------------------------------------
     self.net.load_state_dict(D['net'])
     self.optimiser.load_state_dict(D['optimiser'])
     self.step = D['step']
     self.epoch = D['epoch']
     for k,v in D['listeners'].items(): self.listeners[k].load_state_dict(v)
 
-  #--------------------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------------------
+  def checkpoint_status(self):
+    r"""Returns information about the (error) status of checkpointing attempts."""
+#--------------------------------------------------------------------------------------------------
+    return {'err':self.checkpoint[-1][1],'nerr':sum([1 for c in self.checkpoint if c[1] is not None]) or None}
+
+#--------------------------------------------------------------------------------------------------
   def eval(self,data:Iterable[Tuple[float,Tuple[torch.Tensor,...],Tuple[torch.Tensor,...]]])->dict[str,float]:
     r"""
-Evaluates the embedding part of model :attr:`net` on *data* according to :attr:`measures`. The batches are not assumed constant sized.
+Evaluates the embedding part of model :attr:`net` on *data* according to :attr:`measures`. With measures aggregated by mean (default), the batches may not be constant-sized.
 
 :param data: a list of data entries
     """
@@ -232,9 +262,7 @@ Evaluates the embedding part of model :attr:`net` on *data* according to :attr:`
 
 #--------------------------------------------------------------------------------------------------
   def eval_cache(self,data):
-    r"""
-Returns a cached version of :meth:`eval` on *data*. The cache is cleared at each step.
-    """
+    r"""Returns a cached version of :meth:`eval` on *data*. The cache is cleared at each step."""
 #--------------------------------------------------------------------------------------------------
     current = None,-1
     def cache()->dict[str,float]:
@@ -283,8 +311,10 @@ Used as decorator to attach a listener factory (the decorated object, assumed ca
       return f
     return app
 
+#--------------------------------------------------------------------------------------------------
   @contextmanager
   def activate_listeners(self):
+#--------------------------------------------------------------------------------------------------
     callbacks = lambda x,evs=self._events_: ((ev,t) for ev in evs if (t:=getattr(x,'on_'+ev,None)) is not None)
     L = tuple(tuple(callbacks(x)) for x in self.listeners.values() if x.active)
     for c in L: self.bind(**dict(c))
@@ -313,41 +343,54 @@ Prints out the list of configuration attributes (with their values) as well as t
 
   def __call__(self):
     with self.activate_listeners(): self.main()
+
   def __repr__(self):
     info = self.process_info
-    init = '' if (i:=info.init) is None else f'{i[0]}[{ctime(i[1])}][{time_fmt(i[2],1)}]'
-    return f'{self.__class__.__name__}({info.host}:{info.pid}|{init}|{info.started.ctime()})'
+    origin = '' if (o:=info.origin) is None else f',origin[path={o.path},mtime={ctime(o.mtime)},walltime={time_fmt(o.walltime,1)}]'
+    return f'{self.__class__.__name__}[host={info.host},pid={info.pid},started={info.started.ctime()}{origin}]'
 
 #==================================================================================================
 class Net (torch.nn.Module):
   r"""
 Instances of this class are nets with an embedding phase immediately followed by a loss.
 
-:param loss: a loss function, or layer it is is parametrized
+:param loss: a loss function, or layer if it is parametrized
   """
 #==================================================================================================
-  loss: Callable
-  loss_factory: Callable[[Mapping[str,Any]],Callable]
+
+  loss: Callable[[torch.Tensor,...],torch.Tensor]
+  r"""Returns the loss (scalar tensor) for an input as a sequence of tensors"""
+  loss_factory: Callable[[Any,...],Callable[[torch.Tensor,...],torch.Tensor]]
+  r"""Factory for the :attr:`loss`"""
+
   def __init__(self,loss:Optional[Callable]=None):
     super().__init__()
-    self.loss = self.loss_factory(**(loss or {})) if loss is None or isinstance(loss,dict) else loss
+    self.loss = self.loss_factory(**(loss or {})) if isinstance(loss,(dict,type(None))) else loss
+
+#--------------------------------------------------------------------------------------------------
   def embedding(self,*inputs,**ka):
-    r"""Returns a (seq of) embedding representation for each (seq of) input feature in the batch"""
+    r"""Returns a (seq of) embedding representations for each (seq of) input feature in the batch. This implementation raises a :class:`NotImplementedError` exception."""
+#--------------------------------------------------------------------------------------------------
     raise NotImplementedError()
+
+#--------------------------------------------------------------------------------------------------
   def forward(self,*inputs):
     r"""Sequentially composes embedding and loss."""
+#--------------------------------------------------------------------------------------------------
     return self.loss(*self.embedding(*inputs))
 
 #==================================================================================================
 class SupervisedNet (Net):
   r"""
-Instances of this class are supervised task nets, where each component of a batch consists of one or more feature vector(s) and a label. The :meth:`embedding` method returns the result of applying a scoring net to the features and leaves the label unchanged.
+Instances of this class are supervised task models, where each component of a batch consists of one or more feature tensors(s) and a label tensor. All tensors have the batch size as first dimension. The :meth:`embedding` method returns the result of applying a scoring net to the features and leaves the label unchanged.
 
 :param net: The scoring net
   """
 #==================================================================================================
   loss_factory = torch.nn.CrossEntropyLoss
-  def __init__(self,net:torch.nn.Module=None,**ka):
+  score: torch.nn.Module
+  r"""The scoring net, acting only on the feature inputs"""
+  def __init__(self,net:torch.nn.Module=torch.nn.Module(),**ka):
     super().__init__(**ka)
     self.score = net
   def embedding(self,*inputs):
@@ -385,9 +428,9 @@ Instances of this class measure accuracy for classification runs.
 #==================================================================================================
 class RunListener:
   r"""
-Instances of this class are listener objects, which can be bound to a :class:`Run` instance. All parameters are processed by method :meth:`setup`.
+Instances of this class are listener objects, which can be bound to a :class:`Run` instance. All parameters of the constructor are processed by method :meth:`setup`.
   """
-
+#==================================================================================================
   schedule: Mapping[str,Schedule]
   r"""Schedule to control the action of the listener per (relevant) event"""
   cond: Mapping[str,Callable[[Run],bool]]
@@ -399,18 +442,17 @@ Instances of this class are listener objects, which can be bound to a :class:`Ru
   active: bool
   r"""Whether this instance is actively listening to events"""
 
-#==================================================================================================
   def __init__(self,**ka):
     self.config = fmtwrap({})
     self.config.update(**ka)
     self.setup(**self.config.ref)
-#==================================================================================================
+#--------------------------------------------------------------------------------------------------
   def setup(
       self,
       itrain:Callable[[Run],dict[str,Any]]=(lambda run: {'tloss':run.r_loss}),
       ivalid:Callable[[Run],dict[str,Any]]=(lambda run: run.eval_valid()),
       itest:Callable[[Run],dict[str,Any]]=(lambda run: run.eval_test()),
-      icheckpoint:Callable[[Run],dict[str,Any]]=(lambda run: run.monitor.checkpoint_status(run)),
+      icheckpoint:Callable[[Run],dict[str,Any]]=(lambda run: run.checkpoint_status()),
       cond:Mapping[str,Tuple[float|Iterable[float]|int|Iterable[int],Callable[[Run],float|int]]|str]={},
       active:bool=True,
   ):
@@ -424,7 +466,7 @@ Processes the constructor parameters.
 :param cond: assignment of a target and a schedule to control the actions of the listener
 :param active: whether to bind the listener on execution
     """
-#==================================================================================================
+#--------------------------------------------------------------------------------------------------
     def parse(x):
       if isinstance(x,str):
         p,t = x.strip().split(' ',1); return (float if '.' in p or 'e' in p else int)(p),(lambda run,a=t.strip():getattr(run,a))
@@ -446,12 +488,13 @@ Processes the constructor parameters.
 @Run.listener_factory('Base')
 class BaseRunListener (RunListener):
   r"""
-A :class:`RunListener` subclass with three types of actions: monitoring; logging information.
+An instance of this class logs run events through a :class:`logging.Logger` instance.
   """
 #==================================================================================================
   action: Mapping[str,Callable[[Run],None]]
   r"""Logging action per stage"""
 
+#--------------------------------------------------------------------------------------------------
   def setup(
       self,
       logger:Optional[logging.Logger]=logger,
@@ -464,11 +507,14 @@ A :class:`RunListener` subclass with three types of actions: monitoring; logging
       **ka
   ):
     r"""
+Processes the constructor parameters. Parameters in *ka* are passed on to the method of the super class.
+
 :param logger: logger to use to report information
 :param status: a pair of a sequence of field names and a matching sequence of field retrievers
 :param status_fmt: a pair of format strings (% convention) for the sequence of field name and the sequences of retrieved field values
 :param fmt: a dictionary assigning a format to each free field name (default is .3f)
     """
+#--------------------------------------------------------------------------------------------------
     super().setup(**ka)
     fmt_ = lambda x,fmt={'size':'d','err':'s','nerr':'d'}|(fmt or {}),default='.3f': ' '.join(f'{k}={v.__format__(fmt.get(k,default))}' for k,v in x.items() if v is not None)
     self.action = udict({
@@ -490,7 +536,7 @@ A :class:`RunListener` subclass with three types of actions: monitoring; logging
 @Run.listener_factory('Mlflow')
 class RunMlflowListener (RunListener):
   r"""
-Instances of this class provide mlflow logging.
+An instance of this class logs run events to a MLFlow experiment repository.
   """
 #==================================================================================================
   tools = 'load_model',
@@ -500,8 +546,6 @@ Instances of this class provide mlflow logging.
     r"""
 :param uri: mlflow tracking uri
 :param exp: experiment name
-:param train_schedule: time schedule for logging train information
-:param valid_schedule: epoch schedule for logging validation information
     """
 #--------------------------------------------------------------------------------------------------
     import mlflow, mlflow.pytorch
@@ -547,9 +591,21 @@ Returns a model saved in a run.
     return mlflow.pytorch.load_model('runs:/{}/model{}'.format(run_id,('' if epoch is None else f'_{epoch:03d}')),**ka)
 
 #==================================================================================================
+class DataInfo (NamedTuple):
+#==================================================================================================
+  source: ClassificationDatasource
+  r"""Source of the data"""
+  train: int
+  r"""Size of the train split"""
+  valid: int
+  r"""Size of the validation split"""
+  test: int
+  r"""Size of the test split"""
+
+#==================================================================================================
 class ClassificationDatasource:
   r"""
-Instances of this class are data sources for classification training. Attributes (\*) must be instantiated at creation time.
+An instance of this class is a data source for classification training. Attributes (\*) must be instantiated at creation time.
   """
 #==================================================================================================
   classes: Iterable[str]
@@ -585,7 +641,7 @@ Returns a dictionary which can be passed as keyword arguments to the :class:`Run
     n = len(D); nvalid = int(pcval*n); ntrain = n-nvalid
     train,valid = torch.utils.data.random_split(D,(ntrain,nvalid))
     test = self.test
-    params = dict(datainfo=DataInfo(self,len(train),len(valid),len(test)),**ka)
+    params = dict(datainfo=DataInfo(source=self,train=len(train),valid=len(valid),test=len(test)),**ka)
     ka = dict(((k[1:] if k.startswith('_') else k),v) for k,v in ka.items())
     for c,split in zip(('train','valid','test'),(train,valid,test)):
       params['_'+c+'_split'] = torch.utils.data.DataLoader(split,shuffle=c=='train',**ka)

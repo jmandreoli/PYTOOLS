@@ -6,8 +6,7 @@ from make import RUN; RUN(__name__,__file__,2)
 #--------------------------------------------------------------------------------------------------
 
 import logging,time,sqlite3
-from pathlib import Path
-from ..polling import PollingThread
+from PYTOOLS.polling import PollingThread
 
 def demo():
   logging.basicConfig(level=logging.INFO)

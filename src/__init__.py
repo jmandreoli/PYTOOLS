@@ -586,6 +586,7 @@ Assumes that *pkgname* is the name of a python regular (non namespace) package a
   return c
 
 #==================================================================================================
+class SQLinitMetainfoException (Exception): pass
 def SQLinit(engine:str|sqlalchemy.engine.Engine,meta:sqlalchemy.MetaData)->sqlalchemy.engine.Engine:
   r"""
 :param engine: a sqlalchemy engine (or its url)
@@ -605,20 +606,20 @@ def SQLinit(engine:str|sqlalchemy.engine.Engine,meta:sqlalchemy.MetaData)->sqlal
     # fixes a bug in the pysqlite driver; to be removed if fixed
     # see http://docs.sqlalchemy.org/en/rel_1_0/dialects/sqlite.html
     def do_connect(conn,rec): conn.isolation_level = None
-    def do_begin(conn): conn.execute('BEGIN')
+    def do_begin(conn): conn.connection.execute('BEGIN')
     event.listen(engine,'connect',do_connect)
     event.listen(engine,'begin',do_begin)
-  meta_ = MetaData(bind=engine)
-  meta_.reflect()
+  meta_ = MetaData()
+  meta_.reflect(bind=engine)
   if meta_.tables:
     try:
       metainfo_table = meta_.tables['Metainfo']
-      metainfo = dict(engine.execute(select(metainfo_table.c)).fetchone())
+      with engine.connect() as conn: metainfo = dict(conn.execute(select(metainfo_table.c)).fetchone()._mapping)
       del metainfo['created']
-    except: raise SQLinit.MetainfoException('Not found')
+    except: raise SQLinitMetainfoException('Not found')
     for k,v in meta.info.items():
       if metainfo.get(k) != str(v):
-        raise SQLinit.MetainfoException(f'{k}[expected:{v},found:{metainfo.get(k)}]')
+        raise SQLinitMetainfoException(f'{k}[expected:{v},found:{metainfo.get(k)}]')
   else:
     metainfo_table = Table(
       'Metainfo',meta_,
@@ -626,10 +627,9 @@ def SQLinit(engine:str|sqlalchemy.engine.Engine,meta:sqlalchemy.MetaData)->sqlal
       *(Column(key,Text()) for key in meta.info)
     )
     meta_.create_all()
-    engine.execute(insert(metainfo_table).values(created=datetime.now(),**meta.info))
+    with engine.begin() as conn: conn.execute(insert(metainfo_table).values(created=datetime.now(),**meta.info))
     meta.create_all(bind=engine)
   return engine
-SQLinit.MetainfoException = type('SQLinitMetainfoException',(),{})
 
 #==================================================================================================
 class SQLHandler (logging.Handler):
@@ -751,7 +751,7 @@ Example of use (assuming :func:`sessionmaker` as above has been imported)::
     if len(pk) == 1:
       getpk = lambda r,kn=pk[0].name: getattr(r,kn)
       def setpk(k,r,kn=pk[0].name):
-        if k is not None: r[kn] = k # does nothing is k is None (autokeys)
+        if k is not None: r[kn] = k # does nothing if k is None (autokeys)
         return r
     else:
       getpk = lambda r,kns=tuple(c.name for c in pk): tuple(getattr(r,kn) for kn in kns)
@@ -763,7 +763,7 @@ Example of use (assuming :func:`sessionmaker` as above has been imported)::
     self.session = session
 
   def __getitem__(self,k):
-    r = self.session.query(self.base).get(k)
+    r = self.session.query(self.base,k)
     if r is None: raise KeyError(k)
     return r
 

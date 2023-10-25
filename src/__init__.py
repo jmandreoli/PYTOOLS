@@ -626,7 +626,7 @@ def SQLinit(engine:str|sqlalchemy.engine.Engine,meta:sqlalchemy.MetaData)->sqlal
       Column('created',DateTime()),
       *(Column(key,Text()) for key in meta.info)
     )
-    meta_.create_all()
+    meta_.create_all(bind=engine)
     with engine.begin() as conn: conn.execute(insert(metainfo_table).values(created=datetime.now(),**meta.info))
     meta.create_all(bind=engine)
   return engine

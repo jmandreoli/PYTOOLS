@@ -13,7 +13,7 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Rectangle
 from matplotlib.backend_bases import MouseButton
 try: from .ipywidgets import app, SimpleButton # so this works even if ipywidgets is not available
-except: app = object
+except: app = type('app',(),{})
 from typing import Any, Callable, Iterable, Mapping, Sequence, Tuple, Literal
 import logging; logger = logging.getLogger(__name__)
 

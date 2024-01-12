@@ -174,7 +174,7 @@ Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of thi
       a_.ϴ[1].data[k] = a.out_proj.weight[:,s]
     if a.in_proj_bias is not None:
       q_bias,_,v_bias = torch.chunk(a.in_proj_bias.data,3) # ignore useless k_bias
-      for b_,b in ((a_.Λₒ,q_bias),(a_.Θₒ[0],v_bias)): b_.data[0,:,0,:] = b.reshape((a.num_heads,D))
+      for trg,src in ((a_.Λₒ,q_bias),(a_.Θₒ[0],v_bias)): trg.data[0,:,0,:] = src.reshape((a.num_heads,D))
       a_.Θₒ[1].data[0,0,:] = a.out_proj.bias.data
     return a_
 

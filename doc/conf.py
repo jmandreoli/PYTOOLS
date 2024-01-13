@@ -35,6 +35,7 @@ extensions = [
     'sphinx.ext.viewcode',
 ]
 autodoc_typehints = 'description'
+autodoc_typehints_description_target = 'documented'
 autoclass_content = 'both'
 
 # Add any paths that contain templates here, relative to this directory.

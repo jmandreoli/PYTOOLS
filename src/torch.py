@@ -20,7 +20,7 @@ An instance of this class is a generalised convolution module.
   """Temperature of the softmax applied to scores"""
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,K:int,P:int,Q:Optional[int]=None,D:Optional[int]=None,bias:bool=False):
+  def __init__(self,K:int,P:int,Q:Optional[int]=None,D:Optional[int]=None,bias:bool=True):
     r"""
 Model parameters are
 
@@ -32,7 +32,7 @@ Model parameters are
 :param P: value-input dimension :math:`P`
 :param Q: output dimension :math:`Q`, default :math:`P`
 :param D: convolution head dimension :math:`D`, default :math:`\left\lfloor\frac{Q}{K}\right\rfloor`
-:param bias: whether to use biases; at this level: :math:`\Theta^{\textrm{(o)}},\Theta^{\textrm{(oo)}}`
+:param bias: whether to use the biases :math:`\Theta^{\textrm{(o),(oo)}}`
     """
 #--------------------------------------------------------------------------------------------------
     super().__init__()
@@ -107,7 +107,7 @@ Additional model parameters for Vanilla attention are:
 :param Pʹ: key-input dimension :math:`P'`, default :math:`P`
 :param Qʹ: query-input dimension :math:`Q'`, default :math:`Q`
 :param Dʹ: attention head dimension :math:`D'`, default :math:`\left\lfloor\frac{Q'}{K}\right\rfloor`
-:param bias: whether to use biases; at this level:  :math:`\Lambda^{\textrm{(o)}}`
+:param bias: whether to use the bias  :math:`\Lambda^{\textrm{(o)}}` + the convolution biases
 :param args: passed to :class:`GeneralisedConvolution` constructor
 :param kargs: passed to :class:`GeneralisedConvolution` constructor
     """
@@ -155,7 +155,7 @@ Computes the attention scores passed to generalised convolution:
 
 #--------------------------------------------------------------------------------------------------
   @staticmethod
-  def convert(a:torch.nn.MultiheadAttention):
+  def torch_convert(a:torch.nn.MultiheadAttention):
     r"""
 Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of this class with (almost) same behaviour.
 
@@ -164,19 +164,47 @@ Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of thi
 #--------------------------------------------------------------------------------------------------
     assert isinstance(a,torch.nn.MultiheadAttention)
     assert a.bias_k is None and a.bias_v is None, 'Extra biases not supported (no idea what they do)'
-    a_ = MultiHeadAttention(K=a.num_heads,P=a.vdim,Q=a.embed_dim,Pʹ=a.kdim,Qʹ=a.embed_dim,bias=a.in_proj_bias is not None)
-    D = a.head_dim
-    assert a_.D == a_.Dʹ == D # sanity check
-    q_weight,k_weight,v_weight = (a.q_proj_weight.data,a.k_proj_weight.data,a.v_proj_weight.data) if a.in_proj_weight is None else torch.chunk(a.in_proj_weight.data,3)
-    for k in range(a.num_heads):
-      s = slice(D*k,D*(k+1))
-      for w_,w in ((a_.Λ[1],q_weight),(a_.Λ[0],k_weight),(a_.ϴ[0],v_weight)): w_.data[k] = w[s].T
-      a_.ϴ[1].data[k] = a.out_proj.weight[:,s]
+    self = MultiHeadAttention(K=a.num_heads,P=a.vdim,Q=a.embed_dim,Pʹ=a.kdim,Qʹ=a.embed_dim,bias=a.in_proj_bias is not None)
+    assert self.D == self.Dʹ == a.head_dim # sanity check
+    q_weight_d,k_weight_d,v_weight_d = (a.q_proj_weight.data,a.k_proj_weight.data,a.v_proj_weight.data) if a.in_proj_weight is None else torch.chunk(a.in_proj_weight.data,3)
+    L = (self.Λ[1],q_weight_d.T),(self.Λ[0],k_weight_d.T),(self.ϴ[0],v_weight_d.T),(self.ϴ[1],a.out_proj.weight.data)
+    for w_,w in L: w_.data[...] = torch.stack(w.chunk(a.num_heads,dim=1))
     if a.in_proj_bias is not None:
-      q_bias,_,v_bias = torch.chunk(a.in_proj_bias.data,3) # ignore useless k_bias
-      for b_,b in ((a_.Λₒ,q_bias),(a_.Θₒ[0],v_bias)): b_.data[0,:,0,:] = b.reshape((a.num_heads,D))
-      a_.Θₒ[1].data[0,0,:] = a.out_proj.bias.data
-    return a_
+      q_bias_d,_,v_bias_d = torch.chunk(a.in_proj_bias.data,3) # ignore useless k_bias_d
+      L = (self.Λₒ,q_bias_d),(self.Θₒ[0],v_bias_d)
+      for b_,b in L: b_.data[0,:,0,:] = torch.stack(b.chunk(a.num_heads))
+      self.Θₒ[1].data[0,0,:] = a.out_proj.bias.data
+    return self
+
+#--------------------------------------------------------------------------------------------------
+  def torch_compare(self,a:torch.nn.MultiheadAttention,B:int,M:int,N:int):
+    r"""
+Compares a :class:`torch.nn.MultiheadAttention` instance with this instance on a sample input.
+
+:param a: the instance to compare
+:param B: batch size
+:param M: input size
+:param N: output size
+:return: pair of aligned output and dictionary of aligned gradients per parameter
+    """
+#--------------------------------------------------------------------------------------------------
+    def grads(y_,y):
+      for p in (*self.parameters(),*a.parameters()): p.grad = None # reset all gradients
+      torch.mean(y_).backward(); torch.mean(y).backward() # launch back-propagation on sample
+      q_weight_g,k_weight_g,v_weight_g = (a.q_proj_weight.grad,a.k_proj_weight.grad,a.v_proj_weight.grad) if a.in_proj_weight is None else torch.chunk(a.in_proj_weight.grad,3)
+      L = ('Λ[1]',self.Λ[1],q_weight_g.T),('Λ[0]',self.Λ[0],k_weight_g.T),('ϴ[0]',self.ϴ[0],v_weight_g.T),('ϴ[1]',self.ϴ[1],a.out_proj.weight.grad)
+      yield from ((p,w_.grad,torch.stack(w.chunk(a.num_heads,dim=1))) for p,w_,w in L)
+      if a.in_proj_bias is not None:
+        q_bias_g,_,v_bias_g = torch.chunk(a.in_proj_bias.grad,3) # ignore useless k_bias_g (always null)
+        L = ('Λₒ',self.Λₒ,q_bias_g),('Θₒ[0]',self.Θₒ[0],v_bias_g)
+        yield from ((p,b_.grad[0,:,0,:],torch.stack(b.chunk(a.num_heads))) for p,b_,b in L)
+        yield 'Θₒ[1]',self.Θₒ[1].grad[0,0],a.out_proj.bias.grad
+    yʹ = torch.rand(B,N,a.embed_dim)  # query
+    xʹ = torch.rand(B,M,a.kdim)  # key
+    x = torch.rand(B,M,a.vdim)  # value
+    y,_ = a(yʹ,xʹ,x,need_weights=False)
+    y_,_ = self(yʹ,xʹ,x=x)
+    return (y_,y),{p:(u_,u) for p,u_,u in grads(y_,y)}
 
 #==================================================================================================
 class MultiHeadMixedAttention(GeneralisedConvolution):
@@ -200,7 +228,7 @@ Additional model parameters for Mixed attention scores are:
 :param Pʹ: key-input dimension :math:`P'`, default :math:`P`
 :param Qʹ: query-input dimension :math:`Q'`, default :math:`Q`
 :param Dʹ: attention head dimension :math:`D'`, default :math:`\left\lfloor\frac{Q'}{K}\right\rfloor`
-:param bias: whether to use biases; at this level:  :math:`\Lambda^{\textrm{(ox)}},\Lambda^{\textrm{(oy)}},\Lambda^{\textrm{(o)}}`
+:param bias: whether to use the biases :math:`\Lambda^{\textrm{(ox),(oy),(o)}}` + the convolution biases
 :param args: passed to :class:`GeneralisedConvolution` constructor
 :param kargs: passed to :class:`GeneralisedConvolution` constructor
     """

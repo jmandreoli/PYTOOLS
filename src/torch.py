@@ -298,7 +298,7 @@ Additional model parameters for Mixed attention scores are:
     self.projzʹ = Einsum('krd,bmnr->bkmnd',self.K,Rʹ,Dʺ,bias=bias) # Λz,Λₒₒ
     self.proj1 = Einsum('kd,bkmn->bkmnd',self.K,Dʺ,bias=False) # α
     self.proj2 = Einsum('kd,bkmnd->bkmn',self.K,Dʺ,bias=False) # β
-    self.temperature = 1.
+    self.temperature = torch.tensor(1.)
 
 #--------------------------------------------------------------------------------------------------
   def forward(self,zʹ,yʹ,xʹ=None,x=None,**kargs):

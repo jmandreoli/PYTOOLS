@@ -35,7 +35,7 @@ Model parameters are
    \Theta^{\textrm{(x)}}{:}\langle K,P,D \rangle\; \Theta^{\textrm{(y)}}{:}\langle K,Q,D \rangle\; \Theta^{\textrm{(o)}}{:}\langle K,D \rangle\; \Theta^{\textrm{(oo)}}{:}\langle Q \rangle
 
 :param K: number of heads
-:param P: value-input dimension :math:`P`
+:param P: input dimension :math:`P`
 :param Q: output dimension :math:`Q`, default :math:`P`
 :param D: convolution head dimension :math:`D`, default :math:`\lfloor\frac{Q}{K}\rfloor`
 :param bias: whether to use the biases :math:`\Theta^{\textrm{(o),(oo)}}`
@@ -61,7 +61,7 @@ Generalised Convolution formula (with biases):
    \end{align*}
 
 :param score: tensor :math:`\bar{A}{:}\langle B,K,M,N \rangle` (attention scores)
-:param x: tensor :math:`x{:}\langle B,M,P \rangle` (value-input)
+:param x: tensor :math:`x{:}\langle B,M,P \rangle` (input)
 :param mask: tensor :math:`\langle B,M,N \rangle` or :math:`\langle M,N \rangle` (in log domain: possible values include :math:`-\infty`)
 :param process_attn: applied to the attention tensor :math:`\langle B,K,M,N \rangle` (caution: large) to produce the auxiliary output; default returns :const:`None`
 :return: pair of output tensor :math:`y{:}\langle B,N,Q \rangle` and auxiliary output (see *process_attn*)
@@ -83,8 +83,7 @@ Generalised Convolution formula (with biases):
   @staticmethod
   def _dim(d:Optional[int],default:Optional[int]=None)->int:
 #--------------------------------------------------------------------------------------------------
-    if default is None: assert isinstance(d,int) and d>1; return d
-    if d is None: return default
+    if d is None: assert default is not None; return default
     assert isinstance(d,int) and d>1; return d
 
 #==================================================================================================
@@ -99,7 +98,7 @@ An instance of this class is a Vanilla multi-head attention module. Ref:
   Pʹ:int; Qʹ:int; Dʹ:int
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,*args,Pʹ:Optional[int]=None,Qʹ:Optional[int]=None,Dʹ:Optional[int]=None,bias:bool=True,**kargs):
+  def __init__(self,*args,Pʹ:Optional[int]=None,Qʹ:Optional[int]=None,Dʹ:Optional[int]=None,bias:bool=True,_bias=False,**kargs):
     r"""
 Additional model parameters for Vanilla attention are:
 
@@ -110,14 +109,14 @@ Additional model parameters for Vanilla attention are:
 :param Pʹ: key-input dimension :math:`P'`, default :math:`P`
 :param Qʹ: query-input dimension :math:`Q'`, default :math:`Q`
 :param Dʹ: attention head dimension :math:`D'`, default :math:`\lfloor\frac{Q'}{K}\rfloor`
-:param bias: whether to use the bias  :math:`\Lambda^{\textrm{(o)}}` + the convolution biases
+:param bias: whether to use the bias :math:`\Lambda^{\textrm{(o)}}` + the convolution biases
 :param args: passed to :class:`GeneralisedConvolution` constructor
 :param kargs: passed to :class:`GeneralisedConvolution` constructor
     """
 #--------------------------------------------------------------------------------------------------
     super().__init__(*args,bias=bias,**kargs)
     Pʹ=self._dim(Pʹ,self.P); Qʹ=self._dim(Qʹ,self.Q); Dʹ=self._dim(Dʹ,Qʹ//self.K); self.Pʹ,self.Qʹ,self.Dʹ=Pʹ,Qʹ,Dʹ
-    self.projxʹ = Einsum('kpd,bmp->bkmd',self.K,Pʹ,Dʹ,bias=False) # Λx
+    self.projxʹ = Einsum('kpd,bmp->bkmd',self.K,Pʹ,Dʹ,bias=_bias) # Λx
     self.projyʹ = Einsum('kqd,bnq->bknd',self.K,Qʹ,Dʹ,bias=bias) # Λy,Λₒ
     self.temperature = torch.sqrt(torch.tensor(Dʹ))
 
@@ -136,8 +135,8 @@ Computes the attention scores passed to generalised convolution; include biases,
    \end{align*}
 
 :param yʹ: tensor :math:`y'{:}\langle B,N,Q' \rangle` (query-input)
-:param xʹ: tensor :math:`x'{:}\langle B,M,P' \rangle` (key-input)
-:param x: passed to :meth:`GeneralisedConvolution.forward`, default :math:`x'` (value-input)
+:param xʹ: tensor :math:`x'{:}\langle B,M,P' \rangle` (key-input), default :math:`y'`
+:param x: passed to :meth:`GeneralisedConvolution.forward` (value-input), default :math:`x'`
 :param kargs: passed to :meth:`GeneralisedConvolution.forward`
 :return: see :meth:`GeneralisedConvolution.forward`
     """
@@ -153,7 +152,7 @@ Computes the attention scores passed to generalised convolution; include biases,
   @staticmethod
   def torch_convert(a:torch.nn.MultiheadAttention):
     r"""
-Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of this class with (almost) same behaviour and an additional method :meth:`compare_` which returns a comparison of the two modules on a random sample of given batch size and sequence lengths.
+Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of this class with (almost) same behaviour and an additional method :meth:`test_` which returns a comparison of the two modules on a random sample of given batch size and sequence lengths.
 
 :param a: the instance to convert
 :return: an equivalent :class:`MultiHeadAttention` instance
@@ -177,12 +176,12 @@ Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of thi
         L = ('Λₒ',self.projyʹ,q_bias_g),('Θₒ',self.projx,v_bias_g)
         yield from ((p,proj.bias.grad[0,:,0,:],torch.stack(b.chunk(a.num_heads))) for p,proj,b in L)
         yield 'Θₒₒ',self.projy.bias.grad[0,0],a.out_proj.bias.grad
-    assert isinstance(a,torch.nn.MultiheadAttention)
+    assert a.__class__ is torch.nn.MultiheadAttention
     assert a.bias_k is None and a.bias_v is None, 'Extra biases not supported (no idea what they do)'
     self = MultiHeadAttention(K=a.num_heads,P=a.vdim,Q=a.embed_dim,Pʹ=a.kdim,Qʹ=a.embed_dim,bias=a.in_proj_bias is not None)
     assert self.D == self.Dʹ == a.head_dim # sanity check
     set_data()
-    def compare_(B:int,M:int,N:int):
+    def test_(B:int,M:int,N:int):
       yʹ = torch.rand(B,N,a.embed_dim)  # query
       xʹ = torch.rand(B,M,a.kdim)  # key
       x = torch.rand(B,M,a.vdim)  # value
@@ -191,11 +190,11 @@ Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of thi
       self.zero_grad(); a.zero_grad() # reset all gradients
       torch.mean(y_).backward(); torch.mean(y).backward() # back-propagation
       return (y_,y),{p:(u_,u) for p,u_,u in get_grad()}
-    self.compare_ = compare_
+    self.test_ = test_
     return self
 
 #==================================================================================================
-class MultiHeadMixedAttention(GeneralisedConvolution):
+class MultiHeadMixedAttention(MultiHeadAttention):
   r"""
 An instance of this class is a multi-head Mixed attention module. Ref:
 
@@ -203,10 +202,10 @@ An instance of this class is a multi-head Mixed attention module. Ref:
   """
 #==================================================================================================
 
-  Pʹ:int; Qʹ:int; Rʹ:int; Dʹ:int
+  Rʹ:int
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,Rʹ:int,*args,Pʹ:Optional[int]=None,Qʹ:Optional[int]=None,Dʹ:Optional[int]=None,bias:bool=True,**kargs):
+  def __init__(self,Rʹ:int,*args,bias:bool=True,**kargs):
     r"""
 Additional model parameters for Mixed attention scores are:
 
@@ -218,21 +217,16 @@ Additional model parameters for Mixed attention scores are:
    \end{array}
 
 :param Rʹ: matrix-input dimension :math:`R'`
-:param Pʹ: key-input dimension :math:`P'`, default :math:`P`
-:param Qʹ: query-input dimension :math:`Q'`, default :math:`Q`
 :param Dʹ: attention head dimension :math:`D'`, default :math:`\lfloor\frac{Q'}{K}\rfloor`
 :param bias: whether to use the biases :math:`\Lambda^{\textrm{(ox),(oy),(o)}}` + the convolution biases
 :param args: passed to :class:`GeneralisedConvolution` constructor
 :param kargs: passed to :class:`GeneralisedConvolution` constructor
     """
 #--------------------------------------------------------------------------------------------------
-    super().__init__(*args,bias=bias,**kargs)
-    P,Q=self.P,self.Q; Rʹ=self._dim(Rʹ); Pʹ=self._dim(Pʹ,P); Qʹ=self._dim(Qʹ,Q); Dʹ=self._dim(Dʹ,Qʹ//self.K); self.Rʹ,self.Pʹ,self.Qʹ,self.Dʹ=Rʹ,Pʹ,Qʹ,Dʹ
-    self.projxʹ = Einsum('kpd,bmp->bkmd',self.K,Pʹ,Dʹ,bias=bias) # Λx,Λₒx
-    self.projyʹ = Einsum('kqd,bnq->bknd',self.K,Qʹ,Dʹ,bias=bias) # Λy,Λₒy
-    self.projzx = Einsum('krd,bmnr->bkmnd',self.K,Rʹ,Dʹ,bias=False) # Λzx
-    self.projzy = Einsum('krd,bmnr->bkmnd',self.K,Rʹ,Dʹ,bias=bias) # Λzy,Λₒ
-    self.temperature = torch.sqrt(torch.tensor(Dʹ))
+    super().__init__(*args,bias=bias,_bias=bias,**kargs) # Λx,Λₒx  Λy,Λₒy
+    self.Rʹ=Rʹ=self._dim(Rʹ)
+    self.projzx = Einsum('krd,bmnr->bkmnd',self.K,Rʹ,self.Dʹ,bias=False) # Λzx
+    self.projzy = Einsum('krd,bmnr->bkmnd',self.K,Rʹ,self.Dʹ,bias=bias) # Λzy,Λₒ
 
 #--------------------------------------------------------------------------------------------------
   def forward(self,zʹ,yʹ,xʹ=None,x=None,**kargs):
@@ -252,8 +246,8 @@ Computes the attention scores passed to generalised convolution:
 
 :param zʹ: tensor :math:`z'{:}\langle B,M,N,R' \rangle` (matrix-input)
 :param yʹ: tensor :math:`y'{:}\langle B,N,Q' \rangle` (query-input)
-:param xʹ: tensor :math:`x'{:}\langle B,M,P' \rangle` (key-input)
-:param x: passed to :meth:`GeneralisedConvolution.forward`, default :math:`x'` (value-input)
+:param xʹ: tensor :math:`x'{:}\langle B,M,P' \rangle` (key-input), default :math:`y'`
+:param x: passed to :meth:`GeneralisedConvolution.forward` (value-input), default :math:`x'`
 :param kargs: passed to :meth:`GeneralisedConvolution.forward`
 :return: see :meth:`GeneralisedConvolution.forward`
     """
@@ -267,10 +261,10 @@ Computes the attention scores passed to generalised convolution:
     r = r + torch.einsum('bknd,bkmnd->bkmn',y_,z_)
     z_ = self.projzy(zʹ) # z_: B,K,M,N,D'
     r = r + torch.einsum('bkmd,bkmnd->bkmn',x_,z_)
-    return super().forward(r,x,**kargs)
+    return super(MultiHeadAttention,self).forward(r,x,**kargs)
 
 #==================================================================================================
-class MultiHeadMixedAttentionAlt(GeneralisedConvolution):
+class MultiHeadMixedAttentionAlt(MultiHeadAttention):
   r"""
 An instance of this class is a multi-head Mixed attention module. Ref:
 
@@ -278,10 +272,10 @@ An instance of this class is a multi-head Mixed attention module. Ref:
   """
 #==================================================================================================
 
-  Pʹ:int; Qʹ:int; Rʹ:int; Dʹ:int; Dʺ:int
+  Rʹ:int; Dʺ:int
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,Rʹ:int,mlpd:float,*args,Pʹ:Optional[int]=None,Qʹ:Optional[int]=None,Dʹ:Optional[int]=None,bias=True,**kargs):
+  def __init__(self,Rʹ:int,*args,Dʺ=None,bias:bool=True,mlpd:float=5.,**kargs):
     r"""
 Additional model parameters for Mixed attention scores are:
 
@@ -293,20 +287,18 @@ Additional model parameters for Mixed attention scores are:
    \end{array}
 
 :param Rʹ: matrix-input dimension :math:`R'`
-:param mlpd: :math:`D''` is chosen so that the ratio :math:`\frac{D''}{D'}` be as close as possible to this value
+:param mlpd: :math:`D''` is chosen so that the ratio :math:`\frac{D''}{R'}` be as close as possible to this value
+:param bias: whether to use the biases :math:`\Lambda^{\textrm{(o),(oo)}}` + the convolution biases
 :param args: passed to :class:`GeneralisedConvolution` constructor
 :param kargs: passed to :class:`GeneralisedConvolution` constructor
     """
 #--------------------------------------------------------------------------------------------------
-    super().__init__(*args,bias=bias,**kargs)
-    P,Q=self.P,self.Q; Rʹ=self._dim(Rʹ); Pʹ=self._dim(Pʹ,P); Qʹ=self._dim(Qʹ,Q); Dʹ=self._dim(Dʹ,Qʹ//self.K); self.Rʹ,self.Pʹ,self.Qʹ,self.Dʹ=Rʹ,Pʹ,Qʹ,Dʹ
-    assert isinstance(mlpd,float); self.Dʺ=Dʺ=int(mlpd*self.Dʹ)
-    self.projxʹ = Einsum('kpd,bmp->bkmd',self.K,Pʹ,Dʹ,bias=False) # Λx
-    self.projyʹ = Einsum('kqd,bnq->bknd',self.K,Qʹ,Dʹ,bias=bias) # Λy,Λₒ
+    super().__init__(*args,bias=bias,**kargs) # Λx  Λy,Λₒ
+    self.Rʹ=Rʹ=self._dim(Rʹ); assert isinstance(mlpd,float); self.Dʺ=Dʺ=self._dim(Dʺ,int(mlpd*Rʹ))
     self.projzʹ = Einsum('krd,bmnr->bkmnd',self.K,Rʹ,Dʺ,bias=bias) # Λz,Λₒₒ
     self.proj1 = Einsum('kd,bkmn->bkmnd',self.K,Dʺ,bias=False) # α
     self.proj2 = Einsum('kd,bkmnd->bkmn',self.K,Dʺ,bias=False) # β
-    self.temperature = torch.sqrt(torch.tensor(Dʹ+Dʺ))
+    self.temperature = 1.
 
 #--------------------------------------------------------------------------------------------------
   def forward(self,zʹ,yʹ,xʹ=None,x=None,**kargs):
@@ -325,9 +317,9 @@ Computes the attention scores passed to generalised convolution:
 
 :param zʹ: tensor :math:`z'{:}\langle B,M,N,R' \rangle` (matrix-input)
 :param yʹ: tensor :math:`y'{:}\langle B,N,Q' \rangle` (query-input)
-:param xʹ: tensor :math:`x'{:}\langle B,M,P' \rangle` (key-input)
-:param x: passed to :meth:`GeneralisedConvolution.forward`, default :math:`x'` (value-input)
-:param kargs: passed to :meth:`GeneralisedConvolution.forward` with key ``x`` set to :math:`x'` if absent
+:param xʹ: tensor :math:`x'{:}\langle B,M,P' \rangle` (key-input), default :math:`y'`
+:param x: passed to :meth:`GeneralisedConvolution.forward` (value-input), default :math:`x'`
+:param kargs: passed to :meth:`GeneralisedConvolution.forward`
 :return: see :meth:`GeneralisedConvolution.forward`
     """
 #--------------------------------------------------------------------------------------------------
@@ -340,7 +332,7 @@ Computes the attention scores passed to generalised convolution:
     r = self.proj1(r) + z_ # r: B,K,M,N,D''
     torch.relu_(r)
     r = self.proj2(r) # r: B,K,M,N
-    return super().forward(r,x,**kargs)
+    return super(MultiHeadAttention,self).forward(r,x,**kargs)
 
 #==================================================================================================
 class Einsum (torch.nn.Module):
@@ -387,23 +379,22 @@ An instance of this class is essentially a Linear module allowing more flexibili
 #--------------------------------------------------------------------------------------------------
   def _parse(self,sig:str,dims:Sequence[int],bias:bool):
 #--------------------------------------------------------------------------------------------------
+    assert isinstance(sig,str) and all(isinstance(d,int) for d in dims) and isinstance(bias,bool)
     m = self.sig_pattern.fullmatch(sig)
-    assert m is not None
-    p_,_,o_ = m.groups()
-    assert len(p_)==len(set(p_)) == len(dims)
-    bias_dims = None
+    assert m is not None, f'Signature must conform to "{self.sig_pattern}"'
+    p_,i_,o_ = m.groups()
+    assert len(p_)==len(set(p_)) == len(dims) and len(o_)==len(set(o_)) and all(c in p_ or c in i_ for c in o_), 'Wrong signature'
     if bias is True:
       bias_ = [c for c in o_ if c in p_]
-      assert len(bias_)>0
+      assert len(bias_)>0, 'The given signature does not allow bias; set bias=False'
       dims_ = {c:dims[p_.index(c)] for c in bias_}
-      bias_dims = tuple(dims_.get(c,1) for c in o_)
-    return bias_dims
+      return tuple(dims_.get(c,1) for c in o_)
 
 #--------------------------------------------------------------------------------------------------
   @staticmethod
   def torch_convert(a:torch.nn.Linear):
     r"""
-Converts a :class:`torch.nn.Linear` instance into an instance of this class with same behaviour. The created instance has an additional method :meth:`compare_` which returns a comparison of the two modules on some sample given its batch size and sequence length.
+Converts a :class:`torch.nn.Linear` instance into an instance of this class with same behaviour. The created instance has an additional method :meth:`test_` which returns a comparison of the two modules on some sample given its batch size and sequence length.
 
 :param a: the instance to convert
 :return: an equivalent :class:`Einsum` instance
@@ -418,12 +409,12 @@ Converts a :class:`torch.nn.Linear` instance into an instance of this class with
     assert isinstance(a,torch.nn.Linear)
     self = Einsum('pq,bnp->bnq',a.in_features,a.out_features,bias=a.bias is not None)
     set_data()
-    def compare_(B:int,M:int):
+    def test_(B:int,M:int):
       x = torch.rand(B,M,a.in_features)
       y = a(x)
       y_ = self(x)
       self.zero_grad(); a.zero_grad() # reset all gradients
       torch.mean(y_).backward(); torch.mean(y).backward() # back-propagation
       return (y_,y),{p:(u_,u) for p,u_,u in get_grad()}
-    self.compare_ = compare_
+    self.test_ = test_
     return self

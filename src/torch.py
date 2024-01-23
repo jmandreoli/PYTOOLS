@@ -84,7 +84,8 @@ Generalised Convolution formula (with biases):
   def _dim(d:Optional[int],default:Optional[int]=None)->int:
 #--------------------------------------------------------------------------------------------------
     if d is None: assert default is not None; return default
-    assert isinstance(d,int) and d>1; return d
+    if not isinstance(d,int) or d<=1: raise TypeError('dim')
+    return d
 
 #==================================================================================================
 class MultiHeadAttention(GeneralisedConvolution):
@@ -152,7 +153,12 @@ Computes the attention scores passed to generalised convolution; include biases,
   @staticmethod
   def torch_convert(a:torch.nn.MultiheadAttention):
     r"""
-Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of this class with (almost) same behaviour and an additional method :meth:`test_` which returns a comparison of the two modules on a random sample of given batch size and sequence lengths.
+Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of this class with (almost) same behaviour and an additional method :meth:`test_` which, given batch size and sequence lengths, returns a comparison of the two modules on a random sample. Example::
+
+   a = torch.nn.MultiheadAttention(embed_dim=12,num_heads=4,batch_first=True,kdim=17,vdim=19)
+   a_ = MultiHeadAttention.torch_convert(a)
+   fwd,bwd = a_.test_(B=64,M=100,N=80) # generates sample(batch:64,in-length:100,out-length:80) and returns aligned fwd and bwd values
+   assert all(torch.allclose(u,v,atol=1e-5) for u,v in (fwd,*bwd.values())) # tune atol if it fails
 
 :param a: the instance to convert
 :return: an equivalent :class:`MultiHeadAttention` instance
@@ -176,7 +182,7 @@ Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of thi
         L = ('Λₒ',self.projyʹ,q_bias_g),('Θₒ',self.projx,v_bias_g)
         yield from ((p,proj.bias.grad[0,:,0,:],torch.stack(b.chunk(a.num_heads))) for p,proj,b in L)
         yield 'Θₒₒ',self.projy.bias.grad[0,0],a.out_proj.bias.grad
-    assert a.__class__ is torch.nn.MultiheadAttention
+    assert isinstance(a,torch.nn.MultiheadAttention)
     assert a.bias_k is None and a.bias_v is None, 'Extra biases not supported (no idea what they do)'
     self = MultiHeadAttention(K=a.num_heads,P=a.vdim,Q=a.embed_dim,Pʹ=a.kdim,Qʹ=a.embed_dim,bias=a.in_proj_bias is not None)
     assert self.D == self.Dʹ == a.head_dim # sanity check
@@ -217,10 +223,9 @@ Additional model parameters for Mixed attention scores are:
    \end{array}
 
 :param Rʹ: matrix-input dimension :math:`R'`
-:param Dʹ: attention head dimension :math:`D'`, default :math:`\lfloor\frac{Q'}{K}\rfloor`
 :param bias: whether to use the biases :math:`\Lambda^{\textrm{(ox),(oy),(o)}}` + the convolution biases
-:param args: passed to :class:`GeneralisedConvolution` constructor
-:param kargs: passed to :class:`GeneralisedConvolution` constructor
+:param args: passed to :class:`MultiHeadAttention` constructor
+:param kargs: passed to :class:`MultiHeadAttention` constructor
     """
 #--------------------------------------------------------------------------------------------------
     super().__init__(*args,bias=bias,_bias=bias,**kargs) # Λx,Λₒx  Λy,Λₒy
@@ -275,7 +280,7 @@ An instance of this class is a multi-head Mixed attention module. Ref:
   Rʹ:int; Dʺ:int
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,Rʹ:int,*args,Dʺ=None,bias:bool=True,mlpd:float=5.,**kargs):
+  def __init__(self,Rʹ:int,*args,Dʺ=None,bias:bool=True,mlpd:float=3.,**kargs):
     r"""
 Additional model parameters for Mixed attention scores are:
 
@@ -287,10 +292,11 @@ Additional model parameters for Mixed attention scores are:
    \end{array}
 
 :param Rʹ: matrix-input dimension :math:`R'`
-:param mlpd: :math:`D''` is chosen so that the ratio :math:`\frac{D''}{R'}` be as close as possible to this value
+:param Dʺ: internal multi-layer perceptron dimension :math:`D''` (default see below)
+:param mlpd: the default value for :math:`D''` is given by :math:`\lfloor R''{\times}\textrm{mlpd}\rfloor`
 :param bias: whether to use the biases :math:`\Lambda^{\textrm{(o),(oo)}}` + the convolution biases
-:param args: passed to :class:`GeneralisedConvolution` constructor
-:param kargs: passed to :class:`GeneralisedConvolution` constructor
+:param args: passed to :class:`MultiHeadAttention` constructor
+:param kargs: passed to :class:`MultiHeadAttention` constructor
     """
 #--------------------------------------------------------------------------------------------------
     super().__init__(*args,bias=bias,**kargs) # Λx  Λy,Λₒ
@@ -337,12 +343,7 @@ Computes the attention scores passed to generalised convolution:
 #==================================================================================================
 class Einsum (torch.nn.Module):
   r"""
-An instance of this class is essentially a Linear module allowing more flexibility in indices using the einsum notation. For example::
-
-   lin = torch.nn.Linear(3,4); lin_ = Einsum.torch_convert(lin)
-   assert lin_.sig == 'pq,bnp->bnq'
-   x = torch.rand(10,12,3) # batch:10, length:12
-   assert torch.all(lin(x)==lin_(x)) # if fails, try torch.allclose(lin(x),lin_(x))
+An instance of this class is essentially a Linear module allowing more flexibility in indices using the einsum notation.
   """
 #==================================================================================================
   sig_pattern = re.compile(r'([a-z]+),([a-z]+)->([a-z]+)')
@@ -351,6 +352,12 @@ An instance of this class is essentially a Linear module allowing more flexibili
 #--------------------------------------------------------------------------------------------------
   def __init__(self,sig:str,*dims:int,bias:bool=True):
     r"""
+Model parameters, e.g. for :code:`m=Einsum('pq,bnp->bnq',3,4)`
+
+.. math::
+
+   \Lambda{:}\langle3,4\rangle\; \Lambda^{\textrm{(o)}}{:}\langle4\rangle
+
 :param sig: an einsum-like signature conforming to :attr:`sig_pattern`
 :param dims: list of dimensions; matched to the weight component of *sig*
 :param bias: whether to use a bias (on the intersection of the weight and output components of *sig*)
@@ -358,8 +365,8 @@ An instance of this class is essentially a Linear module allowing more flexibili
 #--------------------------------------------------------------------------------------------------
     super().__init__()
     self.sig,bias_dims = sig,self._parse(sig,dims,bias)
-    self.weight =  torch.nn.Parameter(torch.empty(*dims))
-    self.bias = None if bias_dims is None else torch.nn.Parameter(torch.empty(*bias_dims))
+    self.weight =  torch.nn.Parameter(torch.empty(*dims)) # Λ
+    self.bias = None if bias_dims is None else torch.nn.Parameter(torch.empty(*bias_dims)) # Λₒ
     self._reset_params()
 
 #--------------------------------------------------------------------------------------------------
@@ -370,7 +377,16 @@ An instance of this class is essentially a Linear module allowing more flexibili
 
 #--------------------------------------------------------------------------------------------------
   def forward(self,x):
-    r"""Invokes :func:`torch.einsum` with signature given by attribute :attr:`sig` and arguments given by attribute :attr:`weight` and *x*, then adds the bias (attribute :attr:`bias`) if present."""
+    r"""
+Invokes :func:`torch.einsum` with signature given by attribute :attr:`sig` and arguments given by attribute :attr:`weight` and *x*, then adds the bias (attribute :attr:`bias`) if present. With the example above:
+
+.. math::
+
+   y_{bn} = x_{bn}\Lambda + \Lambda^{\textrm{(o)}}
+
+:param x: tensor :math:`x{:}\langle B,N,3\rangle`
+:return: tensor :math:`y{:}\langle B,N,4\rangle`
+    """
 #--------------------------------------------------------------------------------------------------
     r = torch.einsum(self.sig,self.weight,x)
     if self.bias is not None: r = r + self.bias
@@ -379,7 +395,8 @@ An instance of this class is essentially a Linear module allowing more flexibili
 #--------------------------------------------------------------------------------------------------
   def _parse(self,sig:str,dims:Sequence[int],bias:bool):
 #--------------------------------------------------------------------------------------------------
-    assert isinstance(sig,str) and all(isinstance(d,int) for d in dims) and isinstance(bias,bool)
+    for culprit,check in (('signature',isinstance(sig,str)),('dims',all(isinstance(d,int) for d in dims)),('bias',isinstance(bias,bool))):
+      if check is False: raise TypeError(culprit)
     m = self.sig_pattern.fullmatch(sig)
     assert m is not None, f'Signature must conform to "{self.sig_pattern}"'
     p_,i_,o_ = m.groups()
@@ -394,7 +411,7 @@ An instance of this class is essentially a Linear module allowing more flexibili
   @staticmethod
   def torch_convert(a:torch.nn.Linear):
     r"""
-Converts a :class:`torch.nn.Linear` instance into an instance of this class with same behaviour. The created instance has an additional method :meth:`test_` which returns a comparison of the two modules on some sample given its batch size and sequence length.
+Converts a :class:`torch.nn.Linear` instance into an instance of this class with same behaviour. The created instance has an additional method :meth:`test_` which, given batch size and sequence length, returns a comparison of the two modules on a random sample.
 
 :param a: the instance to convert
 :return: an equivalent :class:`Einsum` instance

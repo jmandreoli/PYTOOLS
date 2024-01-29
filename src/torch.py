@@ -153,12 +153,12 @@ Computes the attention scores passed to generalised convolution; include biases,
   @staticmethod
   def torch_convert(a:torch.nn.MultiheadAttention):
     r"""
-Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of this class with (almost) same behaviour and an additional method :meth:`test_` which, given batch size and sequence lengths, returns a comparison of the two modules on a random sample. Example::
+Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of this class with (almost) same behaviour. The returned instance has an additional method :meth:`test_` which, given batch size and sequence lengths, returns a comparison of the two modules on a random sample. Example::
 
    a = torch.nn.MultiheadAttention(embed_dim=12,num_heads=4,batch_first=True,kdim=17,vdim=19)
    a_ = MultiHeadAttention.torch_convert(a)
    fwd,bwd = a_.test_(B=64,M=100,N=80) # generates sample(batch:64,in-length:100,out-length:80) and returns aligned fwd and bwd values
-   assert all(torch.allclose(u,v,atol=1e-5) for u,v in (fwd,*bwd.values())) # tune atol if it fails
+   assert all(torch.allclose(u,v,atol=1e-5) for u,v in (fwd,*bwd.values())) # increase atol if it fails
 
 :param a: the instance to convert
 :return: an equivalent :class:`MultiHeadAttention` instance
@@ -182,7 +182,8 @@ Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of thi
         L = ('Λₒ',self.projyʹ,q_bias_g),('Θₒ',self.projx,v_bias_g)
         yield from ((p,proj.bias.grad[0,:,0,:],torch.stack(b.chunk(a.num_heads))) for p,proj,b in L)
         yield 'Θₒₒ',self.projy.bias.grad[0,0],a.out_proj.bias.grad
-    assert isinstance(a,torch.nn.MultiheadAttention)
+    assert isinstance(a,torch.nn.MultiheadAttention), 'Argument must be a torch.nn.MultiheadAttention instance'
+    assert a.batch_first is True, 'Option batch_first=False not supported (too lazy although easy)'
     assert a.bias_k is None and a.bias_v is None, 'Extra biases not supported (no idea what they do)'
     self = MultiHeadAttention(K=a.num_heads,P=a.vdim,Q=a.embed_dim,Pʹ=a.kdim,Qʹ=a.embed_dim,bias=a.in_proj_bias is not None)
     assert self.D == self.Dʹ == a.head_dim # sanity check
@@ -191,11 +192,10 @@ Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of thi
       yʹ = torch.rand(B,N,a.embed_dim)  # query
       xʹ = torch.rand(B,M,a.kdim)  # key
       x = torch.rand(B,M,a.vdim)  # value
-      y,_ = a(yʹ,xʹ,x,need_weights=False)
-      y_,_ = self(yʹ,xʹ,x)
-      self.zero_grad(); a.zero_grad() # reset all gradients
-      torch.mean(y_).backward(); torch.mean(y).backward() # back-propagation
-      return (y_,y),{p:(u_,u) for p,u_,u in get_grad()}
+      y,_ = a(yʹ,xʹ,x,need_weights=False); y_,_ = self(yʹ,xʹ,x) # forward
+      a.zero_grad(); self.zero_grad() # reset all gradients
+      torch.mean(y).backward(); torch.mean(y_).backward() # back-propagation
+      return (y,y_),{p:(u,u_) for p,u_,u in get_grad()}
     self.test_ = test_
     return self
 
@@ -293,7 +293,7 @@ Additional model parameters for Mixed attention scores are:
 
 :param Rʹ: matrix-input dimension :math:`R'`
 :param Dʺ: internal multi-layer perceptron dimension :math:`D''` (default see below)
-:param mlpd: the default value for :math:`D''` is given by :math:`\lfloor R''{\times}\textrm{mlpd}\rfloor`
+:param mlpd: the default value for :math:`D''` is given by :math:`\lfloor R'{\times}\textrm{mlpd}\rfloor`
 :param bias: whether to use the biases :math:`\Lambda^{\textrm{(o),(oo)}}` + the convolution biases
 :param args: passed to :class:`MultiHeadAttention` constructor
 :param kargs: passed to :class:`MultiHeadAttention` constructor
@@ -352,15 +352,20 @@ An instance of this class is essentially a Linear module allowing more flexibili
 #--------------------------------------------------------------------------------------------------
   def __init__(self,sig:str,*dims:int,bias:bool=True):
     r"""
-Model parameters, e.g. for :code:`m=Einsum('pq,bnp->bnq',3,4)`
+Model parameters are
+
+* a weight tensor :math:`\Lambda` matching the weight component of *sig* and
+* a bias tensor :math:`\Lambda^{\textrm{(o)}}` matching the intersection of the output component and the weight component of *sig*.
+
+For example with :code:`Einsum('pq,bnp->bnq',P,Q)` where :code:`P,Q` are integers, the model parameters are:
 
 .. math::
 
-   \Lambda{:}\langle3,4\rangle\; \Lambda^{\textrm{(o)}}{:}\langle4\rangle
+   \Lambda{:}\langle P,Q\rangle\; \Lambda^{\textrm{(o)}}{:}\langle Q\rangle
 
 :param sig: an einsum-like signature conforming to :attr:`sig_pattern`
-:param dims: list of dimensions; matched to the weight component of *sig*
-:param bias: whether to use a bias (on the intersection of the weight and output components of *sig*)
+:param dims: shape of the weight tensor
+:param bias: whether to use a bias
     """
 #--------------------------------------------------------------------------------------------------
     super().__init__()
@@ -378,14 +383,16 @@ Model parameters, e.g. for :code:`m=Einsum('pq,bnp->bnq',3,4)`
 #--------------------------------------------------------------------------------------------------
   def forward(self,x):
     r"""
-Invokes :func:`torch.einsum` with signature given by attribute :attr:`sig` and arguments given by attribute :attr:`weight` and *x*, then adds the bias (attribute :attr:`bias`) if present. With the example above:
+Computes :math:`y` defined as follows:
 
 .. math::
 
-   y_{bn} = x_{bn}\Lambda + \Lambda^{\textrm{(o)}}
+   y = E_{\textrm{sig}}(\Lambda,x) + \textrm{reshape}(\Lambda^{\textrm{(o)}})
 
-:param x: tensor :math:`x{:}\langle B,N,3\rangle`
-:return: tensor :math:`y{:}\langle B,N,4\rangle`
+where :math:`E_{\textrm{sig}}` denotes the Einsum operator with the signature given by attribute :attr:`sig`, and parameter :math:`\Lambda^{\textrm{(o)}}` is reshaped to match the output component of the signature (in the example, it becomes :math:`\mathbf{1}_B\otimes\mathbf{1}_N\otimes\Lambda^{\textrm{(o)}}` where dimensions :math:`B,N` come from the input :math:`x`).
+
+:param x: tensor :math:`x` matching the input component of the signature (in the example :math:`x{:}\langle B,N,P\rangle`)
+:return: tensor :math:`y` matching the output component of the signature (in the example :math:`y{:}\langle B,N,Q\rangle`)
     """
 #--------------------------------------------------------------------------------------------------
     r = torch.einsum(self.sig,self.weight,x)
@@ -411,7 +418,12 @@ Invokes :func:`torch.einsum` with signature given by attribute :attr:`sig` and a
   @staticmethod
   def torch_convert(a:torch.nn.Linear):
     r"""
-Converts a :class:`torch.nn.Linear` instance into an instance of this class with same behaviour. The created instance has an additional method :meth:`test_` which, given batch size and sequence length, returns a comparison of the two modules on a random sample.
+Converts a :class:`torch.nn.Linear` instance into an instance of this class with same behaviour. The returned instance has an additional method :meth:`test_` which, given batch size and sequence length, returns a comparison of the two modules on a random sample. Example::
+
+   l = torch.nn.Linear(42,17); l_ = Einsum.torch_convert(l)
+   assert l_.sig == 'pq,bnp->bnq' and l_.weight.shape == (42,17)
+   fwd,bwd = l_.test_(64,100) # generates sample(batch:64,length:100) and returns aligned fwd and bwd values
+   assert all(torch.allclose(u,v,atol=1e-6) for u,v in (fwd,*bwd.values())) # increase atol if it fails
 
 :param a: the instance to convert
 :return: an equivalent :class:`Einsum` instance
@@ -428,10 +440,9 @@ Converts a :class:`torch.nn.Linear` instance into an instance of this class with
     set_data()
     def test_(B:int,M:int):
       x = torch.rand(B,M,a.in_features)
-      y = a(x)
-      y_ = self(x)
-      self.zero_grad(); a.zero_grad() # reset all gradients
-      torch.mean(y_).backward(); torch.mean(y).backward() # back-propagation
-      return (y_,y),{p:(u_,u) for p,u_,u in get_grad()}
+      y = a(x); y_ = self(x) # forward
+      a.zero_grad(); self.zero_grad() # reset all gradients
+      torch.mean(y).backward(); torch.mean(y_).backward() # back-propagation
+      return (y,y_),{p:(u,u_) for p,u_,u in get_grad()}
     self.test_ = test_
     return self

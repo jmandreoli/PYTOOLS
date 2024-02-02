@@ -5,7 +5,8 @@
 # Purpose:              Some utilities for pytorch
 #
 
-from typing import Sequence, Any, Callable, Iterable, Mapping, Tuple, Optional
+from collections.abc import Sequence, Callable, Generator
+from typing import Optional, Any
 import re
 import logging; logger = logging.getLogger(__name__)
 import torch
@@ -19,11 +20,12 @@ An instance of this class is a generalised convolution module. Ref:
   """
 #==================================================================================================
 
-  temperature = None
+  temperature:torch.Tensor
   r"""Temperature of the softmax applied to scores"""
   K:int
   r"""Number of heads"""
   P:int; Q:int; D:int
+  projx:'Einsum'; projy:'Einsum'
 
 #--------------------------------------------------------------------------------------------------
   def __init__(self,K:int,P:int,Q:Optional[int]=None,D:Optional[int]=None,bias:bool=True):
@@ -47,7 +49,7 @@ Model parameters are
     self.projy = Einsum('kqd,bknd->bnq',K,Q,D,bias=bias) # ϴy,ϴₒₒ
 
 #--------------------------------------------------------------------------------------------------
-  def forward(self,score,x,mask=None,process_attn:Callable=(lambda a:None)):
+  def forward(self,score:torch.Tensor,x:torch.Tensor,mask:Optional[torch.Tensor]=None,process_attn:Callable[[torch.Tensor],Any]=(lambda a:None))->tuple[torch.Tensor,Any]:
     r"""
 Generalised Convolution formula (with biases):
 
@@ -97,6 +99,7 @@ An instance of this class is a Vanilla multi-head attention module. Ref:
 #==================================================================================================
 
   Pʹ:int; Qʹ:int; Dʹ:int
+  projxʹ:'Einsum'; projyʹ:'Einsum'
 
 #--------------------------------------------------------------------------------------------------
   def __init__(self,*args,Pʹ:Optional[int]=None,Qʹ:Optional[int]=None,Dʹ:Optional[int]=None,bias:bool=True,_bias=False,**kargs):
@@ -122,7 +125,7 @@ Additional model parameters for Vanilla attention are:
     self.temperature = torch.sqrt(torch.tensor(Dʹ))
 
 #--------------------------------------------------------------------------------------------------
-  def forward(self,yʹ,xʹ=None,x=None,**kargs):
+  def forward(self,yʹ:torch.Tensor,xʹ:Optional[torch.Tensor]=None,x:Optional[torch.Tensor]=None,**kargs)->tuple[torch.Tensor,Any]:
     r"""
 Computes the attention scores passed to generalised convolution; include biases, not described in the paper, to conform with :class:`torch.nn.MultiheadAttention`:
 
@@ -151,17 +154,17 @@ Computes the attention scores passed to generalised convolution; include biases,
 
 #--------------------------------------------------------------------------------------------------
   @staticmethod
-  def torch_convert(a:torch.nn.MultiheadAttention):
+  def torch_convert(a:torch.nn.MultiheadAttention)->tuple['MultiHeadAttention',Callable[[int,int,int],dict[str,tuple[torch.Tensor,torch.Tensor]]]]:
     r"""
-Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of this class with (almost) same behaviour. The returned instance has an additional method :meth:`test_` which, given batch size and sequence lengths, returns a comparison of the two modules on a random sample. Example::
+Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of this class with same behaviour (up to numerical instabilities). An additional output is a function :func:`test` which draws a random sample of the module input given batch size and two sequence lengths, and returns a comparison of the two modules on that sample. Example::
 
-   a = torch.nn.MultiheadAttention(embed_dim=12,num_heads=4,batch_first=True,kdim=17,vdim=19)
-   a_ = MultiHeadAttention.torch_convert(a)
-   fwd,bwd = a_.test_(B=64,M=100,N=80) # generates sample(batch:64,in-length:100,out-length:80) and returns aligned fwd and bwd values
-   assert all(torch.allclose(u,v,atol=1e-5) for u,v in (fwd,*bwd.values())) # increase atol if it fails
+   mod = torch.nn.MultiheadAttention(embed_dim=12,num_heads=4,batch_first=True,kdim=17,vdim=19)
+   mod_,test = MultiHeadAttention.torch_convert(mod)
+   cmp = test(B=64,M=100,N=80) # generates sample(batch:64,in-length:100,out-length:80) and returns aligned comparisons
+   assert all(torch.allclose(u,v,atol=1e-5) for u,v in cmp.values()) # increase atol if it fails
 
 :param a: the instance to convert
-:return: an equivalent :class:`MultiHeadAttention` instance
+:return: an equivalent :class:`MultiHeadAttention` instance and its test function
     """
 #--------------------------------------------------------------------------------------------------
     def set_data():
@@ -173,7 +176,7 @@ Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of thi
         L = (self.projyʹ,q_bias_d),(self.projx,v_bias_d)
         for proj,b in L: proj.bias.data[0,:,0,:] = torch.stack(b.chunk(a.num_heads))
         self.projy.bias.data[0,0,:] = a.out_proj.bias.data
-    def get_grad():
+    def get_grad()->Generator[tuple[str,torch.Tensor,torch.Tensor],None,None]:
       q_weight_g,k_weight_g,v_weight_g = (a.q_proj_weight.grad,a.k_proj_weight.grad,a.v_proj_weight.grad) if a.in_proj_weight is None else torch.chunk(a.in_proj_weight.grad,3)
       L = ('Λy',self.projyʹ,q_weight_g.T),('Λx',self.projxʹ,k_weight_g.T),('ϴx',self.projx,v_weight_g.T),('ϴy',self.projy,a.out_proj.weight.grad)
       yield from ((p,proj.weight.grad,torch.stack(w.chunk(a.num_heads,dim=1))) for p,proj,w in L)
@@ -188,16 +191,15 @@ Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of thi
     self = MultiHeadAttention(K=a.num_heads,P=a.vdim,Q=a.embed_dim,Pʹ=a.kdim,Qʹ=a.embed_dim,bias=a.in_proj_bias is not None)
     assert self.D == self.Dʹ == a.head_dim # sanity check
     set_data()
-    def test_(B:int,M:int,N:int):
+    def test(B:int,M:int,N:int):
       yʹ = torch.rand(B,N,a.embed_dim)  # query
       xʹ = torch.rand(B,M,a.kdim)  # key
       x = torch.rand(B,M,a.vdim)  # value
       y,_ = a(yʹ,xʹ,x,need_weights=False); y_,_ = self(yʹ,xʹ,x) # forward
       a.zero_grad(); self.zero_grad() # reset all gradients
       torch.mean(y).backward(); torch.mean(y_).backward() # back-propagation
-      return (y,y_),{p:(u,u_) for p,u_,u in get_grad()}
-    self.test_ = test_
-    return self
+      return {'':(y,y_)}|{p:(u,u_) for p,u_,u in get_grad()}
+    return self,test
 
 #==================================================================================================
 class MultiHeadMixedAttention(MultiHeadAttention):
@@ -209,6 +211,7 @@ An instance of this class is a multi-head Mixed attention module. Ref:
 #==================================================================================================
 
   Rʹ:int
+  projzx:'Einsum'; projzy:'Einsum'
 
 #--------------------------------------------------------------------------------------------------
   def __init__(self,Rʹ:int,*args,bias:bool=True,**kargs):
@@ -234,7 +237,7 @@ Additional model parameters for Mixed attention scores are:
     self.projzy = Einsum('krd,bmnr->bkmnd',self.K,Rʹ,self.Dʹ,bias=bias) # Λzy,Λₒ
 
 #--------------------------------------------------------------------------------------------------
-  def forward(self,zʹ,yʹ,xʹ=None,x=None,**kargs):
+  def forward(self,zʹ:torch.Tensor,yʹ:torch.Tensor,xʹ:Optional[torch.Tensor]=None,x:Optional[torch.Tensor]=None,**kargs)->tuple[torch.Tensor,Any]:
     r"""
 Computes the attention scores passed to generalised convolution:
 
@@ -278,6 +281,7 @@ An instance of this class is a multi-head Mixed attention module. Ref:
 #==================================================================================================
 
   Rʹ:int; Dʺ:int
+  projzʹ:'Einsum'; proj1:'Einsum'; proj2:'Einsum'
 
 #--------------------------------------------------------------------------------------------------
   def __init__(self,Rʹ:int,*args,Dʺ=None,bias:bool=True,mlpd:float=3.,**kargs):
@@ -307,7 +311,7 @@ Additional model parameters for Mixed attention scores are:
     self.temperature = torch.tensor(1.)
 
 #--------------------------------------------------------------------------------------------------
-  def forward(self,zʹ,yʹ,xʹ=None,x=None,**kargs):
+  def forward(self,zʹ:torch.Tensor,yʹ:torch.Tensor,xʹ:Optional[torch.Tensor]=None,x:Optional[torch.Tensor]=None,**kargs)->tuple[torch.Tensor,Any]:
     r"""
 Computes the attention scores passed to generalised convolution:
 
@@ -349,6 +353,8 @@ An instance of this class is essentially a Linear module allowing more flexibili
   sig_pattern = re.compile(r'([a-z]+),([a-z]+)->([a-z]+)')
   r"""Pattern for allowed signatures (the 3 groups specify the weight, input and output components)"""
 
+  weight:torch.Tensor; bias:Optional[torch.Tensor]
+
 #--------------------------------------------------------------------------------------------------
   def __init__(self,sig:str,*dims:int,bias:bool=True):
     r"""
@@ -381,7 +387,7 @@ For example with :code:`Einsum('pq,bnp->bnq',P,Q)` where :code:`P,Q` are integer
     if self.bias is not None: torch.nn.init.zeros_(self.bias)
 
 #--------------------------------------------------------------------------------------------------
-  def forward(self,x):
+  def forward(self,x:torch.Tensor)->torch.Tensor:
     r"""
 Computes :math:`y` defined as follows:
 
@@ -416,33 +422,32 @@ where :math:`E_{\textrm{sig}}` denotes the Einsum operator with the signature gi
 
 #--------------------------------------------------------------------------------------------------
   @staticmethod
-  def torch_convert(a:torch.nn.Linear):
+  def torch_convert(a:torch.nn.Linear)->tuple['Einsum',Callable[[int,int],dict[str,tuple[torch.Tensor,torch.Tensor]]]]:
     r"""
-Converts a :class:`torch.nn.Linear` instance into an instance of this class with same behaviour. The returned instance has an additional method :meth:`test_` which, given batch size and sequence length, returns a comparison of the two modules on a random sample. Example::
+Converts a :class:`torch.nn.Linear` instance into an instance of this class with same behaviour (up to numerical instabilities). An additional output is a function :func:`test` which draws a random sample of the module input given batch size and sequence length, and returns a comparison of the two modules on that sample. Example::
 
-   l = torch.nn.Linear(42,17); l_ = Einsum.torch_convert(l)
-   assert l_.sig == 'pq,bnp->bnq' and l_.weight.shape == (42,17)
-   fwd,bwd = l_.test_(64,100) # generates sample(batch:64,length:100) and returns aligned fwd and bwd values
-   assert all(torch.allclose(u,v,atol=1e-6) for u,v in (fwd,*bwd.values())) # increase atol if it fails
+   mod = torch.nn.Linear(42,17); mod_,test = Einsum.torch_convert(mod)
+   assert mod_.sig == 'pq,bnp->bnq' and mod_.weight.shape == (42,17)
+   cmp = test(64,100) # generates sample(batch:64,length:100) and returns aligned fwd and bwd values
+   assert all(torch.allclose(u,v,atol=1e-6) for u,v in cmp.values()) # increase atol if it fails
 
 :param a: the instance to convert
-:return: an equivalent :class:`Einsum` instance
+:return: an equivalent :class:`Einsum` instance and its test function
     """
 #--------------------------------------------------------------------------------------------------
     def set_data():
       self.weight.data[...] = a.weight.data.T
       if a.bias is not None: self.bias.data[0,0,:] = a.bias.data
-    def get_grad():
+    def get_grad()->Generator[tuple[str,torch.Tensor,torch.Tensor],None,None]:
       yield 'weight',self.weight.grad,a.weight.grad.T
       if a.bias is not None: yield 'bias',self.bias.grad[0,0],a.bias.grad
     assert isinstance(a,torch.nn.Linear)
     self = Einsum('pq,bnp->bnq',a.in_features,a.out_features,bias=a.bias is not None)
     set_data()
-    def test_(B:int,M:int):
+    def test(B:int,M:int):
       x = torch.rand(B,M,a.in_features)
       y = a(x); y_ = self(x) # forward
       a.zero_grad(); self.zero_grad() # reset all gradients
       torch.mean(y).backward(); torch.mean(y_).backward() # back-propagation
-      return (y,y_),{p:(u,u_) for p,u_,u in get_grad()}
-    self.test_ = test_
-    return self
+      return {'':(y,y_)}|{p:(u,u_) for p,u_,u in get_grad()}
+    return self,test

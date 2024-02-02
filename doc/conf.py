@@ -19,7 +19,7 @@ sys.path.insert(0,str(pathlib.Path(__file__).resolve().with_name('_pythonpath'))
 
 # -- Project information -----------------------------------------------------
 
-project = 'PYTOOLS'
+project = pathlib.Path(__file__).resolve().parent.parent.name
 copyright = '2020, Jean-Marc Andreoli'
 author = 'Jean-Marc Andreoli'
 
@@ -33,6 +33,7 @@ extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.mathjax',
     'sphinx.ext.viewcode',
+    'sphinx_copybutton',
 ]
 autodoc_typehints = 'description'
 autodoc_typehints_description_target = 'documented'

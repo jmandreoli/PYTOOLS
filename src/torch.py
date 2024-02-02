@@ -170,20 +170,20 @@ Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of thi
     def set_data():
       q_weight_d,k_weight_d,v_weight_d = (a.q_proj_weight.data,a.k_proj_weight.data,a.v_proj_weight.data) if a.in_proj_weight is None else torch.chunk(a.in_proj_weight.data,3)
       L = (self.projyʹ,q_weight_d.T),(self.projxʹ,k_weight_d.T),(self.projx,v_weight_d.T),(self.projy,a.out_proj.weight.data)
-      for proj,w in L: proj.weight.data[...] = torch.stack(w.chunk(a.num_heads,dim=1))
+      for proj,w in L: proj.weight.data[...] = torch.stack(torch.chunk(w,a.num_heads,dim=1))
       if a.in_proj_bias is not None:
         q_bias_d,_,v_bias_d = torch.chunk(a.in_proj_bias.data,3) # ignore useless k_bias_d
         L = (self.projyʹ,q_bias_d),(self.projx,v_bias_d)
-        for proj,b in L: proj.bias.data[0,:,0,:] = torch.stack(b.chunk(a.num_heads))
+        for proj,b in L: proj.bias.data[0,:,0,:] = torch.stack(torch.chunk(b,a.num_heads))
         self.projy.bias.data[0,0,:] = a.out_proj.bias.data
     def get_grad()->Generator[tuple[str,torch.Tensor,torch.Tensor],None,None]:
       q_weight_g,k_weight_g,v_weight_g = (a.q_proj_weight.grad,a.k_proj_weight.grad,a.v_proj_weight.grad) if a.in_proj_weight is None else torch.chunk(a.in_proj_weight.grad,3)
       L = ('Λy',self.projyʹ,q_weight_g.T),('Λx',self.projxʹ,k_weight_g.T),('ϴx',self.projx,v_weight_g.T),('ϴy',self.projy,a.out_proj.weight.grad)
-      yield from ((p,proj.weight.grad,torch.stack(w.chunk(a.num_heads,dim=1))) for p,proj,w in L)
+      yield from ((p,proj.weight.grad,torch.stack(torch.chunk(w,a.num_heads,dim=1))) for p,proj,w in L)
       if a.in_proj_bias is not None:
         q_bias_g,_,v_bias_g = torch.chunk(a.in_proj_bias.grad,3) # ignore useless k_bias_g (theoretically always null)
         L = ('Λₒ',self.projyʹ,q_bias_g),('Θₒ',self.projx,v_bias_g)
-        yield from ((p,proj.bias.grad[0,:,0,:],torch.stack(b.chunk(a.num_heads))) for p,proj,b in L)
+        yield from ((p,proj.bias.grad[0,:,0,:],torch.stack(torch.chunk(b,a.num_heads))) for p,proj,b in L)
         yield 'Θₒₒ',self.projy.bias.grad[0,0],a.out_proj.bias.grad
     assert isinstance(a,torch.nn.MultiheadAttention), 'Argument must be a torch.nn.MultiheadAttention instance'
     assert a.batch_first is True, 'Option batch_first=False not supported (too lazy although easy)'

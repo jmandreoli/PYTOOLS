@@ -34,19 +34,19 @@ Model parameters are
 
 .. math::
 
-   \Theta^{\textrm{(x)}}{:}\langle K,P,D \rangle\; \Theta^{\textrm{(y)}}{:}\langle K,Q,D \rangle\; \Theta^{\textrm{(o)}}{:}\langle K,D \rangle\; \Theta^{\textrm{(oo)}}{:}\langle Q \rangle
+   \Theta^{\textrm{(x)}}{:}\langle K,P,D \rangle\; \Theta^{\textrm{(y)}}{:}\langle K,Q,D \rangle\; \eta{:}\langle K,D \rangle\; \eta^{\textrm{(o)}}{:}\langle Q \rangle
 
 :param K: number of heads
 :param P: input dimension :math:`P`
 :param Q: output dimension :math:`Q`, default :math:`P`
 :param D: convolution head dimension :math:`D`, default :math:`\lfloor\frac{Q}{K}\rfloor`
-:param bias: whether to use the biases :math:`\Theta^{\textrm{(o),(oo)}}`
+:param bias: whether to use the biases :math:`\eta,\eta^{\textrm{(o)}}`
     """
 #--------------------------------------------------------------------------------------------------
     super().__init__()
     K=self._dim(K); P=self._dim(P); Q=self._dim(Q,P); D=self._dim(D,Q//K); self.K,self.P,self.Q,self.D=K,P,Q,D
-    self.projx = Einsum('kpd,bmp->bkmd',K,P,D,bias=bias) # ϴx,ϴₒ
-    self.projy = Einsum('kqd,bknd->bnq',K,Q,D,bias=bias) # ϴy,ϴₒₒ
+    self.projx = Einsum('kpd,bmp->bkmd',K,P,D,bias=bias) # ϴx,η
+    self.projy = Einsum('kqd,bknd->bnq',K,Q,D,bias=bias) # ϴy,ηₒ
 
 #--------------------------------------------------------------------------------------------------
   def forward(self,score:torch.Tensor,x:torch.Tensor,mask:Optional[torch.Tensor]=None,process_attn:Callable[[torch.Tensor],Any]=(lambda a:None))->tuple[torch.Tensor,Any]:
@@ -56,10 +56,10 @@ Generalised Convolution formula (with biases):
 .. math::
 
    \begin{align*}
-   y_b & = \sum_k A_{bk}^\top\bar{x}_{bk}\Theta_k^{\textrm{(y)}\top}+\mathbf{1}_N\otimes\Theta^{\textrm{(oo)}}\\
+   y_b & = \sum_k A_{bk}^\top\bar{x}_{bk}\Theta_k^{\textrm{(y)}\top}+\mathbf{1}_N\otimes\eta^{\textrm{(o)}}\\
    \textrm{where } & A_{bk}{:}\langle M,N \rangle\; \bar{x}_{bk}{:}\langle M,D \rangle\\
    A_{bk} & = \textrm{softmax}_{\textrm{col}}\frac{1}{\textrm{temp}}(\bar{A}_{bk}+\textrm{mask}_b)\\
-   \bar{x}_{bk} &= x_b \Theta_k^{\textrm{(x)}}+\mathbf{1}_M\otimes\Theta_k^{\textrm{(o)}}
+   \bar{x}_{bk} &= x_b \Theta_k^{\textrm{(x)}}+\mathbf{1}_M\otimes\eta_k
    \end{align*}
 
 :param score: tensor :math:`\bar{A}{:}\langle B,K,M,N \rangle` (attention scores)
@@ -90,11 +90,9 @@ Generalised Convolution formula (with biases):
     return d
 
 #==================================================================================================
-class MultiHeadAttention(GeneralisedConvolution):
+class GeneralisedMultiHeadAttention(GeneralisedConvolution):
   r"""
-An instance of this class is a Vanilla multi-head attention module. Ref:
-
-  Vaswani et al. 2017. ‘`Attention Is All You Need <http://arxiv.org/abs/1706.03762>`_’. arXiv: 1706.03762
+This class regroups a number of subclasses in which the scores are computed from projections of the inputs.
   """
 #==================================================================================================
 
@@ -102,55 +100,88 @@ An instance of this class is a Vanilla multi-head attention module. Ref:
   projxʹ:'Einsum'; projyʹ:'Einsum'
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,*args,Pʹ:Optional[int]=None,Qʹ:Optional[int]=None,Dʹ:Optional[int]=None,bias:bool=True,_bias=False,**kargs):
+  def __init__(self,*args,Pʹ:Optional[int]=None,Qʹ:Optional[int]=None,Dʹ:Optional[int]=None,bias:bool=True,_bias:Optional[bool]=None,**kargs):
     r"""
-Additional model parameters for Vanilla attention are:
+Additional model parameters for generalised multi-head attention are:
 
 .. math::
 
-   \Lambda^{\textrm{(x)}}{:}\langle K,P',D' \rangle\; \Lambda^{\textrm{(y)}}{:}\langle K,Q',D' \rangle\; \Lambda^{\textrm{(o)}}{:}\langle K,D' \rangle
+   \Lambda^{\textrm{(x)}}{:}\langle K,P',D' \rangle\; \Lambda^{\textrm{(y)}}{:}\langle K,Q',D' \rangle\; \beta^{\textrm{(x)}},\beta^{\textrm{(y)}}{:}\langle K,D' \rangle
 
 :param Pʹ: key-input dimension :math:`P'`, default :math:`P`
 :param Qʹ: query-input dimension :math:`Q'`, default :math:`Q`
 :param Dʹ: attention head dimension :math:`D'`, default :math:`\lfloor\frac{Q'}{K}\rfloor`
-:param bias: whether to use the bias :math:`\Lambda^{\textrm{(o)}}` + the convolution biases
+:param bias: whether to use the bias :math:`\beta^{\textrm{(x),(y)}}` + the convolution biases
 :param args: passed to :class:`GeneralisedConvolution` constructor
 :param kargs: passed to :class:`GeneralisedConvolution` constructor
     """
 #--------------------------------------------------------------------------------------------------
     super().__init__(*args,bias=bias,**kargs)
     Pʹ=self._dim(Pʹ,self.P); Qʹ=self._dim(Qʹ,self.Q); Dʹ=self._dim(Dʹ,Qʹ//self.K); self.Pʹ,self.Qʹ,self.Dʹ=Pʹ,Qʹ,Dʹ
-    self.projxʹ = Einsum('kpd,bmp->bkmd',self.K,Pʹ,Dʹ,bias=_bias) # Λx
-    self.projyʹ = Einsum('kqd,bnq->bknd',self.K,Qʹ,Dʹ,bias=bias) # Λy,Λₒ
+    self.projxʹ = Einsum('kpd,bmp->bkmd',self.K,Pʹ,Dʹ,bias=(bias if _bias is None else _bias)) # Λx,βx
+    self.projyʹ = Einsum('kqd,bnq->bknd',self.K,Qʹ,Dʹ,bias=bias) # Λy,βy
     self.temperature = torch.sqrt(torch.tensor(Dʹ))
 
 #--------------------------------------------------------------------------------------------------
-  def forward(self,yʹ:torch.Tensor,xʹ:Optional[torch.Tensor]=None,x:Optional[torch.Tensor]=None,**kargs)->tuple[torch.Tensor,Any]:
+  def forward(self,yʹ:torch.Tensor,xʹ:Optional[torch.Tensor]=None,x:Optional[torch.Tensor]=None,ctx:tuple[torch.Tensor,...]=(),**kargs)->tuple[torch.Tensor,Any]:
     r"""
-Computes the attention scores passed to generalised convolution; include biases, not described in the paper, to conform with :class:`torch.nn.MultiheadAttention`:
+Uses generalised attention scores obtained from projection of the (key and query) inputs.
 
-.. math::
+  .. math::
 
    \begin{align*}
-   \bar{A}_{bk} & = \bar{x}_{bk}\bar{y}_{bk}^\top\\
-   \textrm{where } & \bar{x}_{bk}{:}\langle M,D' \rangle,\; \bar{y}_{bk}{:}\langle N,D' \rangle\\
-   \bar{x}_{bk} & = x'_b\Lambda_k^{\textrm{(x)}}\\
-   \bar{y}_{bk} & = y'_b\Lambda_k^{\textrm{(y)}}+\mathbf{1}_N\otimes\Lambda_k^{\textrm{(o)}}
+   & \bar{x}_{bk}{:}\langle M,D' \rangle,\; \bar{y}_{bk}{:}\langle N,D' \rangle\\
+   \bar{x}_{bk} & = x'_b\Lambda_k^{\textrm{(x)}}+\mathbf{1}_M\otimes\beta^{\textrm{(x)}}_k\\
+   \bar{y}_{bk} & = y'_b\Lambda_k^{\textrm{(y)}}+\mathbf{1}_N\otimes\beta^{\textrm{(y)}}_k
    \end{align*}
 
 :param yʹ: tensor :math:`y'{:}\langle B,N,Q' \rangle` (query-input)
 :param xʹ: tensor :math:`x'{:}\langle B,M,P' \rangle` (key-input), default :math:`y'`
 :param x: passed to :meth:`GeneralisedConvolution.forward` (value-input), default :math:`x'`
+:param ctx: context for scoring
 :param kargs: passed to :meth:`GeneralisedConvolution.forward`
 :return: see :meth:`GeneralisedConvolution.forward`
     """
 #--------------------------------------------------------------------------------------------------
     if xʹ is None: xʹ = yʹ
     if x is None: x = xʹ
-    x_ = self.projxʹ(xʹ) # x_: B,K,M,Dʹ
-    y_ = self.projyʹ(yʹ) # y_: B,K,N,Dʹ
-    r = torch.einsum('bkmd,bknd->bkmn',x_,y_) # r: B,K,M,N
-    return super().forward(r,x,**kargs)
+    x̄ = self.projxʹ(xʹ) # x_: B,K,M,Dʹ
+    ȳ = self.projyʹ(yʹ) # y_: B,K,N,Dʹ
+    return super().forward(self.score(x̄,ȳ,*ctx),x,**kargs)
+
+#==================================================================================================
+class MultiHeadAttention(GeneralisedMultiHeadAttention):
+  r"""
+An instance of this class is a Vanilla multi-head attention module. Ref:
+
+  Vaswani et al. 2017. ‘`Attention Is All You Need <http://arxiv.org/abs/1706.03762>`_’. arXiv: 1706.03762
+  """
+#==================================================================================================
+
+#--------------------------------------------------------------------------------------------------
+  def __init__(self,*args,**kargs):
+    r"""
+Same as :class:`GeneralisedMultiHeadAttention` constructor, but disables bias :math:`\beta^{\textrm{(x)}}` which is redundant.
+
+:param args: passed to :class:`GeneralisedMultiHeadAttention` constructor
+:param kargs: passed to :class:`GeneralisedMultiHeadAttention` constructor
+    """
+#--------------------------------------------------------------------------------------------------
+    super().__init__(*args,_bias=False,**kargs)
+
+#--------------------------------------------------------------------------------------------------
+  @staticmethod
+  def score(x̄:torch.Tensor,ȳ:torch.Tensor)->torch.Tensor:
+    r"""
+Computes the attention scores used in :meth:`forward`. Conforms to :class:`torch.nn.MultiheadAttention`
+
+:param x̄: tensor :math:`\bar{x}{:}\langle B,K,M,D' \rangle` (key-proj)
+:param ȳ: tensor :math:`\bar{y}{:}\langle B,K,N,D' \rangle` (query-proj)
+:return: tensor :math:`\langle B,K,M,N \rangle`
+    """
+#--------------------------------------------------------------------------------------------------
+    r = torch.einsum('bkmd,bknd->bkmn',x̄,ȳ)
+    return r
 
 #--------------------------------------------------------------------------------------------------
   @staticmethod
@@ -182,9 +213,9 @@ Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of thi
       yield from ((p,proj.weight.grad,torch.stack(torch.chunk(w,a.num_heads,dim=1))) for p,proj,w in L)
       if a.in_proj_bias is not None:
         q_bias_g,_,v_bias_g = torch.chunk(a.in_proj_bias.grad,3) # ignore useless k_bias_g (theoretically always null)
-        L = ('Λₒ',self.projyʹ,q_bias_g),('Θₒ',self.projx,v_bias_g)
+        L = ('βy',self.projyʹ,q_bias_g),('η',self.projx,v_bias_g)
         yield from ((p,proj.bias.grad[0,:,0,:],torch.stack(torch.chunk(b,a.num_heads))) for p,proj,b in L)
-        yield 'Θₒₒ',self.projy.bias.grad[0,0],a.out_proj.bias.grad
+        yield 'ηₒ',self.projy.bias.grad[0,0],a.out_proj.bias.grad
     assert isinstance(a,torch.nn.MultiheadAttention), 'Argument must be a torch.nn.MultiheadAttention instance'
     assert a.batch_first is True, 'Option batch_first=False not supported (too lazy although easy)'
     assert a.bias_k is None and a.bias_v is None, 'Extra biases not supported (no idea what they do)'
@@ -202,7 +233,71 @@ Converts a :class:`torch.nn.MultiheadAttention` instance into an instance of thi
     return self,test
 
 #==================================================================================================
-class MultiHeadMixedAttention(MultiHeadAttention):
+class MultiHeadMixedAttention(GeneralisedMultiHeadAttention):
+  r"""
+An instance of this class is a multi-head Mixed attention module, inspired by various papers in the literature.
+  """
+#==================================================================================================
+
+  Rʹ:int
+  projzx:'Einsum'; projzy:'Einsum'
+
+#--------------------------------------------------------------------------------------------------
+  def __init__(self,Rʹ:int,*args,**kargs):
+    r"""
+Additional model parameters for Mixed attention scores are:
+
+.. math::
+
+   \begin{array}{l}
+   \Lambda^{\textrm{(zx)}},\Lambda^{\textrm{(zy)}}{:}\langle K,R',D' \rangle
+   \end{array}
+
+:param Rʹ: edge-input dimension :math:`R'`
+:param args: passed to :class:`GeneralisedMultiHeadAttention` constructor
+:param kargs: passed to :class:`GeneralisedMultiHeadAttention` constructor
+    """
+#--------------------------------------------------------------------------------------------------
+    super().__init__(*args,**kargs) # Λx,βx  Λy,βy
+    self.Rʹ=Rʹ=self._dim(Rʹ)
+    self.projzx = Einsum('krd,bmnr->bkmnd',self.K,Rʹ,self.Dʹ,bias=False) # Λzx
+    self.projzy = Einsum('krd,bmnr->bkmnd',self.K,Rʹ,self.Dʹ,bias=False) # Λzy
+
+#--------------------------------------------------------------------------------------------------
+  def forward(self,zʹ:torch.Tensor,*args,**kargs):
+    r"""
+Invokes :meth:`GeneralisedMultiHeadAttention.forward` with edge input as scoring context.
+
+:param zʹ: tensor :math:`z'{:}\langle B,M,N,R' \rangle` (edge-input)
+    """
+#--------------------------------------------------------------------------------------------------
+    return super().forward(*args,ctx=(zʹ,),**kargs)
+
+#--------------------------------------------------------------------------------------------------
+  def score(self,x̄:torch.Tensor,ȳ:torch.Tensor,zʹ:torch.Tensor)->torch.Tensor:
+    r"""
+Computes the attention scores passed to generalised convolution:
+
+.. math::
+
+   \begin{align*}
+   \bar{A}_{bk} & = E_{\frac{nmd,mnd}{mn}}(\;\mathbf{1}_N{\otimes}\bar{x}_{bk}{+}E_{\frac{mnr,rd}{nmd}}(z'_b,\Lambda_k^{\textrm{(zx)}})\;,\;\mathbf{1}_M{\otimes}\bar{y}_{bk}{+}E_{\frac{mnr,rd}{mnd}}(z'_b,\Lambda_k^{\textrm{(zy)}})\;)
+   \end{align*}
+
+:param x̄: tensor :math:`\bar{x}{:}\langle B,K,M,D' \rangle` (key-proj)
+:param ȳ: tensor :math:`\bar{y}{:}\langle B,K,N,D' \rangle` (query-proj)
+:param zʹ: tensor :math:`z'{:}\langle B,M,N,R' \rangle` (edge-input)
+:return: see :meth:`GeneralisedMultiHeadAttention.score`
+    """
+#--------------------------------------------------------------------------------------------------
+    z̄ = self.projzx(zʹ) # z̄: B,K,M,N,D'
+    r = torch.einsum('bkmd,bkmnd->bkmn',x̄,z̄)
+    z̄ = self.projzy(zʹ) # z̄: B,K,M,N,D'
+    r = r + torch.einsum('bknd,bkmnd->bkmn',ȳ,z̄)
+    return r
+
+#==================================================================================================
+class MultiHeadMixedAttentionAlt1(GeneralisedMultiHeadAttention):
   r"""
 An instance of this class is a multi-head Mixed attention module. Ref:
 
@@ -214,65 +309,62 @@ An instance of this class is a multi-head Mixed attention module. Ref:
   projzx:'Einsum'; projzy:'Einsum'
 
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,Rʹ:int,*args,bias:bool=True,**kargs):
+  def __init__(self,Rʹ:int,*args,**kargs):
     r"""
 Additional model parameters for Mixed attention scores are:
 
 .. math::
 
    \begin{array}{l}
-   \Lambda^{\textrm{(x)}}{:}\langle K,P',D' \rangle\; \Lambda^{\textrm{(y)}}{:}\langle K,Q',D' \rangle\; \Lambda^{\textrm{(zx)}},\Lambda^{\textrm{(zy)}}{:}\langle K,R',D' \rangle\\
-   \Lambda^{\textrm{(ox)}},\Lambda^{\textrm{(oy)}},\Lambda^{\textrm{(o)}}{:}\langle K,D' \rangle
+   \Lambda^{\textrm{(zx)}},\Lambda^{\textrm{(zy)}}{:}\langle K,R',D' \rangle
    \end{array}
 
-:param Rʹ: matrix-input dimension :math:`R'`
-:param bias: whether to use the biases :math:`\Lambda^{\textrm{(ox),(oy),(o)}}` + the convolution biases
-:param args: passed to :class:`MultiHeadAttention` constructor
-:param kargs: passed to :class:`MultiHeadAttention` constructor
+:param Rʹ: edge-input dimension :math:`R'`
+:param args: passed to :class:`GeneralisedMultiHeadAttention` constructor
+:param kargs: passed to :class:`GeneralisedMultiHeadAttention` constructor
     """
 #--------------------------------------------------------------------------------------------------
-    super().__init__(*args,bias=bias,_bias=bias,**kargs) # Λx,Λₒx  Λy,Λₒy
+    super().__init__(*args,**kargs) # Λx,βx  Λy,βy
     self.Rʹ=Rʹ=self._dim(Rʹ)
     self.projzx = Einsum('krd,bmnr->bkmnd',self.K,Rʹ,self.Dʹ,bias=False) # Λzx
-    self.projzy = Einsum('krd,bmnr->bkmnd',self.K,Rʹ,self.Dʹ,bias=bias) # Λzy,Λₒ
+    self.projzy = Einsum('krd,bmnr->bkmnd',self.K,Rʹ,self.Dʹ,bias=False) # Λzy
 
 #--------------------------------------------------------------------------------------------------
-  def forward(self,zʹ:torch.Tensor,yʹ:torch.Tensor,xʹ:Optional[torch.Tensor]=None,x:Optional[torch.Tensor]=None,**kargs)->tuple[torch.Tensor,Any]:
+  def forward(self,zʹ:torch.Tensor,*args,**kargs)->tuple[torch.Tensor,Any]:
+    r"""
+Invokes :meth:`GeneralisedMultiHeadAttention.forward` with edge input as scoring context.
+
+:param zʹ: tensor :math:`z'{:}\langle B,M,N,R' \rangle` (edge-input)
+    """
+#--------------------------------------------------------------------------------------------------
+    return super().forward(*args,ctx=(zʹ,),**kargs)
+
+#--------------------------------------------------------------------------------------------------
+  def score(self,x̄:torch.Tensor,ȳ:torch.Tensor,zʹ:torch.Tensor)->torch.Tensor:
     r"""
 Computes the attention scores passed to generalised convolution:
 
 .. math::
 
    \begin{align*}
-   \bar{A}_{bk} & = \bar{x}_{bk}\bar{y}_{bk}^\top+E_{\frac{md,mnd}{mn}}(\bar{x}_{bk},\bar{z}^{\textrm{(y)}}_{bk})+E_{\frac{nd,mnd}{mn}}(\bar{y}_{bk},\bar{z}^{\textrm{(x)}}_{bk})\\
-   \textrm{where } & \bar{x}_{bk}{:}\langle M,D' \rangle,\; \bar{y}_{bk}{:}\langle N,D' \rangle,\; \bar{z}_{bk}{:}\langle M,N,D' \rangle\\
-   \bar{x}_{bk} & = x'_b\Lambda_k^{\textrm{(x)}}+\mathbf{1}_M\otimes\Lambda_k^{\textrm{(ox)}}\\
-   \bar{y}_{bk} & = y'_b\Lambda_k^{\textrm{(y)}}+\mathbf{1}_N\otimes\Lambda_k^{\textrm{(oy)}}\\
-   \bar{z}^{\textrm{(x)}}_{bk} & = z'_b\Lambda_k^{\textrm{(zx)}}\\
-   \bar{z}^{\textrm{(y)}}_{bk} & = z'_b\Lambda_k^{\textrm{(zy)}}+\mathbf{1}_M\otimes\mathbf{1}_N\otimes\Lambda_k^{\textrm{(o)}}
+   \bar{A}_{bk} & = \bar{x}_{bk}\bar{y}_{bk}^\top+E_{\frac{md,mnr,rd}{mn}}(\bar{x}_{bk},z'_b,\Lambda_k^{\textrm{(zy)}})+E_{\frac{nd,mnr,rd}{mn}}(\bar{y}_{bk},z'_b,\Lambda_k^{\textrm{(zx)}})
    \end{align*}
 
-:param zʹ: tensor :math:`z'{:}\langle B,M,N,R' \rangle` (matrix-input)
-:param yʹ: tensor :math:`y'{:}\langle B,N,Q' \rangle` (query-input)
-:param xʹ: tensor :math:`x'{:}\langle B,M,P' \rangle` (key-input), default :math:`y'`
-:param x: passed to :meth:`GeneralisedConvolution.forward` (value-input), default :math:`x'`
-:param kargs: passed to :meth:`GeneralisedConvolution.forward`
-:return: see :meth:`GeneralisedConvolution.forward`
+:param x̄: tensor :math:`\bar{x}{:}\langle B,K,M,D' \rangle` (key-proj)
+:param ȳ: tensor :math:`\bar{y}{:}\langle B,K,N,D' \rangle` (query-proj)
+:param zʹ: tensor :math:`z'{:}\langle B,M,N,R' \rangle` (edge-input)
+:return: see :meth:`GeneralisedMultiHeadAttention.score`
     """
 #--------------------------------------------------------------------------------------------------
-    if xʹ is None: xʹ = yʹ
-    if x is None: x = xʹ
-    x_ = self.projxʹ(xʹ) # x_: B,K,M,D'
-    y_ = self.projyʹ(yʹ) # y_: B,K,N,D'
-    r = torch.einsum('bkmd,bknd->bkmn',x_,y_) # standard attention, r: B,K,M,N
-    z_ = self.projzx(zʹ) # z_: B,K,M,N,D'
-    r = r + torch.einsum('bknd,bkmnd->bkmn',y_,z_)
-    z_ = self.projzy(zʹ) # z_: B,K,M,N,D'
-    r = r + torch.einsum('bkmd,bkmnd->bkmn',x_,z_)
-    return super(MultiHeadAttention,self).forward(r,x,**kargs)
+    r = torch.einsum('bkmd,bknd->bkmn',x̄,ȳ) # standard attention, r: B,K,M,N
+    z̄ = self.projzx(zʹ) # z̄: B,K,M,N,D'
+    r = r + torch.einsum('bknd,bkmnd->bkmn',ȳ,z̄)
+    z̄ = self.projzy(zʹ) # z̄: B,K,M,N,D'
+    r = r + torch.einsum('bkmd,bkmnd->bkmn',x̄,z̄)
+    return r
 
 #==================================================================================================
-class MultiHeadMixedAttentionAlt(MultiHeadAttention):
+class MultiHeadMixedAttentionAlt2(GeneralisedMultiHeadAttention):
   r"""
 An instance of this class is a multi-head Mixed attention module. Ref:
 
@@ -291,58 +383,56 @@ Additional model parameters for Mixed attention scores are:
 .. math::
 
    \begin{array}{l}
-   \Lambda^{\textrm{(x)}}{:}\langle K,P',D' \rangle\; \Lambda^{\textrm{(y)}}{:}\langle K,Q',D' \rangle\; \Lambda^{\textrm{(z)}}{:}\langle K,R',D'' \rangle\\
-   \Lambda^{\textrm{(o)}}{:}\langle K,D' \rangle\; \alpha,\beta,\Lambda^{\textrm{(oo)}}{:}\langle K,D'' \rangle
+   \Lambda^{\textrm{(z)}}{:}\langle K,R',D'' \rangle\; \alpha,\alpha'{:}\langle K,D'' \rangle
    \end{array}
 
-:param Rʹ: matrix-input dimension :math:`R'`
+:param Rʹ: edge-input dimension :math:`R'`
 :param Dʺ: internal multi-layer perceptron dimension :math:`D''` (default see below)
 :param mlpd: the default value for :math:`D''` is given by :math:`\lfloor R'{\times}\textrm{mlpd}\rfloor`
-:param bias: whether to use the biases :math:`\Lambda^{\textrm{(o),(oo)}}` + the convolution biases
-:param args: passed to :class:`MultiHeadAttention` constructor
-:param kargs: passed to :class:`MultiHeadAttention` constructor
+:param args: passed to :class:`GeneralisedMultiHeadAttention` constructor
+:param kargs: passed to :class:`GeneralisedMultiHeadAttention` constructor
     """
 #--------------------------------------------------------------------------------------------------
-    super().__init__(*args,bias=bias,**kargs) # Λx  Λy,Λₒ
+    super().__init__(*args,**kargs) # Λx,βx  Λy,βy
     self.Rʹ=Rʹ=self._dim(Rʹ); assert isinstance(mlpd,float); self.Dʺ=Dʺ=self._dim(Dʺ,int(mlpd*Rʹ))
-    self.projzʹ = Einsum('krd,bmnr->bkmnd',self.K,Rʹ,Dʺ,bias=bias) # Λz,Λₒₒ
+    self.projzʹ = Einsum('krd,bmnr->bkmnd',self.K,Rʹ,Dʺ,bias=False) # Λz
     self.proj1 = Einsum('kd,bkmn->bkmnd',self.K,Dʺ,bias=False) # α
-    self.proj2 = Einsum('kd,bkmnd->bkmn',self.K,Dʺ,bias=False) # β
+    self.proj2 = Einsum('kd,bkmnd->bkmn',self.K,Dʺ,bias=False) # α'
     self.temperature = torch.tensor(1.)
 
 #--------------------------------------------------------------------------------------------------
-  def forward(self,zʹ:torch.Tensor,yʹ:torch.Tensor,xʹ:Optional[torch.Tensor]=None,x:Optional[torch.Tensor]=None,**kargs)->tuple[torch.Tensor,Any]:
+  def forward(self,zʹ:torch.Tensor,*args,**kargs)->tuple[torch.Tensor,Any]:
+    r"""
+Invokes :meth:`GeneralisedMultiHeadAttention.forward` with edge input as scoring context.
+
+:param zʹ: tensor :math:`z'{:}\langle B,M,N,R' \rangle` (edge-input)
+    """
+#--------------------------------------------------------------------------------------------------
+    return super().forward(*args,ctx=(zʹ,),**kargs)
+
+#--------------------------------------------------------------------------------------------------
+  def score(self,x̄:torch.Tensor,ȳ:torch.Tensor,zʹ:torch.Tensor)->torch.Tensor:
     r"""
 Computes the attention scores passed to generalised convolution:
 
 .. math::
 
    \begin{align*}
-   \bar{A}_{bk} & = \textrm{relu}(\bar{x}_{bk}\bar{y}_{bk}^\top\otimes\alpha_k+\bar{z}_{bk})\beta_k\\
-   \textrm{where } & \bar{x}_{bk}{:}\langle M,D' \rangle,\; \bar{y}_{bk}{:}\langle N,D' \rangle,\; \bar{z}_{bk}{:}\langle M,N,D''\rangle\\
-   \bar{x}_{bk} & = x'_b\Lambda_k^{\textrm{(x)}}\\
-   \bar{y}_{bk} & = y'_b\Lambda_k^{\textrm{(y)}}+\mathbf{1}_N\otimes\Lambda_k^{\textrm{(o)}}\\
-   \bar{z}_{bk} & = z'_b\Lambda_k^{\textrm{(z)}}+\mathbf{1}_M\otimes\mathbf{1}_N\otimes\Lambda_k^{\textrm{(oo)}}
+   \bar{A}_{bk} & = \textrm{relu}(\bar{x}_{bk}\bar{y}_{bk}^\top\otimes\alpha_k+z'_b\Lambda_k^{\textrm{(z)}})\alpha'_k
    \end{align*}
 
-:param zʹ: tensor :math:`z'{:}\langle B,M,N,R' \rangle` (matrix-input)
-:param yʹ: tensor :math:`y'{:}\langle B,N,Q' \rangle` (query-input)
-:param xʹ: tensor :math:`x'{:}\langle B,M,P' \rangle` (key-input), default :math:`y'`
-:param x: passed to :meth:`GeneralisedConvolution.forward` (value-input), default :math:`x'`
-:param kargs: passed to :meth:`GeneralisedConvolution.forward`
-:return: see :meth:`GeneralisedConvolution.forward`
+:param x̄: tensor :math:`\bar{x}{:}\langle B,K,M,D' \rangle` (key-proj)
+:param ȳ: tensor :math:`\bar{y}{:}\langle B,K,N,D' \rangle` (query-proj)
+:param zʹ: tensor :math:`z'{:}\langle B,M,N,R' \rangle` (edge-input)
+:return: see :meth:`GeneralisedMultiHeadAttention.score`
     """
 #--------------------------------------------------------------------------------------------------
-    if xʹ is None: xʹ = yʹ
-    if x is None: x = xʹ
-    x_ = self.projxʹ(xʹ) # x_: B,K,M,Dʹ
-    y_ = self.projyʹ(yʹ) # y_: B,K,N,Dʹ
-    z_ = self.projzʹ(zʹ) # z_: B,K,M,N,D''
-    r = torch.einsum('bkmd,bknd->bkmn',x_,y_) # r: B,K,M,N
-    r = self.proj1(r) + z_ # r: B,K,M,N,D''
+    r = torch.einsum('bkmd,bknd->bkmn',x̄,ȳ) # r: B,K,M,N
+    z̄ = self.projzʹ(zʹ) # z̄: B,K,M,N,D''
+    r = self.proj1(r) + z̄ # r: B,K,M,N,D''
     torch.relu_(r)
     r = self.proj2(r) # r: B,K,M,N
-    return super(MultiHeadAttention,self).forward(r,x,**kargs)
+    return r
 
 #==================================================================================================
 class Einsum (torch.nn.Module):
@@ -361,13 +451,13 @@ An instance of this class is essentially a Linear module allowing more flexibili
 Model parameters are
 
 * a weight tensor :math:`\Lambda` matching the weight component of *sig* and
-* a bias tensor :math:`\Lambda^{\textrm{(o)}}` matching the intersection of the output component and the weight component of *sig*.
+* a bias tensor :math:`\beta` matching the intersection of the output component and the weight component of *sig*.
 
 For example with :code:`Einsum('pq,bnp->bnq',P,Q)` where :code:`P,Q` are integers, the model parameters are:
 
 .. math::
 
-   \Lambda{:}\langle P,Q\rangle\; \Lambda^{\textrm{(o)}}{:}\langle Q\rangle
+   \Lambda{:}\langle P,Q\rangle\; \beta{:}\langle Q\rangle
 
 :param sig: an einsum-like signature conforming to :attr:`sig_pattern`
 :param dims: shape of the weight tensor
@@ -377,7 +467,7 @@ For example with :code:`Einsum('pq,bnp->bnq',P,Q)` where :code:`P,Q` are integer
     super().__init__()
     self.sig,bias_dims = sig,self._parse(sig,dims,bias)
     self.weight =  torch.nn.Parameter(torch.empty(*dims)) # Λ
-    self.bias = None if bias_dims is None else torch.nn.Parameter(torch.empty(*bias_dims)) # Λₒ
+    self.bias = None if bias_dims is None else torch.nn.Parameter(torch.empty(*bias_dims)) # β
     self._reset_params()
 
 #--------------------------------------------------------------------------------------------------
@@ -393,9 +483,9 @@ Computes :math:`y` defined as follows:
 
 .. math::
 
-   y = E_{\textrm{sig}}(\Lambda,x) + \textrm{reshape}(\Lambda^{\textrm{(o)}})
+   y = E_{\textrm{sig}}(\Lambda,x) + \textrm{reshape}(\beta)
 
-where :math:`E_{\textrm{sig}}` denotes the Einsum operator with the signature given by attribute :attr:`sig`, and parameter :math:`\Lambda^{\textrm{(o)}}` is reshaped to match the output component of the signature (in the example, it becomes :math:`\mathbf{1}_B\otimes\mathbf{1}_N\otimes\Lambda^{\textrm{(o)}}` where dimensions :math:`B,N` come from the input :math:`x`).
+where :math:`E_{\textrm{sig}}` denotes the Einsum operator with the signature given by attribute :attr:`sig`, and parameter :math:`\beta` is reshaped to match the output component of the signature (in the example, it becomes :math:`\mathbf{1}_B\otimes\mathbf{1}_N\otimes\beta` where dimensions :math:`B,N` come from the input :math:`x`).
 
 :param x: tensor :math:`x` matching the input component of the signature (in the example :math:`x{:}\langle B,N,P\rangle`)
 :return: tensor :math:`y` matching the output component of the signature (in the example :math:`y{:}\langle B,N,Q\rangle`)

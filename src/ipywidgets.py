@@ -101,7 +101,7 @@ An instance of this class is an app to display a (long) sequence object in pagin
     if P == 1: w_pager = Label('1')
     else: w_pager = IntSlider(start,min=1,max=P,description='page:',layout=dict(width='10cm'),readout=False,style=AutoWidthStyle)
     self.w_pager = w_pager
-    w_pos = Label('',layout=dict(width='1cm',border='thin solid'))
+    w_pos = Label(f'',layout=dict(border='thin solid',padding='0mm 1mm 0mm 1mm'),style=AutoWidthStyle)
     super().__init__([w_out],toolbar=[w_pager,w_pos])
     # event handling
     def show(n):

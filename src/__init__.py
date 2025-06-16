@@ -6,10 +6,14 @@
 #
 
 from __future__ import annotations
-import logging; logger = logging.getLogger(__name__)
+import logging;
+
+from jedi.inference.value.iterable import Sequence
+
+logger = logging.getLogger(__name__)
 import os, re, pickle, collections
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Tuple
-if False: import ast,sqlalchemy,lxml
+if False: import ast,sqlalchemy,lxml,imaplib,datetime # trick mypy to import these modules
 
 #==================================================================================================
 class owrap:
@@ -57,70 +61,7 @@ Keys in the reference are turned into attributes of the proxy. If *__ref__* is :
   def __repr__(self): return repr(self.__ref__)
 
 #==================================================================================================
-class fmtwrap(collections.abc.MutableMapping):
-  r"""
-Instances of this class provide a formatting wrapper to an underlying mapping object. Each instance keeps a list of visible keys in the reference object.
-
-* accessing a key raises an error if it is not visible, otherwises returns the formatted value of that same key in the reference object
-* assigning a key to a value forwards the assignment to the reference object, and also memorises the key as visible. If the key starts with `_`, that character is first dropped and the key is, on the contrary, removed from the visible list if present.
-* deleting a key deletes it from both the reference object and the visible list.
-
-:param ref: the reference object (a possibly mutable mapping), of which this instance is to be a partial proxy
-
-E.g.::
-
-   r = {}; x = fmtwrap(r)
-   x.fmt.update(pi='{:.3f}'.format,title=str.title)
-   x.update(pi=3.14,title='the value of pi',a='something',_b='another')
-   assert x==dict(pi='3.140',title='The Value Of Pi',a="'something'")
-   assert r==dict(pi=3.14,title='the value of pi',a='something',b='another')
-   del x['title']
-   assert x==dict(pi='3.140',a="'something'") and r==dict(pi=3.14,a='something',b='another')
-   x.update(pi=3.141592,_a='boo')
-   assert x==dict(pi='3.142') and r==dict(pi=3.141592,a='boo',b='another')
-   x.update(z=42)
-   x.fmt.update(z='{:x}'.format)
-   assert x==dict(pi='3.142',z='2a') and r==dict(pi=3.141592,a='boo',b='another',z=42)
-  """
-#==================================================================================================
-  ref:MutableMapping[str,Any]
-  r"""The reference mapping object"""
-  fmt:MutableMapping[str,Callable[[Any],str]]
-  r"""The formatters (default is function :func:`repr`)"""
-
-  def __init__(self,ref): self.fmt = {}; self.visible = {}; self.ref = ref
-  def __getitem__(self,k):
-    if self.visible.get(k): return self.fmt.get(k,repr)(self.ref[k])
-    else: raise KeyError(k)
-  def __setitem__(self,k,v):
-    if k.startswith('_'): k = k[1:]; self.visible.pop(k,None)
-    else: self.visible[k] = True
-    self.ref[k] = v
-  def __delitem__(self,k):
-    del self.visible[k]
-    del self.ref[k]
-  def __iter__(self): yield from iter(self.visible)
-  def __len__(self): return len(self.visible)
-#--------------------------------------------------------------------------------------------------
-  def describe(self,tab:str='',lim:int=120,file=None):
-    r"""Pretty-prints out this instance. Each of the possibly multiple lines of output are indented by a prefix given by parameter *tab* and clipped at a number of characters (including the prefix) given by parameter *lim*."""
-#--------------------------------------------------------------------------------------------------
-    n = max(map(len,self))
-    lim = lim-len(tab)-n-3
-    if lim<10: print(tab,'...',file=file)
-    else:
-      def clip(s:str,lim:int=lim):
-        n = len(s)
-        if n<=lim: return s
-        n = (n-3)//2
-        return f'{s[:n]}...{s[-n:]}'
-      for k,v in self.items():
-        for i,s in enumerate(v.split('\n')):
-          print(tab,(k if i==0 else '').ljust(n),(' = ' if i==0 else '.. '),clip(s),sep='',file=file)
-    print(end='',file=file,flush=True)
-
-#==================================================================================================
-class forward:
+class _forward:
   r"""
 This object allows to name callable members of module/packages without loading them. They are loaded only on actual call. Example::
 
@@ -143,7 +84,7 @@ This object allows to name callable members of module/packages without loading t
   def __getstate__(self): return self.__spec__
   def __setstate__(self,s): self.__spec__ = s; self.__value__ = None
   def __repr__(self): return 'forward<{}{}>'.format('.'.join(self.__spec__),('' if self.__value__ is None else ':incarnated'))
-forward = forward()
+forward = _forward()
 
 #==================================================================================================
 def namedtuple(*a,**ka):
@@ -164,8 +105,7 @@ Returns a class of tuples with named fields. It is identical to :func:`collectio
    assert f(x,**k) == c(u=f.u(x.u,**k),v=f.v(x.v,**k))
   """
 #==================================================================================================
-  from collections import namedtuple
-  cls = namedtuple(*a,**ka)
+  cls = collections.namedtuple(*a,**ka)
   cls.__call__ = lambda self,X,**k: cls(*(f(x,**k) for f,x in zip(self,X)))
   cls._field_index = cls(*range(len(cls._fields)))
   return cls
@@ -613,14 +553,13 @@ def SQLinit(engine:str|sqlalchemy.engine.Engine,meta:sqlalchemy.MetaData)->sqlal
   meta_.reflect(bind=engine)
   if meta_.tables:
     try:
-      metainfo_table = meta_.tables['Metainfo']
-      with engine.connect() as conn: metainfo = dict(conn.execute(select(metainfo_table.c)).fetchone()._mapping)
-      del metainfo['created']
+      with engine.connect() as conn: metainfo, = conn.execute(select(meta_.tables['Metainfo'])).mappings()
+      metainfo = dict(metainfo); del metainfo['created']
     except: raise SQLinitMetainfoException('Not found')
     for k,v in meta.info.items():
-      if metainfo.get(k) != str(v):
-        raise SQLinitMetainfoException(f'{k}[expected:{v},found:{metainfo.get(k)}]')
-  else:
+      if (v_:=metainfo.get(k)) != str(v):
+        raise SQLinitMetainfoException(f'{k}[expected:{v},found:{v_}]')
+  else: # engine is empty
     metainfo_table = Table(
       'Metainfo',meta_,
       Column('created',DateTime()),
@@ -643,7 +582,7 @@ A logging handler class which writes the log messages into a database.
   def __init__(self,engine:str|sqlalchemy.Engine,label:str,*a,**ka):
     from datetime import datetime
     from sqlalchemy.sql import select, insert, update, delete, and_
-    meta = SQLHandlerMetadata()
+    meta = self.metadata()
     engine = SQLinit(engine,meta)
     session_table = meta.tables['Session']
     log_table = meta.tables['Log']
@@ -663,29 +602,30 @@ A logging handler class which writes the log messages into a database.
     self.format(rec)
     self.dbrecord(rec)
 
-#--------------------------------------------------------------------------------------------------
-def SQLHandlerMetadata(info:Mapping[str,Any]=dict(origin=__name__+'.SQLHandler',version=1))->sqlalchemy.MetaData:
-#--------------------------------------------------------------------------------------------------
-  from sqlalchemy import Table, Column, ForeignKey, MetaData
-  from sqlalchemy.types import DateTime, Text, Integer
-  meta = MetaData(info=info)
-  Table(
-    'Session',meta,
-    Column('oid',Integer(),primary_key=True,autoincrement=True),
-    Column('started',DateTime()),
-    Column('label',Text(),index=True,unique=True,nullable=False),
-    )
-  Table(
-    'Log',meta,
-    Column('oid',Integer(),primary_key=True,autoincrement=True),
-    Column('session',ForeignKey('Session.oid',ondelete='CASCADE'),index=True,nullable=False),
-    Column('level',Integer(),nullable=False),
-    Column('created',DateTime(),nullable=False),
-    Column('module',Text(),index=True,nullable=False),
-    Column('funcName',Text(),nullable=False),
-    Column('message',Text(),nullable=False),
-    )
-  return meta
+  #--------------------------------------------------------------------------------------------------
+  @staticmethod
+  def metadata(info=tuple({'origin':__name__+'.SQLHandler','version':1}.items()))->sqlalchemy.MetaData:
+  #--------------------------------------------------------------------------------------------------
+    from sqlalchemy import Table, Column, ForeignKey, MetaData
+    from sqlalchemy.types import DateTime, Text, Integer
+    meta = MetaData(info=dict(info))
+    Table(
+      'Session',meta,
+      Column('oid',Integer(),primary_key=True,autoincrement=True),
+      Column('started',DateTime()),
+      Column('label',Text(),index=True,unique=True,nullable=False),
+      )
+    Table(
+      'Log',meta,
+      Column('oid',Integer(),primary_key=True,autoincrement=True),
+      Column('session',ForeignKey('Session.oid',ondelete='CASCADE'),index=True,nullable=False),
+      Column('level',Integer(),nullable=False),
+      Column('created',DateTime(),nullable=False),
+      Column('module',Text(),index=True,nullable=False),
+      Column('funcName',Text(),nullable=False),
+      Column('message',Text(),nullable=False),
+      )
+    return meta
 
 #==================================================================================================
 class ormsroot (collections.abc.MutableMapping,HtmlPlugin):
@@ -860,7 +800,7 @@ class ImapFolder:
 An instance of this class is an iterable enumerating the unread messages in a folder of an IMAP server. On calling method :meth:`commit`, the messages which have been enumerated since the last commit or rollback (triggered by method :meth:`rollback`) are marked as read. The total number of messages in the folder is held in attribute :attr:`total`, and the number of unread message is given by function :func:`len`.
   """
 # ==================================================================================================
-  def __init__(self,server:'imaplib.IMAP4',folder:str):
+  def __init__(self,server:imaplib.IMAP4,folder:str):
     from email import message_from_bytes
     from email.message import EmailMessage
     from email.policy import default as DefaultEmailPolicy
@@ -916,7 +856,7 @@ Instances of this class maintain basic statistics about a group of values.
     return sqrt(self.var)
 
 #==================================================================================================
-def iso2date(iso:Tuple[int,int,int])->'datetime.date':
+def iso2date(iso:Tuple[int,int,int])->datetime.date:
   r"""
 :param iso: triple as returned by :meth:`datetime.date.isocalendar`
 
@@ -987,6 +927,42 @@ A decorator which assigns attribute :attr:`version` of the target function to *v
     assert isfunction(f)
     f.version = v; return f
   return transform
+
+#==================================================================================================
+class _PDFConverter (dict):
+  r"""
+A decorator which interprets the target function as a PDF converter.
+
+:param mimetypes: list of mimetypes
+  """
+#==================================================================================================
+  def assign(self,*mimetypes:Sequence[str]):
+    def t(f:Callable[[Any],bytes]): self.update({mtype:f for mtype in mimetypes}); return f
+    return t
+PDFConverter = _PDFConverter()
+
+@PDFConverter.assign('application/pdf')
+def pdf_frompdf(content:bytes): return content
+
+@PDFConverter.assign(
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/msword',
+  'application/vnd.oasis.opendocument.text')
+def pdf_fromodf(content:bytes):
+  import subprocess
+  from tempfile import NamedTemporaryFile
+  from pathlib import Path
+  with NamedTemporaryFile(prefix='DocConvert_',suffix='.topdf') as v:
+    path = Path(v.name); v.write(content); v.flush(); path_ = path.with_suffix('.pdf')
+    try:
+      subprocess.run(['soffice','--headless','--convert-to','pdf','--outdir',str(path.parent),str(path)],check=True)
+      return path_.read_bytes()
+    finally: path_.unlink(missing_ok=True)
+
+@PDFConverter.assign('image/svg+xml')
+def pdf_fromsvg(content:str):
+  import subprocess
+  return subprocess.run(['rsvg-convert','-f','pdf'],check=True,capture_output=True,input=content.encode()).stdout
 
 #==================================================================================================
 # Utilities

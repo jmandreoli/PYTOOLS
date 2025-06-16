@@ -6,11 +6,12 @@
 #
 
 from __future__ import annotations
+
 from typing import Sequence, Any, Callable, Iterable, Mapping, Tuple, Optional, MutableSequence, IO, NamedTuple, TypeVar, Generic
 import logging; logger = logging.getLogger(__name__)
 
 from contextlib import contextmanager
-from functools import partial, cached_property
+from functools import partial, cached_property, singledispatch
 from itertools import count, zip_longest
 from copy import deepcopy
 from pathlib import Path
@@ -18,7 +19,7 @@ from time import time, ctime
 from datetime import datetime
 from pydispatch import Dispatcher
 import torch
-from . import fmtwrap, time_fmt
+from . import time_fmt
 
 #==================================================================================================
 class udict (dict): # a utility class reflecting a dictionary as an object (attributes=keys); must be at the top
@@ -111,7 +112,7 @@ An instance of this class controls a run. It can
 #==================================================================================================
 class Run (Dispatcher):
   r"""
-An instance of this class is a callable, taking no argument and returning no value. The execution of a run only changes its attribute values. All the keyword arguments of the constructor are passed to method :meth:`setup`.
+An instance of this class is a callable, taking no argument and returning no value. The execution of a run only changes its attribute values.
 
 Runs may emit messages during their execution. Callbacks attached to each message are passed a single argument, which is the run itself. Listeners (instances of class :class:`RunListener`) define sets of consistent callbacks. A run can invoke a method :meth:`add<name>Listener` to attach a listener of type `<name>` to itself. Some such methods are defined in class :class:`Run` and its subclasses (see their documentation for details).
 
@@ -121,7 +122,7 @@ Attributes (\*) must be explicitly instantiated at creation time.
   """
 #==================================================================================================
 
-  _events_ = 'open','close','start_step','end_step','start_epoch','end_epoch','checkpoint'
+  _events_ = 'init','open','close','start_step','end_step','start_epoch','end_epoch','checkpoint'
 
   ## set at instantiation
   device: Optional[torch.device|str] = None
@@ -173,9 +174,7 @@ Attributes (\*) must be explicitly instantiated at creation time.
 #--------------------------------------------------------------------------------------------------
   def __init__(self,**ka):
 #--------------------------------------------------------------------------------------------------
-    self.config = fmtwrap({})
-    self.config.update(**ka)
-    self.__dict__.update(self.config.ref)
+    self.__dict__.update(ka)
     self.listeners = udict()
     self.measures = udict()
 
@@ -190,6 +189,7 @@ Executes the run.
     self.eval_valid,self.eval_test = map(self.eval_cache,(self.valid_split,self.test_split))
     net.to(self.device)
     self.monitor.initial(self)
+    self.emit('init',self)
     self.progress = self.monitor.progress(self)
     with training(net,True):
       try:
@@ -287,7 +287,7 @@ Used as decorator to attach a measure factory (the decorated object, assumed cal
           'mean':partial(AvgAccumulator,feed=lambda x,m=m: (len(x[0]),m(*x).item())),
           'sum':partial(SumAccumulator,feed=lambda x,m=m: m(*x).item()),
           'none':partial(ListAccumulator,feed=lambda x,m=m: m(*x).cpu().detach().numpy()),
-        }[m.reduction](descr=repr(m),norm=norm)
+        }[m.reduction](repr=repr(m),norm=norm)
         return acc
       setattr(cls,f'add{name}Measure',F)
       if doc: F.__doc__ = f'Measure factory for :class:`{f.__qualname__}`. The result is assigned as attribute *label* in the measures register.'
@@ -320,23 +320,6 @@ Used as decorator to attach a listener factory (the decorated object, assumed ca
     for c in L: self.bind(**dict(c))
     yield
     for c in L: self.unbind(t for ev,t in c)
-
-#--------------------------------------------------------------------------------------------------
-  def describe(self,tab:str='',file=None,**ka):
-    r"""
-Prints out the list of configuration attributes (with their values) as well as the list of measures and listeners.
-
-:param tab: an indentation string
-:param file: passed to the print function
-    """
-#--------------------------------------------------------------------------------------------------
-    self.config.describe(tab=tab,file=file,**ka)
-    for k,x in self.measures.items():
-      print(tab,f'measures.{k}:',sep='',file=file)
-      print(tab+'  ',x,sep='',file=file)
-    for k,x in self.listeners.items():
-      print(tab,f'listeners.{k}:',sep='',file=file)
-      x.config.describe(tab=tab+'  ',file=file,**ka)
 
   @property # shorthand for walltime()
   def time(self): return self.walltime()
@@ -403,11 +386,11 @@ class Measure:
   r"""Base class for measures."""
 #==================================================================================================
   Agg = {'mean':torch.mean,'sum':torch.sum,'none':(lambda x:x)}
-  reduction = 'mean'
-  def __init__(self,reduction=None):
-    if reduction is not None: self.reduction = reduction
+  def __init__(self,reduction='mean'):
+    self.reduction = reduction
     self.agg = self.Agg[self.reduction]
   def __repr__(self): return f'{self.__class__.__name__}(reduction={self.reduction})'
+  def __call__(self,x): return self.agg(x)
 
 def predefine_measures_from_standard_losses(): # invoked only once below, then destroyed
   # adds one measure to class Run for each loss function defined in torch.nn
@@ -423,12 +406,12 @@ class ZeroOneMeasure (Measure):
 Instances of this class measure accuracy for classification runs.
   """
 #==================================================================================================
-  def __call__(self,scores,labels): return self.agg((torch.argmax(scores,1)==labels).float())
+  def __call__(self,scores,labels): return super().__call__((torch.argmax(scores,1)==labels).float())
 
 #==================================================================================================
 class RunListener:
   r"""
-Instances of this class are listener objects, which can be bound to a :class:`Run` instance. All parameters of the constructor are processed by method :meth:`setup`.
+Instances of this class are listener objects, which can be bound to a :class:`Run` instance.
   """
 #==================================================================================================
   schedule: Mapping[str,Schedule]
@@ -442,12 +425,7 @@ Instances of this class are listener objects, which can be bound to a :class:`Ru
   active: bool
   r"""Whether this instance is actively listening to events"""
 
-  def __init__(self,**ka):
-    self.config = fmtwrap({})
-    self.config.update(**ka)
-    self.setup(**self.config.ref)
-#--------------------------------------------------------------------------------------------------
-  def setup(
+  def __init__(
       self,
       itrain:Callable[[Run],dict[str,Any]]=(lambda run: {'tloss':run.r_loss}),
       ivalid:Callable[[Run],dict[str,Any]]=(lambda run: run.eval_valid()),
@@ -469,7 +447,7 @@ Processes the constructor parameters.
 #--------------------------------------------------------------------------------------------------
     def parse(x):
       if isinstance(x,str):
-        p,t = x.strip().split(' ',1); return (float if '.' in p or 'e' in p else int)(p),(lambda run,a=t.strip():getattr(run,a))
+        p,t = x.strip().split(' ',1); return (int(p) if all(c.isdigit() for c in p) else float(p)),(lambda run,a=t.strip():getattr(run,a))
       else: return x
     self.info = udict(train=itrain,valid=ivalid,test=itest,checkpoint=icheckpoint)
     self.active = active
@@ -479,7 +457,6 @@ Processes the constructor parameters.
   def register(self,ev,p,t):
     self.schedule[ev] = s = Schedule(p)
     self.cond[ev] = lambda run,s=s,t=t: s(t(run))
-  def describe(self,**ka): self.config.describe(**ka)
   def state_dict(self): return {'schedule':{ev:s.goal for ev,s in self.schedule.items()}}
   def load_state_dict(self,D):
     for ev,g in D['schedule'].items(): self.schedule[ev].goal = g
@@ -495,7 +472,7 @@ An instance of this class logs run events through a :class:`logging.Logger` inst
   r"""Logging action per stage"""
 
 #--------------------------------------------------------------------------------------------------
-  def setup(
+  def __init__(
       self,
       logger:Optional[logging.Logger]=logger,
       status: Tuple[Tuple[str,...],Callable[[Run],Tuple]] = (
@@ -515,8 +492,8 @@ Processes the constructor parameters. Parameters in *ka* are passed on to the me
 :param fmt: a dictionary assigning a format to each free field name (default is .3f)
     """
 #--------------------------------------------------------------------------------------------------
-    super().setup(**ka)
-    fmt_ = lambda x,fmt={'size':'d','err':'s','nerr':'d'}|(fmt or {}),default='.3f': ' '.join(f'{k}={v.__format__(fmt.get(k,default))}' for k,v in x.items() if v is not None)
+    super().__init__(**ka)
+    fmt_ = lambda x,fmt={'size':'d','err':'s','nerr':'d'}|(fmt or {}),default='.3f': ' '.join(f'{k}={format(v,fmt.get(k,default))}' for k,v in x.items() if v is not None)
     self.action = udict({
       k:(lambda run,a=a,fmt=f'{status_fmt[1]} {k.upper()}: %s',s=status[1]: logger.info(fmt,*s(run),fmt_(a(run))))
       for k,a in self.info.items()
@@ -526,6 +503,7 @@ Processes the constructor parameters. Parameters in *ka* are passed on to the me
 
   def on_open(self,run): self.action.header(run); self.action.valid(run)
   def on_close(self,run): self.action.test(run)
+
   def on_end_step(self,run):
     if self.cond.end_step(run): self.action.train(run)
   def on_end_epoch(self,run):
@@ -542,23 +520,30 @@ An instance of this class logs run events to a MLFlow experiment repository.
   tools = 'load_model',
   run_id = None
 #--------------------------------------------------------------------------------------------------
-  def setup(self,uri:str=None,exp:str=None,**ka):
+  def __init__(self,uri:str=None,exp:str=None,**ka):
     r"""
 :param uri: mlflow tracking uri
 :param exp: experiment name
     """
 #--------------------------------------------------------------------------------------------------
     import mlflow, mlflow.pytorch
-    super().setup(**ka)
+    super().__init__(**ka)
     mlflow.set_tracking_uri(uri)
     mlflow.set_experiment(exp)
 
   def on_open(self,run):
     import mlflow
+    def walk(x,pre=''):
+      if isinstance(x,dict):
+        for k,v in x.items(): yield from walk(v,f'{pre}.{k}')
+      elif isinstance(x,list):
+        for k,v in enumerate(x): yield from walk(v,f'{pre}.{k}')
+      else:
+        yield pre,v
     r = mlflow.start_run(run_id=self.run_id)
     if self.run_id is None:
       self.run_id = r.info.run_id
-      try: mlflow.log_params(dict((k,v[:250]) for k,v in run.config.items()))
+      try: mlflow.log_params({k:v for k,v in walk(describe(run))})
       except: mlflow.end_run(); mlflow.delete_run(r.info.run_id); raise
     mlflow.set_tag('progress',run.progress)
 
@@ -575,7 +560,7 @@ An instance of this class logs run events to a MLFlow experiment repository.
     if self.cond.end_epoch(run): mlflow.log_metrics(self.info.valid(run),run.step); mlflow.set_tag('progress',run.progress)
 
   def state_dict(self): return {'run_id':self.run_id,**super().state_dict()}
-  def load_state_dict(self,D): self.run_id = D['run_id']; super().load_state_dict(D)
+  def load_state_dict(self,D): self.run_id = D.pop('run_id'); super().load_state_dict(D)
 
 #--------------------------------------------------------------------------------------------------
   @classmethod
@@ -589,6 +574,48 @@ Returns a model saved in a run.
     mlflow.set_experiment(exp)
     if run_id is None: run_id = mlflow.search_runs().run_id[0] # most recent run
     return mlflow.pytorch.load_model('runs:/{}/model{}'.format(run_id,('' if epoch is None else f'_{epoch:03d}')),**ka)
+
+#==================================================================================================
+@Run.listener_factory('Aim')
+class RunAimListener (RunListener):
+  r"""
+An instance of this class logs run events to an Aim experiment repository.
+  """
+#==================================================================================================
+  run_hash = None
+  def __init__(self,repo=None,exp=None,**ka):
+    super().__init__(**ka)
+    self.repo = repo
+    self.exp = exp
+
+  def on_open(self,run):
+    import aim
+    self.aimrun = aimrun = aim.Run(run_hash=self.run_hash,repo=self.repo,experiment=self.exp)
+    if self.run_hash is None: self.run_hash = aimrun.hash
+    try: aimrun['config'] = describe(run)
+    except: aimrun.close(); aimrun.repo.delete_run(aimrun.hash); raise
+    aimrun['progress'] = run.progress
+
+  def on_close(self,run):
+    from dill import dump
+    try:
+      path = Path(self.repo)/'artifacts'/self.run_hash
+      path.mkdir(exist_ok=True,parents=True)
+      with (path/'model.pkl').open('wb') as v: dump(run.net,v)
+      self.aimrun['test'] = self.info.test(run); self.aimrun['progress'] = run.progress
+    finally: self.aimrun.close()
+
+  def on_end_step(self,run):
+    if self.cond.end_step(run):
+      self.aimrun.track(self.info.train(run),step=run.step,epoch=run.epoch,context={'subset':'train'})
+      self.aimrun['progress'] = run.progress
+  def on_end_epoch(self,run):
+    if self.cond.end_epoch(run):
+      self.aimrun.track(self.info.valid(run),step=run.step,epoch=run.epoch,context={'subset':'valid'})
+      self.aimrun['progress'] = run.progress
+
+  def state_dict(self): return {'run_hash':self.run_hash,**super().state_dict()}
+  def load_state_dict(self,D): self.run_hash = D.pop('run_hash'); super().load_state_dict(D)
 
 #==================================================================================================
 class DataInfo (NamedTuple):
@@ -641,11 +668,11 @@ Returns a dictionary which can be passed as keyword arguments to the :class:`Run
     n = len(D); nvalid = int(pcval*n); ntrain = n-nvalid
     train,valid = torch.utils.data.random_split(D,(ntrain,nvalid))
     test = self.test
-    params = dict(datainfo=DataInfo(source=self,train=len(train),valid=len(valid),test=len(test)),**ka)
-    ka = dict(((k[1:] if k.startswith('_') else k),v) for k,v in ka.items())
-    for c,split in zip(('train','valid','test'),(train,valid,test)):
-      params['_'+c+'_split'] = torch.utils.data.DataLoader(split,shuffle=c=='train',**ka)
-    return params
+    return {
+      'datainfo':DataInfo(source=self,train=len(train),valid=len(valid),test=len(test)),
+      **ka,
+      **{f'{c}_split':torch.utils.data.DataLoader(split,shuffle=c=='train',**ka) for c,split in zip(('train','valid','test'),(train,valid,test))}
+    }
 
 #--------------------------------------------------------------------------------------------------
   def display(self,
@@ -728,9 +755,10 @@ class Schedule:
     self.it = count(p,p) if isinstance(p,(int,float)) else iter(p)
     self.goal = next(self.it)
   def __call__(self,v):
-    flag = False
-    while self.goal <= v: flag = True; self.goal = next(self.it)
-    return flag
+    if v < self.goal: return False
+    while (g:=next(self.it)) <= v: pass
+    else: self.goal = g
+    return True
 
 #--------------------------------------------------------------------------------------------------
 def clone_module(m,out=None):
@@ -758,10 +786,10 @@ def to(L,device): return ((t.to(device) if isinstance(t,torch.Tensor) else t) fo
 #--------------------------------------------------------------------------------------------------
 class Accumulator:
 #--------------------------------------------------------------------------------------------------
-  def __init__(self,feed:Callable=None,norm:Callable=None,descr:str=None):
+  def __init__(self,feed:Callable=None,norm:Callable=None,repr:str=None):
     self.feed = (lambda x:x) if feed is None else feed
     self.norm = (lambda x:x) if norm is None else norm
-    self.repr = f'{self.__class__.__name__}({self.feed.__name__},{self.norm.__name__})' if descr is None else descr
+    self.repr = f'{self.__class__.__name__}({self.feed.__name__},{self.norm.__name__})' if repr is None else repr
   def ini(self): self._val = self._ini()
   def inc(self,x): self._inc(self.feed(x))
   def val(self): return self.norm(self._val)
@@ -794,85 +822,44 @@ class ListAccumulator (Accumulator):
   def _ini(self): return []
   def _inc(self,x): self._val.append(x)
 
-# #==================================================================================================
-# @Run.listener_factory('Tensorboard')
-# class RunTensorboardListener (RunListener):
-#   r"""
-# Instances of this class provide tensorboard logging for runs. Limited functionality if standalone tb is installed (without tf).
-#   """
-# #==================================================================================================
-# #--------------------------------------------------------------------------------------------------
-#   def set(self,
-#     itrain:Callable[[Run],Tuple[Any,...]]=(lambda run: {'loss/train':run.loss.val()}),
-#     ivalid:Callable[[Run],Tuple[Any,...]]=(lambda run: dict((k+'/valid',v) for k,v in run.eval_valid().items())),
-#     itest:Callable[[Run],Tuple[Any,...]] =(lambda run: dict((k+'/test',v) for k,v in run.eval_test().items())),
-#     **ka
-#   ):
-#     r"""
-# :param uri: mlflow tracking uri
-# :param exp: experiment name
-# :param itrain: function returning train info on a run
-# :param ivalid: function returning validation info on a run
-# :param itest: function returning test info on a run
-#
-# Computes a number of information loggers, stored in attributes :attr:`itrain`, :attr:`ivalid`, :attr:`itest`, :attr:`iprogress`, :attr:`open_tb`, :attr:`close_tb`. The *uri* must refer to a valid tensorboard experiment storage.
-#     """
-# #--------------------------------------------------------------------------------------------------
-#     log_metrics = lambda f,run: tuple(run.tbwriter.add_scalar(k,v,run.step) for k,v in f(run).items())
-#     self.itrain = None if itrain is None else partial(log_metrics,itrain)
-#     self.ivalid = None if ivalid is None else partial(log_metrics,ivalid)
-#     self.itest = None if itest is None else partial(log_metrics,itest)
-#     self.iprogress = lambda run: run.tbwriter.add_scalar('progress',run.progress,run.step)
-#     self.checkpoint = None # MISSING: checkpoint
-#     self.open_tb = lambda run: tuple(run.tbwriter.add_text(k,'<pre>{}</pre>'.format(v.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')),0) for k,v in run._config.items())
-#     self.close_tb = None # MISSING: save model
-#     super().set(**ka)
-#
-# #--------------------------------------------------------------------------------------------------
-#   def set2(self,
-#     train_p:Callable[[Run],bool]|bool=False,
-#     valid_p:Callable[[Run],bool]|bool=False,
-#     checkpoint_p:Callable[[Run],bool]|bool=False,
-#     **ka
-#   ):
-#     r"""
-# :param train_p: run selector for train info logging at each batch
-# :param valid_p: run selector for validation info logging at each epoch
-# :param checkpoint_p: run selector for checkpointing at each epoch
-#
-# Configures the callbacks of this listener, stored as attributes :attr:`on_open`, :attr:`on_close`, :attr:`on_batch`, :attr:`on_epoch`, using components defined by method :meth:`set`.
-#     """
-# #--------------------------------------------------------------------------------------------------
-#     self.on_open = abs(PROC(self.open_tb))
-#     self.on_close = abs(PROC(self.ivalid)+PROC(self.itest)+PROC(self.iprogress)+PROC(self.close_tb))
-#     self.on_batch = abs(PROC(self.itrain)%train_p)
-#     self.on_epoch = abs(PROC(self.iprogress)+PROC(self.ivalid)%valid_p+PROC(self.checkpoint)%checkpoint_p)
-#     super().set2(**ka)
-#
-# #--------------------------------------------------------------------------------------------------
-#   def set3(self,root=None,exp=None,**ka):
-#     r"""
-# Protects callbacks :attr:`on_open` and :attr:`on_close` from exceptions to make sure the tensorboard run is not left in a corrupted state.
-#     """
-# #--------------------------------------------------------------------------------------------------
-#     from torch.utils.tensorboard import SummaryWriter
-#     from pathlib import Path
-#     from datetime import datetime
-#     import shutil
-#     root = Path(root).resolve()
-#     assert root.is_dir()
-#     exp = root/exp
-#     exp.mkdir(exist_ok=True)
-#     def on_open(run,f=self.on_open):
-#       path = exp/'{0}_{1.host}_{1.pid}'.format(datetime.now().strftime('%Y%m%d_%H%M%S'),run.process_info)
-#       run.tbwriter = SummaryWriter(log_dir=str(path))
-#       try: f(run)
-#       except:
-#         run.tbwriter.close()
-#         if path.exists(): shutil.rmtree(path)
-#         raise
-#     def on_close(run,f=self.on_close):
-#       try: f(run)
-#       finally: run.tbwriter.close()
-#     self.on_open,self.on_close = on_open,on_close
-#     super().set3(**ka)
+#--------------------------------------------------------------------------------------------------
+@singledispatch
+def describe(x): # a utility function to map arbitrary objects to jsonable descriptions
+#--------------------------------------------------------------------------------------------------
+  return None
+def describe_iter(l): return {k:vv for k,v in l if isinstance(k,str) and not k.startswith('_') and (vv:=describe(v)) is not None}
+def describe_obj(x): return {'class':describe(x.__class__)}|describe_iter(x.__dict__.items())
+#--------------------------------------------------------------------------------------------------
+@describe.register
+def _(x:int|float|str|bool|type(None)): return x
+@describe.register
+def _(x:torch.device|Accumulator): return repr(x)
+@describe.register
+def _(x:dict): return describe_iter(x.items()) or None
+@describe.register
+def _(x:list): return [vv for v in x if (vv:=describe(v)) is not None] or None
+@describe.register
+def _(x:tuple):
+  l = getattr(x,'_fields',None) # for named tuples
+  if l is None: return [vv for v in x if (vv:=describe(v)) is not None]
+  else: return {'class':describe(x.__class__)}|describe_iter(zip(l,x))
+@describe.register
+def _(x:type): return  f'{x.__module__}.{x.__qualname__}'
+
+@describe.register
+def _(x:Run): return describe_obj(x)
+@describe.register
+def _(x:RunListener): return describe_obj(x) if x.active else None
+@describe.register
+def _(x:torch.nn.Module):
+  def desc(t):
+    xx = t.pop('')
+    if t: return {'class':describe(xx.__class__)}|{k:desc(tt) for k,tt in t.items()}
+    else: return repr(xx)
+  t = {'':x}
+  for name,xx in x.named_modules():
+    if name:
+      l = name.split('.'); tt = t
+      for p in l[:-1]: tt = tt[p]
+      tt[l[-1]] = {'':xx}
+  return desc(t)

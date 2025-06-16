@@ -75,7 +75,7 @@ A display specification is a function which takes as input a :mod:`simpy.Environ
   def player_factory(self)->Callable:
     from matplotlib import get_backend
     from .animation import widget_animation_player, mpl_animation_player
-    return widget_animation_player if 'ipympl' in get_backend() else mpl_animation_player
+    return widget_animation_player if get_backend()=='widget' else mpl_animation_player
 
   ax_default = {'aspect':'equal','gridlines':True}
   r"""The default arguments passed to the ``ax_kw`` parameter in method :meth:`parts`"""

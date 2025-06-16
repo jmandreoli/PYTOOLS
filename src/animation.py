@@ -110,7 +110,7 @@ Note that the *interval* is bounded below by the real time needed to construct a
     raise NotImplementedError()
 
 #==================================================================================================
-class widget_animation_player (app,animation_player_base):
+class widget_animation_player (animation_player_base,app):
   r"""
 A instance of this class is a player for :mod:`matplotlib` animations controlled from `mod:ipywidgets` widgets. The animation board is created by invoking :func:`figure` with arguments *fig_kw*. The frame display function is obtained by calling function *displayer* on the board.
 
@@ -154,7 +154,7 @@ A instance of this class is a player for :mod:`matplotlib` animations controlled
     w_clock2 = FloatText(0,min=0,layout=dict(width='1.6cm',padding='0cm',display='none'))
     w_clock2.active = False
     toolbar = ka.pop('toolbar',())
-    super().__init__(children=ka.pop('children',()),toolbar=(w_play_toggler,w_track_manager,w_clockb,w_clock,w_clock2,*toolbar))
+    super(animation_player_base,self).__init__(children=ka.pop('children',()),toolbar=(w_play_toggler,w_track_manager,w_clockb,w_clock,w_clock2,*toolbar))
     self.board = board = self.mpl_figure(**fig_kw)
     display = displayer(board)
     # callbacks
@@ -170,7 +170,7 @@ A instance of this class is a player for :mod:`matplotlib` animations controlled
         setval(v,submit=True)
     w_clock2.observe((lambda c: on_clock2_changed(c.new)),'value')
     w_track_manager.observe((lambda c: setval(d=c.new,submit=True) if w_track_manager.active else None),'value')
-    super(app,self).__init__(display,**ka)
+    super().__init__(display,**ka)
 
 #==================================================================================================
 class mpl_animation_player (animation_player_base):

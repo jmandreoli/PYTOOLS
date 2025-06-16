@@ -6,7 +6,7 @@
 #
 
 from __future__ import annotations
-from typing import Any, Callable, Iterable, Mapping, Sequence, Tuple
+from typing import Any, Callable, Iterable, Mapping, Sequence, Tuple, Optional
 import logging; logger = logging.getLogger(__name__)
 
 import pandas, traceback
@@ -14,14 +14,14 @@ import sqlalchemy.engine
 from functools import wraps
 from pathlib import Path
 import traitlets
-from ipywidgets import Widget, Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, Password, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, VBox, HBox, Box, Layout, Valid, Play, jslink
+from ipywidgets import Widget, Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, Password, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, VBox, HBox, Box, Layout, Valid, Play, jslink, AppLayout
 
 __all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'animator', 'SelectMultipleOrdered', 'SimpleButton', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
 
-AutoWidthStyle = dict(description_width='auto')
+AutoWidthStyle = {'description_width':'auto'}
 
 #==================================================================================================
-class app:
+class app (AppLayout):
   r"""
 An instance of this class is an app based on module :mod:`ipywidgets`, consisting of a toolbar, a console and additional child widgets.
 
@@ -30,35 +30,28 @@ An instance of this class is an app based on module :mod:`ipywidgets`, consistin
   """
 #==================================================================================================
 
-  main: VBox
-  r"""The main widget"""
   toolbar: HBox
   r"""The toolbar widget (first child of :attr:`main`)"""
   console: Output
   r"""A console terminal (just below :attr:`toolbar`)"""
 
-  def __init__(self,children:Sequence[Widget]=(),toolbar:Sequence[Widget]=()):
+  def __init__(self,toolbar:Sequence[Widget]=(),children:Sequence[Widget]=(),**ka):
     w_closeb = SimpleButton(icon='close',tooltip='Close app')
     self.console = console = Output()
     w_clearb = SimpleButton(icon='trash',tooltip='Clear console')
     w_console = HBox([w_clearb,console],layout={'border': 'thin solid', 'display': 'none'})
     self.toolbar = HBox([w_closeb,*toolbar])
-    self.main = main = VBox([self.toolbar,w_console,*children])
+    super().__init__(header=VBox([self.toolbar,w_console]),center=VBox(children),**ka)
+    self.layout.grid_template_rows = self.layout.grid_template_columns = None
     def _console_clear(b):
       from IPython.display import clear_output
       with console: clear_output()
     w_clearb.on_click(_console_clear)
     def _console_display(c): w_console.layout.display = '' if c.new else 'none'
     console.observe(_console_display,'outputs')
-    _close_callbacks = [main.close,console.close]
+    _close_callbacks = [self.close_all]
     self.on_close = _close_callbacks.append
-    def _closeall():
-      for f in _close_callbacks: f()
-    self._closeall = _closeall
-    w_closeb.on_click(lambda b: _closeall())
-    self._repr_mimebundle_ = main._repr_mimebundle_
-  def __del__(self): self._closeall()
-
+    w_closeb.on_click(lambda b: [f() for f in _close_callbacks])
   def __enter__(self): return self.console.__enter__()
   def __exit__(self,*a): self.console.__exit__(*a)
 
@@ -68,7 +61,7 @@ Adds a :mod:`matplotlib` figure to this app.
     """
     from matplotlib.pyplot import close
     fig,w = mpl_figure(*a,asapp=False,**ka)
-    self.main.children += (w,)
+    self.center.children += (w,)
     self.on_close(lambda:close(fig))
     return fig
 
@@ -77,7 +70,7 @@ Adds a :mod:`matplotlib` figure to this app.
     @wraps(f)
     def F(*a,**ka):
       with self:
-        try: f(*a,**ka)
+        try: return f(*a,**ka)
         except: traceback.print_exc(); raise
     return F
 
@@ -99,10 +92,10 @@ An instance of this class is an app to display a (long) sequence object in pagin
     # widget creation
     self.w_out = w_out = Output()
     if P == 1: w_pager = Label('1')
-    else: w_pager = IntSlider(start,min=1,max=P,description='page:',layout=dict(width='10cm'),readout=False,style=AutoWidthStyle)
+    else: w_pager = IntSlider(start,min=1,max=P,description='page:',layout={'width':'10cm'},readout=False,style=AutoWidthStyle)
     self.w_pager = w_pager
-    w_pos = Label(f'',layout=dict(border='thin solid',padding='0mm 1mm 0mm 1mm'),style=AutoWidthStyle)
-    super().__init__([w_out],toolbar=[w_pager,w_pos])
+    w_pos = Label(f'',layout={'border':'thin solid','padding':'0mm 1mm 0mm 1mm'},style=AutoWidthStyle)
+    super().__init__(toolbar=[w_pager,w_pos],children=[w_out])
     # event handling
     def show(n):
       with w_out:
@@ -126,7 +119,7 @@ An instance of this class is an app to browse the file at *path*, possibly while
 :param context: pair of number of lines before and after to display around current position
   """
 #==================================================================================================
-  def __init__(self,path:str|Path,start:int|float=None,step:int=50,track:bool=True,context:Tuple[int,int]=(10,5)):
+  def __init__(self,path:str|Path,start:Optional[int|float]=None,step:int=50,track:bool=True,context:Tuple[int,int]=(10,5)):
     # content initialisation
     path = Path(path).absolute()
     file = path.open('rb')
@@ -141,12 +134,12 @@ An instance of this class is an app to browse the file at *path*, possibly while
         start += fsize
         if start<0: start = 0
     # widget creation
-    self.w_win = w_win = HTML(layout=dict(width='15cm',border='thin solid',overflow_x='auto',overflow_y='hidden'))
-    self.w_ctrl = w_ctrl = IntSlider(start,min=0,max=fsize,step=step,readout=False,layout=dict(width=w_win.layout.width))
+    self.w_win = w_win = HTML(layout={'width':'15cm','border':'thin solid','overflow':'auto hidden'})
+    self.w_ctrl = w_ctrl = IntSlider(start,min=0,max=fsize,step=step,readout=False,layout={'width':w_win.layout.width})
     w_toend = SimpleButton(icon='fast-forward',tooltip='Jump to end of file')
     w_tobeg = SimpleButton(icon='fast-backward',tooltip='Jump to beginning of file')
     w_pos = Label('')
-    super().__init__([w_win],toolbar=[w_ctrl,w_pos,w_tobeg,w_toend])
+    super().__init__(toolbar=[w_ctrl,w_pos,w_tobeg,w_toend],children=[w_win])
     self.on_close(file.close)
     # event handling
     def setpos(n,nbefore=context[0]+1,nafter=context[1]+1):
@@ -180,7 +173,7 @@ An instance of this class is an app to browse the file at *path*, possibly while
       lines[c] += b'\n'.join(x[:1]); lines[c+1:c+len(x)] = x[1:]
       lines = [x.decode().replace('&','&amp;').replace('<','&lt;').replace('>','&gt;') for x in lines]
       lines[c] = f'<span style="background-color: gray; color: white; border: thin solid gray;">{lines[c]}</span>'
-      w_win.value = '<div style="white-space: pre; font-family: monospace; line-height:130%">{}</div>'.format('\n'.join(lines))
+      w_win.value = '<div style="white-space: pre; font-family: monospace; line-height:130%;">{}</div>'.format('\n'.join(lines))
       w_pos.value = f'{n}'
     def toend(): w_ctrl.value = fsize
     def tobeg(): w_ctrl.value = 0
@@ -216,53 +209,45 @@ An instance of this class is an app to explore a database specified by *spec*. I
   """
 #==================================================================================================
   style = 'background-color:gray; color:white; font-weight:bold; padding:.2cm'
-  def __init__(self,spec:str|sqlalchemy.engine.Engine|sqlalchemy.MetaData):
+  def __init__(self,spec:str|sqlalchemy.engine.Engine):
     from pandas import read_sql_query
     from sqlalchemy import select, func, MetaData, create_engine
     from sqlalchemy.engine import Engine
     from IPython.display import display, clear_output
     # content initialisation
-    if isinstance(spec,MetaData):
-      meta = spec
-      if not meta.is_bound(): raise ValueError(f'Argument of type {MetaData} must be bound to an existing engine')
-      no_table_msg = f'{MetaData} object has no table (perhaps it was not reflected)'
-    else:
-      if isinstance(spec,str): spec = create_engine(spec)
-      elif not isinstance(spec,Engine):
-        raise TypeError(f'Expected {str}|{Engine}|{MetaData}; Found {type(spec)}')
-      meta = MetaData(bind=spec)
-      meta.reflect(views=True)
-      no_table_msg = 'Database is empty'
-    if not meta.tables:
-      self.main = Label(value=no_table_msg)
-      return
-    config = dict((name,db_browser_table(t)) for name,t in meta.tables.items())
+    if isinstance(spec,str): engine = create_engine(spec)
+    elif isinstance(spec,Engine): engine = spec
+    else: raise TypeError(f'Expected {str}|{Engine}; Found {type(spec)}')
+    meta = MetaData()
+    meta.reflect(bind=engine,views=True)
+    if not meta.tables: self.main = Label(value='Database is empty'); return
+    config = {name:db_browser_table(t) for name,t in meta.tables.items()}
     config_header = db_browser_table.header()
-    engine = meta.bind
     # widget creation
-    w_title = HTML('<div style="{}">{}</div>'.format(self.style,engine))
-    w_table = Select(options=sorted(meta.tables.items()),rows=min(len(meta.tables),10),layout=dict(width='10cm'))
+    w_title = HTML(f'<div style="{self.style}">{engine}</div>')
+    w_table = Select(options=sorted(meta.tables.items()),rows=min(len(meta.tables),10),layout={'width':'10cm'})
     w_schema = VBox([config_header,*(cfg.widget for cfg in config.values())])
-    w_scol = SelectMultipleOrdered(layout=dict(width='6cm'))
-    w_ordr = SelectMultipleOrdered(layout=dict(width='6cm'))
-    w_detail = Tab((w_schema,w_scol,w_ordr),layout=dict(display='none'))
-    for i,label in enumerate(('Column definitions','Column selection','Display ordering')): w_detail.set_title(i,label)
+    w_scol = SelectMultipleOrdered(layout={'width':'6cm'})
+    w_ordr = SelectMultipleOrdered(layout={'width':'6cm'})
+    d_titles,d_children = zip(('Column definitions',w_schema),('Column selection',w_scol),('Display ordering',w_ordr))
+    w_detail = Tab(titles=d_titles,children=d_children,layout={'display':'none'})
     w_detailb = SimpleButton(tooltip='toggle detail display (red border means some columns are hidden)',icon='info-circle')
     w_reloadb = SimpleButton(tooltip='reload table',icon='refresh')
-    w_nsample = BoundedIntText(description='sample:',min=1,max=50,step=1,layout=dict(width='2.5cm'),style=AutoWidthStyle)
-    w_size = Text('',disabled=True,tooltip='Number of rows',layout=dict(width='4cm'),style=AutoWidthStyle)
-    w_offset = IntSlider(description='offset',min=0,step=1,layout=dict(width='10cm'),readout=False,style=AutoWidthStyle)
+    w_nsample = BoundedIntText(description='sample:',min=1,max=50,step=1,layout={'width':'2.5cm'},style=AutoWidthStyle)
+    w_size = Text('',disabled=True,tooltip='Number of rows',layout={'width':'4cm'},style=AutoWidthStyle)
+    w_offset = IntSlider(description='offset',min=0,step=1,layout={'width':'10cm'},readout=False,style=AutoWidthStyle)
     w_out = Output()
-    super().__init__([HBox([w_table,w_detailb]),w_detail,HBox([w_nsample,Label('/',style=AutoWidthStyle),w_size,w_offset,w_reloadb]),w_out],toolbar=[w_title])
+    super().__init__(toolbar=[w_title],children=[HBox([w_table,w_detailb]),w_detail,HBox([w_nsample,Label('/',style=AutoWidthStyle),w_size,w_offset,w_reloadb]),w_out])
     # event handling
     def size(table): # returns the size of a table
-      try: return engine.execute(select([func.count()]).select_from(table)).fetchone()[0]
+      try: return read_sql_query(select(func.count()).select_from(table),engine).to_numpy().item()
       except: return -1
     def sample(columns,nsample,offset,order=None)->pandas.DataFrame: # returns nsample row samples of columns ordered by order
-      sql = select(columns,limit=nsample,offset=offset,order_by=(order or columns))
+      sql = select(*columns).limit(nsample).offset(offset).order_by(*(order or columns))
       r = read_sql_query(sql,engine)
       r.index = list(range(offset,offset+min(nsample,len(r))))
       return r
+    @self.protect
     def show():
       with w_out:
         clear_output(wait=True)
@@ -375,7 +360,7 @@ An instance of this class is an app to edit a traitlets structure. The construct
     w_resetb = SimpleButton(icon='undo',description='reset')
     self.header = VBox()
     self.footer = VBox()
-    super().__init__([self.header,*(cfg.widget for cfg in config.values()),self.footer],toolbar=[w_resetb])
+    super().__init__(toolbar=[w_resetb],children=[self.header,*(cfg.widget for cfg in config.values()),self.footer])
     # event handling
     def updw(w,x): w.value = x
     def upda(name,w,x):
@@ -482,7 +467,7 @@ A number of other widgets are accessible in addition to :attr:`main`: :attr:`too
     self.track = track_func
     self.w_play = w_play = Play(0,min=0,max=track_func(0)[1],show_repeat=False,**ka)
     w_ind = IntSlider(0,readout=False)
-    super().__init__(children,toolbar=[w_play,w_ind,*toolbar])
+    super().__init__(toolbar=[w_play,w_ind,*toolbar],children=children)
     self.on_close(w_play.close)
     jslink((w_play,'value'),(w_ind,'value'))
     jslink((w_play,'min'),(w_ind,'min'))
@@ -498,8 +483,8 @@ A number of other widgets are accessible in addition to :attr:`main`: :attr:`too
     from ipywidgets import Text, FloatText
     if rate is None: rate = 1000/self.w_play.interval # frame/sec
     w_clockb = SimpleButton(icon='stopwatch',tooltip='manually reset clock')
-    w_clock = Text('',layout=dict(width='1.6cm',padding='0cm'),disabled=True)
-    w_clock2 = FloatText(0,min=0,layout=dict(width='1.6cm',padding='0cm',display='none'))
+    w_clock = Text('',layout={'width':'1.6cm','padding':'0cm'},disabled=True)
+    w_clock2 = FloatText(0,min=0,layout={'width':'1.6cm','padding':'0cm','display':'none'})
     w_clock2.active = False
     def tick(n): w_clock.value = f'{n/rate:.2f}'
     def set_clock():
@@ -555,9 +540,9 @@ A widget holding a server,username,password. The passwords are protected and cac
 #==================================================================================================
   _cache:dict[Tuple[str,str],str] = {}
   def __init__(self,name,host='',user=''):
-    self._host = Text(description=name,value=host,style={'description_width':'auto'},layout={'width':'8cm'})
-    self._user = Text(description='user',value=user,style={'description_width':'auto'},layout={'width':'3cm'})
-    self._password = Password(description='password',value='',style={'description_width':'auto'},layout={'width':'5cm'})
+    self._host = Text(description=name,value=host,style=AutoWidthStyle,layout={'width':'8cm'})
+    self._user = Text(description='user',value=user,style=AutoWidthStyle,layout={'width':'3cm'})
+    self._password = Password(description='password',value='',style=AutoWidthStyle,layout={'width':'5cm'})
     super().__init__(children=(self._host,self._user,self._password))
   @property
   def host(self): return self._host.value
@@ -611,11 +596,39 @@ Helper class to define buttons with a single callback and predefined default lay
 :param ka: override the default layout components
   """
 #==================================================================================================
-  default_layout = dict(width='auto',padding='0 .1cm 0 .1cm')
-  def __init__(self,callback:Callable[[],None]=None,**ka):
+  default_layout = {'width':'auto','padding':'0 1mm 0 1mm'}
+  def __init__(self,callback:Optional[Callable[[],None]]=None,**ka):
     layout = ka.pop('layout',{})
     super().__init__(layout=dict(self.default_layout,**layout),**ka)
     if callback is not None: self.on_click(lambda b: callback())
+
+#==================================================================================================
+class RoundRobinButton (Button):
+  r"""
+An instance of this class is a button with states which form a cycle. Each click of the button advances to the next state and triggers the action associated with that state.
+
+:param colours: an assignment of a colour to each state
+:param size: the width and height of the button in mm, either as a pair of :class:`int` or a :class:`str`, e.g. (5,2) or '5x2'
+  """
+#==================================================================================================
+  on_click_: Callable[[str|int,Callable[[],None]],None]
+  r"""Assigns a callback to a state (specified by its colour or index)"""
+  def __init__(self,*colours:Sequence[str],layout:Mapping[str,str]={},shape:tuple[int,int]|str=(5,2),**ka):
+    def step(b):
+      nonlocal state
+      state += 1; state %= N
+      self.style.button_color = colours[state]
+      for callback in callbacks[state]: callback()
+    if isinstance(shape,str): w,h = (2,5) if shape=='T' else map(int,shape.split('x',1))
+    else: assert all(isinstance(x,int) for x in shape); w,h = shape
+    layout = {'width':f'{w}mm','height':f'{h}mm','padding':'0','border':'0'}|layout
+    super().__init__(layout=layout,**ka)
+    self.on_click(step)
+    self.on_click_ = lambda colour,callback: callbacks[colour_[colour] if isinstance(colour,str) else colour].append(callback)
+    self.style.button_color = colours[-1]
+    state:int = -1; N = len(colours)
+    colour_ = {c:k for k,c in enumerate(colours)}
+    callbacks:list[list[Callable[[],None]]] = [[] for _ in range(N)]
 
 #==================================================================================================
 def setdefault_layout(*a,**ka):

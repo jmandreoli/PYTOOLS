@@ -496,6 +496,11 @@ where :math:`E_{\textrm{sig}}` denotes the Einsum operator with the signature gi
     return r
 
 #--------------------------------------------------------------------------------------------------
+  def __repr__(self):
+#--------------------------------------------------------------------------------------------------
+    return f'Einsum({self.sig!r},{','.join(map(str,self.weight.shape))})'
+
+#--------------------------------------------------------------------------------------------------
   def _parse(self,sig:str,dims:Sequence[int],bias:bool):
 #--------------------------------------------------------------------------------------------------
     for culprit,check in (('signature',isinstance(sig,str)),('dims',all(isinstance(d,int) for d in dims)),('bias',isinstance(bias,bool))):

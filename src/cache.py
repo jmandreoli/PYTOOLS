@@ -528,6 +528,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
   def norm(self,arg:Tuple[Iterable[Any],Mapping[str,Any]]):
     a,ka = arg
     b = self.sig.bind(*a,**ka)
+    b.apply_defaults()
     return b.args, b.kwargs
 
   def obsolete(self): return self.config[0].obsolete()
@@ -754,12 +755,12 @@ A simple tool to manage a set of :class:`CacheDB` instances, specified by their 
   db:CacheDB|None = None
   interpreter = get_ipython()
   interpreter.push({ivname:db})
-  wdb = ipywidgets.Dropdown(description=ivname,options=OrderedDict(chain((('...',()),),((p,CacheDB(p)) for p in paths))),style={'description_width':'initial'})
-  wshow = ipywidgets.Button(tooltip='show db',icon='fa-refresh',layout=dict(width='.4cm',padding='0cm'))
-  wautorun = ipywidgets.Dropdown(options=[(x[0],x) for x in autorun],layout=dict(width='3cm'))
+  wdb = ipywidgets.Dropdown(description=ivname,options=dict(chain((('...',()),),((p,CacheDB(p)) for p in paths))),style={'description_width':'initial'})
+  wshow = ipywidgets.Button(tooltip='show db',icon='fa-refresh',layout={'width':'.4cm','padding':'0cm'})
+  wautorun = ipywidgets.Dropdown(options=[(x[0],x) for x in autorun],layout={'width':'3cm'})
   wdryrun = ipywidgets.Checkbox(description='dry-run',value=True,style={'description_width':'initial'})
   wout = ipywidgets.Output()
-  wmsg = ipywidgets.Output(layout=dict(border='thin solid black'))
+  wmsg = ipywidgets.Output(layout={'border':'thin solid black'})
   wdb.observe(setdb,'value')
   wautorun.observe(runc,'value')
   wshow.on_click(lambda b: showdb())

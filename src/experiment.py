@@ -129,12 +129,12 @@ Attributes (\*) must be explicitly instantiated at creation time.
   r"""(\*)The device on which to run the model"""
   net: Net
   r"""(\*)The model (initially on cpu, but loaded on :attr:`device` at the beginning of the run and restored to cpu at the end)"""
-  train_split: Iterable[Tuple[torch.Tensor,torch.Tensor]]
+  train_loader: Iterable[Tuple[torch.Tensor,torch.Tensor]]
   r"""(\*)Iterable of batches. Each batch is a tuple of input tensors (first dim = size of batch)"""
-  valid_split: Iterable[Tuple[torch.Tensor,torch.Tensor]]
-  r"""(\*)Same format as :attr:`train_data`"""
-  test_split: Iterable[Tuple[torch.Tensor,torch.Tensor]]
-  r"""(\*)Same format as :attr:`train_data`"""
+  valid_loader: Iterable[Tuple[torch.Tensor,torch.Tensor]]
+  r"""(\*)Same format as :attr:`train_loader`"""
+  test_loader: Iterable[Tuple[torch.Tensor,torch.Tensor]]
+  r"""(\*)Same format as :attr:`train_loader`"""
   optimiser_factory: Callable[[Sequence[torch.nn.Parameter]],torch.optim.Optimizer]
   r"""(\*)The optimiser factory"""
   monitor: Monitor = Monitor()
@@ -186,7 +186,7 @@ Executes the run.
 #--------------------------------------------------------------------------------------------------
     net = self.net
     self.optimiser = optimiser = self.optimiser_factory(net.parameters())
-    self.eval_valid,self.eval_test = map(self.eval_cache,(self.valid_split,self.test_split))
+    self.eval_valid,self.eval_test = map(self.eval_cache,(self.valid_loader,self.test_loader))
     net.to(self.device)
     self.monitor.initial(self)
     self.emit('init',self)
@@ -197,7 +197,7 @@ Executes the run.
         self.emit('open',self)
         while self.progress<self.threshold: # iteration = epoch
           self.emit('start_epoch',self)
-          for inputs in self.train_split: # iteration = step
+          for inputs in self.train_loader: # iteration = step
             self.emit('start_step',self)
             inputs = to(inputs,self.device) # one batch
             optimiser.zero_grad()
@@ -666,12 +666,11 @@ Returns a dictionary which can be passed as keyword arguments to the :class:`Run
 #--------------------------------------------------------------------------------------------------
     D = self.train
     n = len(D); nvalid = int(pcval*n); ntrain = n-nvalid
-    train,valid = torch.utils.data.random_split(D,(ntrain,nvalid))
-    test = self.test
+    splits = dict(zip(('train','valid'),torch.utils.data.random_split(D,(ntrain,nvalid))))|{'test':self.test}
     return {
-      'datainfo':DataInfo(source=self,train=len(train),valid=len(valid),test=len(test)),
+      'datainfo':DataInfo(source=self,**{c:len(split) for c,split in splits.items()}),
       **ka,
-      **{f'{c}_split':torch.utils.data.DataLoader(split,shuffle=c=='train',**ka) for c,split in zip(('train','valid','test'),(train,valid,test))}
+      **{f'{c}_loader':torch.utils.data.DataLoader(split,shuffle=c=='train',**ka) for c,split in splits.items()}
     }
 
 #--------------------------------------------------------------------------------------------------
@@ -727,9 +726,9 @@ At most one of the number of rows or columns can be -1. When both are positive a
     K = nrow*ncol
     lastpage = adj(N,K)
 
-    w_closeb = Button(icon='close',tooltip='Close browser',layout=dict(width='auto',padding='1px'))
-    w_sel = IntSlider(value=1,min=1,max=lastpage,layout=dict(width='10cm'),readout=False)
-    w_page = Text(disabled=True,layout=dict(width=f'{.3+.3*len(str(lastpage))}cm'))
+    w_closeb = Button(icon='close',tooltip='Close browser',layout={'width':'auto','padding':'1px'})
+    w_sel = IntSlider(value=1,min=1,max=lastpage,layout={'width':'10cm'},readout=False)
+    w_page = Text(disabled=True,layout={'width':f'{.3+.3*len(str(lastpage))}cm'})
     w_out = Output()
     w_main = VBox((HBox((w_closeb,Label(f'{self} page:'),w_page,w_sel)),w_out))
     with w_out:
@@ -833,19 +832,19 @@ def describe_obj(x): return {'class':describe(x.__class__)}|describe_iter(x.__di
 @describe.register
 def _(x:int|float|str|bool|type(None)): return x
 @describe.register
-def _(x:torch.device|Accumulator): return repr(x)
-@describe.register
 def _(x:dict): return describe_iter(x.items()) or None
 @describe.register
 def _(x:list): return [vv for v in x if (vv:=describe(v)) is not None] or None
 @describe.register
 def _(x:tuple):
   l = getattr(x,'_fields',None) # for named tuples
-  if l is None: return [vv for v in x if (vv:=describe(v)) is not None]
-  else: return {'class':describe(x.__class__)}|describe_iter(zip(l,x))
+  if l is None: return [vv for v in x if (vv:=describe(v)) is not None] or None
+  return {'class':describe(x.__class__)}|describe_iter(zip(l,x))
 @describe.register
 def _(x:type): return  f'{x.__module__}.{x.__qualname__}'
 
+@describe.register
+def _(x:torch.device|Accumulator): return repr(x)
 @describe.register
 def _(x:Run): return describe_obj(x)
 @describe.register
@@ -854,8 +853,7 @@ def _(x:RunListener): return describe_obj(x) if x.active else None
 def _(x:torch.nn.Module):
   def desc(t):
     xx = t.pop('')
-    if t: return {'class':describe(xx.__class__)}|{k:desc(tt) for k,tt in t.items()}
-    else: return repr(xx)
+    return {'class':describe(xx.__class__)}|{k:desc(tt) for k,tt in t.items()} if t else repr(xx)
   t = {'':x}
   for name,xx in x.named_modules():
     if name:

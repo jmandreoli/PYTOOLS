@@ -6,7 +6,7 @@
 #
 
 from __future__ import annotations
-from typing import Mapping, Callable
+from typing import Mapping, Callable, Tuple, Any
 from functools import cached_property
 
 import simpy
@@ -48,7 +48,6 @@ An instance of this class controls the rollout of a set *content* of pairs where
 A display specification is a function which takes as input a :mod:`simpy.Environment` instance and a part of the display board as returned by generator method :meth:`parts`, and returns a display function with no input which displays the environment on the specified part as of the time of invocation.
 
 :param content: list of environments with displayers
-:type content: :class:`Sequence[Tuple[simpy.Environment,Callable[[simpy.Environment,Any],Callable[[],None]],...]]`
 :param play_kw: a dictionary of keyword arguments, passed to the player constructor (attribute :attr:`factory`)
 :param ka: passed to method :meth:`parts`
   """
@@ -58,7 +57,7 @@ A display specification is a function which takes as input a :mod:`simpy.Environ
   play_default = {'interval':40}
   r"""The default arguments passed to the player factory"""
 
-  def __init__(self,*content,play_kw:Mapping=None,**ka):
+  def __init__(self,*content:Tuple[simpy.Environment,Callable[[simpy.Environment,Any],Callable[[],None]],...],play_kw:Mapping|None=None,**ka):
     assert all((isinstance(env,RobustEnvironment) and all(callable(f) for f in L)) for env,*L in content)
     def displayer(board):
       content_ = [(env,tuple(f(env,part) for f in L)) for (env,*L),part in zip(content,self.parts(board,**ka))]

@@ -55,12 +55,12 @@ class animation_player_base:
   r"""
 An instance of this class is a controllable :mod:`matplotlib` animation, created by this constructor and attached to a :class:`Figure` instance stored as attribute :attr:`board`. The board creation is not performed in this class, so it must be performed in the constructor of a subclass, prior to invoking this constructor.
 
-The speed of the animation is controlled by two parameters whose product determines the number of real milli-seconds per simulation time unit (stu):
+The speed of the animation is controlled by two parameters whose product determines the number of real milliseconds per simulation time unit (stu):
 
 * parameter *frame_per_stu*: the number of frames per stu
-* parameter *interval*: the number of real milli-seconds per frame
+* parameter *interval*: the number of real milliseconds per frame
 
-Note that the *interval* is bounded below by the real time needed to construct and display the frames. Furthermore, below 40ms per frame, the human eye tends to loose vision persistency.
+So long as each frame takes less than *interval* to be constructed and displayed, it remains displayed until the end of the interval, and the next frame is constructed and displayed starting at the beginning of the next interval. A reasonable value for *interval* is ca. 40 ms/frame (flicker fusion threshold).
 
 :param display: the function which takes a simulation time and displays the corresponding (closest) frame
 :param track: track map decomposing the simulation domain into tracks (typically obtained by :func:`track_function`)
@@ -105,7 +105,7 @@ Note that the *interval* is bounded below by the real time needed to construct a
     r"""Shows the current running state as *b*. This implementation raises an error."""
     raise NotImplementedError()
 
-  def setval(self,v:float):
+  def setval(self,v:float|None=None):
     r"""Sets the current frame to be displayed by the animation so that it represents simulation time *v*. Return a non :const:`None` value if *v* is out of the frame range. This implementation raises an error."""
     raise NotImplementedError()
 
@@ -121,9 +121,8 @@ A instance of this class is a player for :mod:`matplotlib` animations controlled
 #==================================================================================================
   def __init__(self,displayer:Callable[[Figure],Callable[[float],None]],fig_kw={},**ka):
     from ipywidgets import Text, FloatText, IntSlider
-    ctrack = -1,0,1
+    ctrack = [-1,0,1] # first (included), last (excluded), length (in frames) of current track
     def setval(v=None,d=None,submit=False):
-      nonlocal ctrack
       if v is None:
         if d is None: n = self.frame+1; d = n-ctrack[0]
         else: n = ctrack[0]+d
@@ -134,9 +133,8 @@ A instance of this class is a player for :mod:`matplotlib` animations controlled
       if d<0 or d>=ctrack[2]:
         track_ = self.track(v)
         if track_ is None: w_track_manager.active = True; return True
-        ctrack = tuple(int(v_*self.frame_per_stu) for v_ in track_)
-        w_track_manager.max = span = ctrack[1]-ctrack[0]
-        ctrack += (span,)
+        ctrack[:2] = (int(v_*self.frame_per_stu) for v_ in track_)
+        w_track_manager.max = ctrack[2] = ctrack[1]-ctrack[0]
         d = n-ctrack[0]
       w_track_manager.value = d
       w_track_manager.active = True
@@ -150,11 +148,11 @@ A instance of this class is a player for :mod:`matplotlib` animations controlled
     w_track_manager = IntSlider(0,min=0,readout=False)
     w_track_manager.active = True
     w_clockb = SimpleButton(icon='stopwatch',tooltip='manually reset clock')
-    w_clock = Text('',layout=dict(width='1.6cm',padding='0cm'),disabled=True)
-    w_clock2 = FloatText(0,min=0,layout=dict(width='1.6cm',padding='0cm',display='none'))
+    w_clock = Text('',layout={'width':'1.6cm','padding':'0cm'},disabled=True)
+    w_clock2 = FloatText(0,min=0,layout={'width':'1.6cm','padding':'0cm','display':'none'})
     w_clock2.active = False
     toolbar = ka.pop('toolbar',())
-    super(animation_player_base,self).__init__(children=ka.pop('children',()),toolbar=(w_play_toggler,w_track_manager,w_clockb,w_clock,w_clock2,*toolbar))
+    app.__init__(self,children=ka.pop('children',()),toolbar=(w_play_toggler,w_track_manager,w_clockb,w_clock,w_clock2,*toolbar))
     self.board = board = self.mpl_figure(**fig_kw)
     display = displayer(board)
     # callbacks
@@ -184,22 +182,21 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
   """
 # ==================================================================================================
   def __init__(self,displayer:Callable[[Figure],Callable[[float],None]],fig_kw={},tbsize=((.15,1.,.8),.15),**ka):
-    ctrack = -1.,0.,1.
+    ctrack = [-1.,0.,1.]
     def setval(v=None,d=+1,submit=False):
-      nonlocal ctrack
       if v is None: n = self.frame+d; v = n/self.frame_per_stu
       else: n = int(v*self.frame_per_stu)
       x = (v-ctrack[0])/ctrack[2]
       if x<0 or x>=1:
         track_ = self.track(v)
         if track_ is None: return True
-        ctrack = tuple(track_)+(track_[1]-track_[0],)
+        ctrack[:2] = track_; ctrack[2] = track_[1]-track_[0]
         x = (v-ctrack[0])/ctrack[2]
       if not edit_value: clock.set(text=f'{v:.02f}',color='k')
       track_manager.set(width=x)
       self.frame = n
       if submit: display(v); main.canvas.draw_idle()
-    def show_running(b): play_toggler.set(text='II' if b else '|>'); toolbar.canvas.draw_idle()
+    def show_running(b): play_toggler.set(text='II' if b else r'$\blacktriangleright$'); toolbar.canvas.draw_idle() # '⏸︎︎' if b else '⏵'
     self.setval = setval
     self.show_running = show_running
     # global design
@@ -213,8 +210,8 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
     display = displayer(self.board)
     r = list(tbsize[0])
     r[1] += figsize_[0]-tbsize_
-    g = dict(width_ratios=r,wspace=0.,bottom=0.,top=1.,left=0.,right=1.)
-    axes = toolbar.subplots(ncols=3,subplot_kw=dict(xticks=(),yticks=(),navigate=False),gridspec_kw=g)
+    g = {'width_ratios':r,'wspace':0.,'bottom':0.,'top':1.,'left':0.,'right':1.}
+    axes = toolbar.subplots(ncols=3,subplot_kw={'xticks':(),'yticks':(),'navigate':False},gridspec_kw=g)
     # widget definitions
     ax = axes[0]
     play_toggler = ax.text(.5,.5,'',ha='center',va='center',transform=ax.transAxes)

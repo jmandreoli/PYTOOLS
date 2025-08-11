@@ -19,10 +19,13 @@ class RobustEnvironment (simpy.Environment):
 Instances of this class are :class:`simpy.Environment` instances with method :meth:`run_robust`, which extends method :class:`run` to allow jumping back in the past (by rerunning since the initial time until the specified point in the past).
   """
 # ==================================================================================================
+  displayers: dict[str,Callable[[Any,...],Callable[[],None]]]
+  r"""A list of displayers (each in charge of a specific aspect) as used in method :meth:`displayer`"""
 
   def __init__(self,init_t=0):
     self.init_t = init_t
     self.n_reset = -1
+    self.displayers = {}
     self.reset()
 
   def reset(self):
@@ -40,68 +43,42 @@ Instances of this class are :class:`simpy.Environment` instances with method :me
     self.run_robust()
     return self.now-self.init_t
 
+  def displayer(self,pane:Any,**ka:dict[str,Any])->Callable[[],None]:
+    r"""
+Returns a function which displays all aspects of this environment, at the time of invocation, onto some abstract object *pane*, typically a :class:`matplotlib.axes.Axes` instance.
+    """
+    L = [f(pane,**kw) for aspect,kw in ka.items() if (f:=self.displayers.get(aspect)) is not None] if ka else [f(pane) for f in self.displayers.values()]
+    def D():
+      for disp in L: disp()
+    return D
+
 # ==================================================================================================
 class SimpySimulation:
   """
-An instance of this class controls the rollout of a set *content* of pairs where the first component is a :class:`RobustEnvironment` instance and the second component is display specification. Attribute :attr:`player` holds a player object, created by invoking method :meth:`player_factory` with keyword arguments *play_kw*. The player object executes the rollout in a timely fashion under user control on a display board (typically a :class:`matplotlib.Figure`).
+An instance of this class controls the rollout of a set :class:`RobustEnvironment` instances. Attribute :attr:`player` holds a :class:`.simpy.BaseControlledAnimation` instance, created by invoking method :meth:`player_factory` with keyword arguments *play_kw*. The player object executes the rollout in a timely fashion under user control on a display board (typically a :class:`matplotlib.Figure`).
 
-A display specification is a function which takes as input a :mod:`simpy.Environment` instance and a part of the display board as returned by generator method :meth:`parts`, and returns a display function with no input which displays the environment on the specified part as of the time of invocation.
-
-:param content: list of environments with displayers
-:param play_kw: a dictionary of keyword arguments, passed to the player constructor (attribute :attr:`factory`)
+:param envs: list of environments
+:param play_kw: a dictionary of keyword arguments, passed to the player constructor (attribute :attr:`player_factory`)
 :param ka: passed to method :meth:`parts`
   """
 # ==================================================================================================
-  player: None
+  player = None
   r"""The player object to run the simulation"""
-  play_default = {'interval':40}
+  player_defaults = {'interval':40}
   r"""The default arguments passed to the player factory"""
-
-  def __init__(self,*content:Tuple[simpy.Environment,Callable[[simpy.Environment,Any],Callable[[],None]],...],play_kw:Mapping|None=None,**ka):
-    assert all((isinstance(env,RobustEnvironment) and all(callable(f) for f in L)) for env,*L in content)
-    def displayer(board):
-      content_ = [(env,tuple(f(env,part) for f in L)) for (env,*L),part in zip(content,self.parts(board,**ka))]
-      def disp_(v):
-        for env,L in content_:
-          env.run_robust(env.init_t+v)
-          for disp in L: disp()
-      return disp_
-    self.player = self.player_factory(displayer,**dict(self.play_default,**(play_kw or {})))
-    try: self._repr_mimebundle_ = self.player._repr_mimebundle_
-    except: pass
-
   @cached_property
   def player_factory(self)->Callable:
-    from matplotlib import get_backend
-    from .animation import widget_animation_player, mpl_animation_player
-    return widget_animation_player if get_backend()=='widget' else mpl_animation_player
-
-  ax_default = {'aspect':'equal','gridlines':True}
-  r"""The default arguments passed to the ``ax_kw`` parameter in method :meth:`parts`"""
-  def parts(self,fig,nrows:int=1,ncols:int=1,sharex:str|bool=False,sharey:str|bool=False,gridspec_kw:Mapping=None,**ka):
     r"""
-Generator of parts. This implementation assumes the board is a :mod:`matplotlib` grid-figure, and yields its subplots (each subplot is a part). The number of parts must be at least equal to the number of environments to which they are assigned, otherwise some environments are not processed.
-
-:param ka: a dictionary of keyword arguments passed to the :meth:`matplotlib.figure.add_subplot` method of each part (key ``gridlines`` is also allowed and denotes whether gridlines should be displayed)
+  The factory to create the :attr:`player` object. This implementation assumes the board is a :mod:`matplotlib` figure, and the control panel factory is the default one as defined in :mod:`.simpy`.
     """
-    from numpy import zeros
-    share:dict[str|bool,Callable[[int,int],tuple[int,int]]] = {
-      'all': (lambda row,col: (0,0)),
-      True:  (lambda row,col: (0,0)),   # alias
-      'row': (lambda row,col: (row,0)),
-      'col': (lambda row,col: (0,col)),
-      'none':(lambda row,col: (-1,-1)),
-      False: (lambda row,col: (-1,-1)), # alias
-    }
-    share_ = tuple((dim,share[s]) for dim,s in (('sharex',sharex),('sharey',sharey)))
-    ka = dict(self.ax_default,**ka)
-    gridlines = ka.pop('gridlines')
-    gridspec = fig.add_gridspec(nrows=nrows,ncols=ncols,**(gridspec_kw or {}))
-    self.axes = axes = zeros((nrows,ncols),dtype=object); axes[...] = None
-    for row in range(nrows):
-      for col in range(ncols):
-        ax = fig.add_subplot(gridspec[row,col],**dict((dim,axes[s(row,col)]) for dim,s in share_),**ka)
-        ax.grid(gridlines)
-        axes[row,col] = ax
-        yield ax
-    raise Exception(f'Insufficient number of parts on this board: {nrows*ncols}')
+    from .animation import ControlledAnimation
+    return ControlledAnimation
+
+  def __init__(self,*envs:RobustEnvironment,displayer_kw:Mapping[str,Any]|None=None,panes_kw:Mapping[str,Any]|None=None,**ka):
+    assert all(isinstance(env,RobustEnvironment) for env in envs)
+    display_list:list[tuple[RobustEnvironment,Callable[[],None]]] = []
+    def display(v):
+      for env,disp in display_list: env.run_robust(v); disp()
+    self.player = self.player_factory(display,**(self.player_defaults|ka))
+    display_list[:] = ((env,env.displayer(pane,**(displayer_kw or {}))) for env,pane in zip(envs,self.player.panes(**(panes_kw or {}))))
+    if (b:=getattr(self.player,'_repr_mimebundle_',None)) is not None: self._repr_mimebundle_ = b

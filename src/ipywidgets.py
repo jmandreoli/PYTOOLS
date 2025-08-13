@@ -11,10 +11,11 @@ import logging; logger = logging.getLogger(__name__)
 
 import pandas, traceback
 import sqlalchemy.engine
-from functools import wraps
+from functools import wraps, partial
+from contextlib import contextmanager
 from pathlib import Path
 import traitlets
-from ipywidgets import Widget, Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, Password, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, VBox, HBox, Box, Layout, Valid, Play, jslink, AppLayout
+from ipywidgets import Widget, Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, Password, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, Stack, VBox, HBox, Box, Layout, Valid, Play, jslink, AppLayout
 
 __all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'animator', 'SelectMultipleOrdered', 'SimpleButton', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
 
@@ -225,7 +226,7 @@ An instance of this class is an app to explore a database specified by *spec*. I
     config_header = db_browser_table.header()
     # widget creation
     w_title = HTML(f'<div style="{self.style}">{engine}</div>')
-    w_table = Select(options=sorted(meta.tables.items()),rows=min(len(meta.tables),10),layout={'width':'10cm'})
+    w_table = activable(Select(options=sorted(meta.tables.items()),rows=min(len(meta.tables),10),layout={'width':'10cm'}))
     w_schema = VBox([config_header,*(cfg.widget for cfg in config.values())])
     w_scol = SelectMultipleOrdered(layout={'width':'6cm'})
     w_ordr = SelectMultipleOrdered(layout={'width':'6cm'})
@@ -252,10 +253,9 @@ An instance of this class is an app to explore a database specified by *spec*. I
       with w_out:
         clear_output(wait=True)
         display(sample(cfg.selected,cfg.nsample,cfg.offset,cfg.order))
-    active = True
     cfg = None
     def set_table(c=None):
-      nonlocal active,cfg
+      nonlocal cfg
       if c is None: new = w_table.value
       else:
         new = c.new
@@ -265,24 +265,22 @@ An instance of this class is an app to explore a database specified by *spec*. I
       w_scol.rows = w_ordr.rows = min(len(cfg.options),10)
       w_size.value = str(sz)
       cfg.widget.layout.display = 'inline'
-      active = False
-      try:
+      with deactivate(w_table):
         w_scol.options = w_ordr.options = cfg.options
         w_scol.value, w_ordr.value = cfg.selected, cfg.order
         w_offset.max = max(sz-1,0)
         w_offset.value = cfg.offset
         w_nsample.value = cfg.nsample
-      finally: active = True
       show()
     def set_scol(c):
       w_detailb.layout.border = 'none' if len(c.new) == len(cfg.options) else 'thin solid red'
-      if active: cfg.selected = c.new; show()
+      if w_table.active: cfg.selected = c.new; show()
     def set_ordr(c):
-      if active: cfg.order = c.new; show()
+      if w_table.active: cfg.order = c.new; show()
     def set_offset(c):
-      if active: cfg.offset = c.new; show()
+      if w_table.active: cfg.offset = c.new; show()
     def set_nsample(c):
-      if active: cfg.nsample = c.new; show()
+      if w_table.active: cfg.nsample = c.new; show()
     def toggledetail(inv={'inline':'none','none':'inline'}):
       w_detail.layout.display = inv[w_detail.layout.display]
     # event binding
@@ -449,7 +447,7 @@ A number of other widgets are accessible in addition to :attr:`main`: :attr:`too
   """
 #==================================================================================================
 
-  def __init__(self,children=(),toolbar=(),track:int|Sequence[int]|Callable[[int],Tuple[int,int]]=None,continuity:bool=True,**ka):
+  def __init__(self,children=(),toolbar=(),track:int|Sequence[int]|Callable[[int],Tuple[int,int]]|None=None,rate=None,**ka):
     from ipywidgets import Play, IntSlider, jslink
     track_func: Callable[[int],Tuple[int, int]]
     if callable(track):
@@ -465,60 +463,35 @@ A number of other widgets are accessible in addition to :attr:`main`: :attr:`too
       from bisect import bisect
       def track_func(x,L=L,imax=len(L)): i = bisect(L,x); return (L[i-1],L[i]) if i<imax else None
     self.track = track_func
-    self.w_play = w_play = Play(0,min=0,max=track_func(0)[1],show_repeat=False,**ka)
+    #
+    ini = track_func(0)
+    self.w_play = w_play = Play(0,min=ini[0],max=ini[1],show_repeat=False,**ka)
     w_ind = IntSlider(0,readout=False)
-    super().__init__(toolbar=[w_play,w_ind,*toolbar],children=children)
+    if rate is None: rate = 1000/self.w_play.interval # frame/sec
+    w_clock_edit = FloatText(0,min=0,layout={'width':'1.6cm','padding':'0cm'})
+    w_clock = Stable(w_clock_edit,'{:.2f}'.format)
+    super().__init__(toolbar=[w_play,w_ind,w_clock,*toolbar],children=children)
     self.on_close(w_play.close)
     jslink((w_play,'value'),(w_ind,'value'))
     jslink((w_play,'min'),(w_ind,'min'))
     jslink((w_play,'max'),(w_ind,'max'))
-    if continuity:
-      def _continuity(c):
-        if c.new == w_play.max and (tr:=track_func(c.new)) is not None:
-          w_play.max = tr[1]; w_play.min = tr[0]
-      w_play.observe(_continuity,'value')
-
-  def add_clock(self,rate:float=None):
-    r"""Adds a clock to the player, displaying (and allowing edition of) an index quantity proportional to the frame number. *rate* is the proportion in index per frame."""
-    from ipywidgets import Text, FloatText
-    if rate is None: rate = 1000/self.w_play.interval # frame/sec
-    w_clockb = SimpleButton(icon='stopwatch',tooltip='manually reset clock')
-    w_clock = Text('',layout={'width':'1.6cm','padding':'0cm'},disabled=True)
-    w_clock2 = FloatText(0,min=0,layout={'width':'1.6cm','padding':'0cm','display':'none'})
-    w_clock2.active = False
-    def tick(n): w_clock.value = f'{n/rate:.2f}'
-    def set_clock():
-      self.pause()
-      w_clock2.value = self.value/rate
-      w_clockb.layout.visibility,w_clock.layout.display,w_clock2.layout.display,w_clock2.active = 'hidden','none','',True
-    w_clockb.on_click(lambda b: set_clock())
-    def clock_set():
-      if not w_clock2.active: return
-      w_clockb.layout.visibility,w_clock.layout.display,w_clock2.layout.display,w_clock2.active = 'visible','','none',False
-      self.value = int(w_clock2.value*rate)
-    w_clock2.observe((lambda c: clock_set()),'value')
-    self.toolbar.children += (w_clockb, w_clock, w_clock2)
-    self.bind(tick)
-    return self
-
-  def bind(self,f:Callable[[int],None],trait:str='value'):
-    r"""Assigns a callback *f* to a trait on the :attr:`w_play` widget."""
-    @wraps(f)
-    def F(c):
-      try: f(c.new)
-      except:
-        with self: traceback.print_exc() # using the implicit console
-        self.pause()
-        raise
-    self.w_play.observe(F,trait)
-    return F
-  def unbind(self,F,trait='value'):
-    r"""Unassigns a callback assigned by method :meth:`bind`."""
-    self.w_play.unobserve(F,trait)
+    self.active = True
+    def new_play(n):
+      if self.active:
+        w_clock.value = n/rate
+        if n >= w_play.max and (tr:=track_func(n)) is not None: w_play.max = tr[1]; w_play.value = n; w_play.min = tr[0]
+    w_play.observe((lambda c: new_play(c.new)),'value')
+    def new_clock(v):
+      with deactivate(self):
+        n = int(v*rate)
+        if (tr:=track_func(n)) is not None:
+          if n >= w_play.max: w_play.max = tr[1]; w_play.value = n; w_play.min = tr[0]
+          elif n <= w_play.min: w_play.min = tr[0]; w_play.value = n; w_play.max = tr[1]
+    w_clock.observe((lambda c: new_clock(c.new)),'value')
 
   def pause(self):
     r"""Pauses the animation"""
-    self.w_play._playing = False
+    self.w_play.playing = False
 
   @property
   def value(self):
@@ -588,6 +561,31 @@ Essentially like :class:`SelectMultiple` but preserves order of selection.
     self.value = tuple(value)
 
 #==================================================================================================
+class Stable (Stack):
+  r"""
+Essentially a wrapper around *main* allowing it to be safely interacted with even when other widgets are updating it concurrently (*main* is frozen during the interaction). Do not bind callbacks to *main*: they can be equivalently bound to its wrapper.
+
+:param main: the widget to wrap
+:param fmt: a callable which returns a :class:`str` representation of any value of *main*
+  """
+#==================================================================================================
+  def __init__(self,main:Widget,fmt:Callable[[Any],str],**ka):
+    self.add_traits(value=type(main).value)
+    self.active = True
+    layout = {k:x for k in main.layout.keys if not k.startswith('_') and (x:=getattr(main.layout,k)) is not None}
+    w_display = SimpleButton((lambda: show_editor()),description='',tooltip='Click to edit',layout=layout)
+    w_editor = HBox(children=[main,SimpleButton((lambda: hide_editor()),icon='close')],layout={'border':'thin solid blue'})
+    def show_editor():
+      with deactivate(self): main.value = self.value; self.selected_index = 1
+    def hide_editor(): self.selected_index = 0
+    def from_self(v): w_display.description = fmt(v)
+    self.observe((lambda c: from_self(c.new)),'value')
+    def from_main(v):
+      if self.active: self.value = v; hide_editor()
+    main.observe((lambda c: from_main(c.new)),'value')
+    super().__init__([w_display,w_editor],selected_index=0,**ka)
+
+#==================================================================================================
 class SimpleButton (Button):
   r"""
 Helper class to define buttons with a single callback and predefined default layout components.
@@ -597,10 +595,9 @@ Helper class to define buttons with a single callback and predefined default lay
   """
 #==================================================================================================
   default_layout = {'width':'auto','padding':'0 1mm 0 1mm'}
-  def __init__(self,callback:Optional[Callable[[],None]]=None,**ka):
-    layout = ka.pop('layout',{})
-    super().__init__(layout=dict(self.default_layout,**layout),**ka)
-    if callback is not None: self.on_click(lambda b: callback())
+  def __init__(self,callback:Optional[Callable[[],None]]=None,layout=None,**ka):
+    super().__init__(layout=(self.default_layout|(layout or {})),**ka)
+    if callback is not None: self.on_click(lambda _: callback())
 
 #==================================================================================================
 class RoundRobinButton (Button):
@@ -629,6 +626,22 @@ An instance of this class is a button with states which form a cycle. Each click
     state:int = -1; N = len(colours)
     colour_ = {c:k for k,c in enumerate(colours)}
     callbacks:list[list[Callable[[],None]]] = [[] for _ in range(N)]
+
+#==================================================================================================
+def activable(w:Widget,ini=True):
+  r"""
+A helper to add an attribute :attr:`active` to a :class:`Widget` instance *w*. Call function :func:`deactivate` to enter a context where :attr:`active` is :const:`False` for *w*. Then other widgets can condition their callbacks on whether *w* is active.
+  """
+#==================================================================================================
+  assert isinstance(w,Widget)
+  w.active = ini
+  return w
+@contextmanager
+def deactivate(w):
+  a = w.active
+  w.active = False
+  try: yield
+  finally: w.active = a
 
 #==================================================================================================
 def setdefault_layout(*a,**ka):

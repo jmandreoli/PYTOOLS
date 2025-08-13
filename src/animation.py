@@ -6,13 +6,14 @@
 #
 
 from __future__ import annotations
+
+import matplotlib.axes
 from matplotlib import rcParams, get_backend
 from matplotlib.pyplot import figure
 from matplotlib.figure import Figure
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Rectangle
-from matplotlib.backend_bases import MouseButton
-try: from .ipywidgets import app, SimpleButton # so this works even if ipywidgets is not available
+try: from .ipywidgets import app # so this works even if ipywidgets is not available
 except: app = object
 from typing import Any, Callable, Iterable, Mapping, Sequence, Tuple, Literal
 import logging; logger = logging.getLogger(__name__)
@@ -70,40 +71,55 @@ So long as each frame takes less than *interval* to be constructed and displayed
 #==================================================================================================
   board: Figure
   r"""The figure on which to start the animation"""
-  running: bool
-  r"""The running state of the animation"""
-  frame: int
+  interrupt: int|None
   r"""The current frame displayed by the animation"""
   frame_per_stu: float
   r"""The frame rate, in frames per simulation time units"""
   track: Callable[[float],Tuple[float,float]]
   r"""The track map"""
+  show_running:Callable[[bool],None]
+  r"""Show the running state of the animation"""
+  show_control:Callable[[int,bool],None]
+  r"""Show the control state of the animation (current frame index,whether current track was modified)"""
+  pause_after_interrupt: bool
 
-  def __init__(self,display:Callable[[float],None],frame_per_stu:float=None,track=None,**ka):
+  def __init__(self,display:Callable[[float],None],frame_per_stu:float|None=None,track=None,**ka):
     def frames():
-      self.setval(0.)
+      n = 0; self.interrupt = None
       while True:
-        self.set_running(False); yield self.frame
-        while self.setval() is None: yield self.frame
+        self.pause(); yield None
+        while True:
+          if self.interrupt is None:
+            if self.accept(n_:=n+1): n = n_
+            else: break
+          else:
+            n = self.interrupt; self.interrupt = None
+            if self.pause_after_interrupt: self.pause()
+          yield n
+    self.ctrack = [-1,0,1] # first frame (included), last frame (excluded), length (in frames) of current track
     self.track = track_function(track,float)
-    super().__init__(self.board,(lambda n: display(n/frame_per_stu)),frames,init_func=(lambda:None),repeat=False,cache_frame_data=False,**ka)
     if frame_per_stu is None: frame_per_stu = 1000./self._interval
     else: frame_per_stu = float(frame_per_stu); assert frame_per_stu > 0
     self.frame_per_stu = frame_per_stu
+    super().__init__(
+      self.board,
+      (lambda n: (None if n is None else display(n/frame_per_stu))),
+      frames,init_func=(lambda:display(0.)),
+      repeat=False,cache_frame_data=False,**ka
+    )
 
-  def set_running(self,b:bool):
-    r"""Sets the running state of the animation to *b*."""
-    self.running = b
-    (self.resume if b else self.pause)()
-    self.show_running(b)
-  def toggle_running(self): self.set_running(not self.running)
+  def accept(self,n:int)->bool:
+    d = n-self.ctrack[0]; new_track = d<0 or d>=self.ctrack[2]
+    if new_track:
+      if (tr:=self.track(n/self.frame_per_stu)) is None: return False
+      self.ctrack[:2] = (int(v_*self.frame_per_stu) for v_ in tr)
+      self.ctrack[2] = self.ctrack[1]-self.ctrack[0]
+    self.show_control(n,new_track)
+    return True
 
-  def show_running(self,b:bool):
-    raise NotImplementedError()
-
-  def setval(self,v:float|None=None):
-    r"""Sets the current frame to be displayed by the animation so that it represents simulation time *v*. Return a non :const:`None` value if *v* is out of the frame range. This implementation raises an error."""
-    raise NotImplementedError()
+  def resume(self): super().resume(); self.pause_after_interrupt = False; self.show_running(True)
+  def resume_at(self,n:int): super().resume(); self.interrupt = n
+  def pause(self): super().pause(); self.pause_after_interrupt = True; self.show_running(False)
 
   def panes(self,nrows:int=1,ncols:int=1,sharex:str|bool=False,sharey:str|bool=False,gridspec_kw:Mapping|None=None,gridlines:bool=True,aspect:str='equal',**ka):
     r"""
@@ -140,54 +156,38 @@ A instance of this class is a player for :mod:`matplotlib` animations controlled
 :param ka: passed to the superclass accepting the corresponding keys
   """
 #==================================================================================================
-  def __init__(self,display:Callable[[float],None],fig_kw={},toolbar=(),**ka):
-    from ipywidgets import Text, FloatText, IntSlider
-    ctrack = [-1,0,1] # first (included), last (excluded), length (in frames) of current track
-    def setval(v=None,d=None,submit=False):
-      if v is None:
-        if d is None: n = self.frame+1; d = n-ctrack[0]
-        else: n = ctrack[0]+d
-        v = n/self.frame_per_stu
-      else: n = int(v*self.frame_per_stu); d = n-ctrack[0]
-      w_clock.value = f'{v:.02f}'
-      w_track_manager.active = False
-      if d<0 or d>=ctrack[2]:
-        track_ = self.track(v)
-        if track_ is None: w_track_manager.active = True; return True
-        ctrack[:2] = (int(v_*self.frame_per_stu) for v_ in track_)
-        w_track_manager.max = ctrack[2] = ctrack[1]-ctrack[0]
-        d = n-ctrack[0]
-      w_track_manager.value = d
-      w_track_manager.active = True
-      self.frame = n
-      if submit: display(v); board.canvas.draw_idle()
-    def show_running(b): w_play_toggler.icon = 'pause' if b else 'play'
+  active:bool
+  def __init__(self,*args,fig_kw={},toolbar=(),**kwargs):
+    from .ipywidgets import deactivate, SimpleButton, Stable
+    from ipywidgets import FloatText, IntSlider, Label
+    def show_control(n:int,new_track:bool=False):
+      with deactivate(self):
+        if new_track:
+          for w,v in zip(w_clock_bounds,self.ctrack[:2]): w.value = f'{v/self.frame_per_stu:.2f}'
+          w_track_manager.max = self.ctrack[2]
+        w_track_manager.value,w_clock.value = n-self.ctrack[0],n/self.frame_per_stu
+    self.show_control = show_control
+    def show_running(b,D={True:'pause',False:'play'}): w_play_toggler.icon = D[b]
     self.show_running = show_running
-    self.setval = setval
     # global design and widget definitions
-    w_play_toggler = SimpleButton(icon='')
+    w_play_toggler = SimpleButton((lambda D={'pause':self.pause,'play':self.resume}:D[w_play_toggler.icon]()),icon='')
     w_track_manager = IntSlider(0,min=0,readout=False)
-    w_track_manager.active = True
-    w_clockb = SimpleButton(icon='stopwatch',tooltip='manually reset clock')
-    w_clock = Text('',layout={'width':'1.6cm','padding':'0cm'},disabled=True)
-    w_clock2 = FloatText(0,min=0,layout={'width':'1.6cm','padding':'0cm','display':'none'})
-    w_clock2.active = False
-    app.__init__(self,toolbar=(w_play_toggler,w_track_manager,w_clockb,w_clock,w_clock2,*toolbar))
-    self.board = board = self.mpl_figure(**fig_kw)
+    w_clock_bounds = [Label('',style={'font_size':'xx-small'}) for _ in range(2)]
+    w_clock_edit = FloatText(0.,min=0.,layout={'width':'1.6cm','padding':'0cm'})
+    w_clock = Stable(w_clock_edit,'{:.2f}'.format)
+    app.__init__(self,toolbar=(w_play_toggler,w_clock_bounds[0],w_track_manager,w_clock_bounds[1],w_clock,*toolbar))
+    self.board = self.mpl_figure(**fig_kw)
+    self.active = True
     # callbacks
-    w_play_toggler.on_click(lambda b: self.toggle_running())
-    def on_clockb_clicked():
-      if w_clock2.active: z = '','none',False
-      else: w_clock2.value = self.frame/self.frame_per_stu; z = 'none','',True
-      w_clock.layout.display,w_clock2.layout.display,w_clock2.active = z
-    w_clockb.on_click(lambda b: on_clockb_clicked())
-    def on_clock2_changed(v):
-      if w_clock2.active:
-        w_clock.layout.display,w_clock2.layout.display,w_clock2.active = '','none',False
-        setval(v,submit=True)
-    w_clock2.observe((lambda c: on_clock2_changed(c.new)),'value')
-    w_track_manager.observe((lambda c: setval(d=c.new,submit=True) if w_track_manager.active else None),'value')
-    super().__init__(display,**ka)
+    def from_track(d):
+      if self.active: n = self.ctrack[0]+d; self.resume_at(n); show_control(n)
+    w_track_manager.observe((lambda c:from_track(c.new)),'value')
+    def from_clock(v):
+      if self.active:
+        if self.accept(n:=int(v*self.frame_per_stu)): self.resume_at(n)
+        else: show_control(w_track_manager.value)
+    w_clock.observe((lambda c:from_clock(c.new)),'value')
+    super().__init__(*args,**kwargs)
 
 #==================================================================================================
 class MPLControlledAnimation (BaseControlledAnimation):
@@ -199,74 +199,79 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
 :param ka: passed to the superclass
   """
 # ==================================================================================================
-  def __init__(self,display:Callable[[float],None],fig_kw={},tbsize=((.15,1.,.8),.15),**ka):
-    ctrack = [-1.,0.,1.]
-    def setval(v=None,d=+1,submit=False):
-      if v is None: n = self.frame+d; v = n/self.frame_per_stu
-      else: n = int(v*self.frame_per_stu)
-      x = (v-ctrack[0])/ctrack[2]
-      if x<0 or x>=1:
-        track_ = self.track(v)
-        if track_ is None: return True
-        ctrack[:2] = track_; ctrack[2] = track_[1]-track_[0]
-        x = (v-ctrack[0])/ctrack[2]
-      if not edit_value: clock.set(text=f'{v:.02f}',color='k')
-      track_manager.set(width=x)
-      self.frame = n
-      if submit: display(v); main.canvas.draw_idle()
-    def show_running(b): play_toggler.set(text='II' if b else r'$\blacktriangleright$'); toolbar.canvas.draw_idle() # '⏸︎︎' if b else '⏵'
-    self.setval = setval
-    self.show_running = show_running
+  def __init__(self,*args,fig_kw={},tbsize=({'play_toggler':.2,'track_bound_beg':.4,'track_manager':2.,'track_bound_end':.4,'clock':.4},.15),**kwargs):
     # global design
-    tbsize_ = sum(tbsize[0])
+    tbsize_ = sum(tbsize[0].values())
     figsize = fig_kw.pop('figsize',None)
     if figsize is None: figsize = rcParams['figure.figsize']
     figsize_ = list(figsize); figsize_[1] += tbsize[1]; figsize_[0] = max(figsize_[0],tbsize_)
     self.main = main = figure(figsize=figsize_,**fig_kw)
     r = tbsize[1],figsize[1]
     toolbar,self.board = main.subfigures(nrows=2,height_ratios=r)
-    r = list(tbsize[0])
-    r[1] += figsize_[0]-tbsize_
-    g = {'width_ratios':r,'wspace':0.,'bottom':0.,'top':1.,'left':0.,'right':1.}
-    axes = toolbar.subplots(ncols=3,subplot_kw={'xticks':(),'yticks':(),'navigate':False},gridspec_kw=g)
+    r = tbsize[0]
+    r['track_manager'] += figsize_[0]-tbsize_
+    g = {'width_ratios':r.values(),'wspace':0.,'bottom':0.,'top':1.,'left':0.,'right':1.}
+    axes = toolbar.subplots(ncols=len(r),subplot_kw={'xticks':(),'yticks':(),'navigate':False},gridspec_kw=g)
+    # required by super
+    def show_control(n:int,new_track:bool=False):
+      track_manager.val = n
+      if not edit_value: clock.set(text=f'{n/self.frame_per_stu:.02f}',color='k')
+      track_manager.set(width=(n-self.ctrack[0])/self.ctrack[2])
+      if new_track:
+        track_bound_beg.set(text=f'{self.ctrack[0]/self.frame_per_stu:.2f}')
+        track_bound_end.set(text=f'{self.ctrack[1]/self.frame_per_stu:.2f}')
+    self.show_control = show_control
+    def show_running(b,D={True:(self.pause,'II'),False:(self.resume,r'$\blacktriangleright$')}): # '⏸︎︎', '⏵'
+      onclick,icon = D[b]
+      play_toggler.onclick = onclick; play_toggler.set(text=icon)
+    self.show_running = show_running
     # widget definitions
-    ax = axes[0]
-    play_toggler = ax.text(.5,.5,'',ha='center',va='center',transform=ax.transAxes)
-    ax = axes[1]
-    ax.set(xlim=(0,1),ylim=(0,1))
-    track_manager = ax.add_patch(Rectangle((0.,0.),0.,1.,fill=True))
-    ax = axes[2]
-    clock = ax.text(.5,.5,'',ha='center',va='center',transform=ax.transAxes)
+    axes_:dict[str,matplotlib.axes.Axes] = dict(zip(r,axes))
+    def widget(f:Callable[[matplotlib.axes.Axes],None])->matplotlib.axes.Axes: return f(axes_[f.__name__])
+    @widget
+    def play_toggler(ax): return ax.text(.5,.5,'',ha='center',va='center',transform=ax.transAxes)
+    @widget
+    def track_manager(ax): ax.set(xlim=(0,1),ylim=(0,1)); return ax.add_patch(Rectangle((0.,0.),0.,1.,fill=True))
+    @widget
+    def clock(ax): return ax.text(.5,.5,'',ha='center',va='center',transform=ax.transAxes)
+    @widget
+    def track_bound_beg(ax): return ax.text(.5,.5,'',ha='center',va='center',fontsize='xx-small',transform=ax.transAxes)
+    @widget
+    def track_bound_end(ax): return ax.text(.5,.5,'',ha='center',va='center',fontsize='xx-small',transform=ax.transAxes)
     # callbacks
     def on_button_press(ev):
-      if ev.button == MouseButton.LEFT and ev.key is None:
-        if ev.inaxes is play_toggler.axes: self.toggle_running()
-        elif ev.inaxes is track_manager.axes: setval(ctrack[0]+ev.xdata*ctrack[2],submit=True)
-    edit_value = ''
+      if ev.button == ev.button.LEFT and ev.key is None:
+        if ev.inaxes is play_toggler.axes:
+          play_toggler.onclick(); toolbar.canvas.draw_idle()
+        elif ev.inaxes is track_manager.axes:
+          d = int(ev.xdata*self.ctrack[2]); n = self.ctrack[0]+d
+          self.resume_at(n); show_control(n)
+    edit_value:str = ''
     def on_key_press(ev):
       nonlocal edit_value
       key = ev.key
       if key == 'left' or key == 'right':
-        if ev.inaxes is not None: setval(d=(+1 if key=='right' else -1),submit=True)
+        if ev.inaxes is not None:
+          n = track_manager.val+{'left':-1,'right':1}[key]; n = min(max(n,self.ctrack[0]),self.ctrack[1]-1)
+          self.show_control(n); self.resume_at(n); return
       elif ev.inaxes is clock.axes:
-        v,c = f'{self.frame/self.frame_per_stu:.02f}','k'
         if key=='enter':
           try: v_ = float(edit_value)
           except: return
-          edit_value = ''
-          if setval(v_,submit=True) is None: return
-        else:
-          if key=='escape': edit_value = ''
-          elif key=='backspace':
-            edit_value = edit_value[:-1]
-            if edit_value: v,c = edit_value,'b'
-          elif key in '0123456789' or (key=='.' and '.' not in edit_value):
-            edit_value += key; v,c = edit_value,'b'
-          else: return
+          ev_ = edit_value; edit_value = ''
+          if self.accept(n:=int(v_*self.frame_per_stu)): self.resume_at(n)
+          else: edit_value = ev_
+          return
+        elif key=='escape': edit_value = ''; v,c = f'{track_manager.val/self.frame_per_stu:.2f}','k'
+        elif key=='backspace' and len(edit_value)>1:
+          edit_value = edit_value[:-1]; v,c = edit_value,'b'
+        elif key in '0123456789' or (key=='.' and '.' not in edit_value):
+          edit_value += key; v,c = edit_value,'b'
+        else: return
         clock.set(text=v,color=c)
         toolbar.canvas.draw_idle()
     toolbar.canvas.mpl_connect('button_press_event',on_button_press)
     toolbar.canvas.mpl_connect('key_press_event',on_key_press)
-    super().__init__(display,**ka)
+    super().__init__(*args,**kwargs)
 
 ControlledAnimation = IPYControlledAnimation if get_backend()=='widget' else MPLControlledAnimation

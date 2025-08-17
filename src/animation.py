@@ -6,7 +6,11 @@
 #
 
 from __future__ import annotations
+import logging; logger = logging.getLogger(__name__)
+from typing import Any, Callable, Iterable, Mapping, Sequence, Tuple, Literal
 
+from enum import Enum
+from functools import partial
 import matplotlib.axes
 from matplotlib import rcParams, get_backend
 from matplotlib.pyplot import figure
@@ -15,43 +19,9 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Rectangle
 try: from .ipywidgets import app # so this works even if ipywidgets is not available
 except: app = object
-from typing import Any, Callable, Iterable, Mapping, Sequence, Tuple, Literal
-import logging; logger = logging.getLogger(__name__)
 
 #==================================================================================================
-def track_function(track:float|Sequence[float]|Callable[[float],Tuple[float,float]],stype:type=float)->Callable[[float],Tuple[float,float]]:
-  r"""
-Builds a track map from a specification *track*. A track map is a callable of one scalar input returning two scalar outputs (bounds of its track interval), or :const:`None` (when input is out of domain).
-
-* Its domain must be an interval (not necessarily bounded) containing 0
-* The mapping of a scalar to the lower bound of its track interval should be non decreasing and right-continuous.
-
-The specification *track* can be the track map itself, returned as such after minimal checks. As a helper, *track* can also be
-
-* a positive scalar, in which case the track map is based on intervals of constant length equal to that scalar, starting at 0 and never ending
-* an increasing sequence of positive scalars, in which case the track map is based on intervals which are the consecutive pairs in that sequence (prefixed with 0)
-
-:param track: the track map specification
-:param stype: the type of scalars passed to the track map
-  """
-# ==================================================================================================
-  assert stype in (int,float)
-  if callable(track):
-    track_func = track
-    track_ = track(stype(0))
-    assert track_ is not None and len(track_)==2 and isinstance((t0:=track_[0]),stype) and isinstance((t1:=track_[1]),stype) and t0<=0<t1 and track(t0) == track_ and ((t:=track(t1)[0]) is None or t == t1)
-  elif isinstance(track,(int,float)):
-    T = stype(track)
-    assert T>0
-    def track_func(x,T=T): x -= x%T; return x,x+T
-  else:
-    L = tuple(map(stype,[0,*track]))
-    assert len(L)>1 and all(x<x_ for (x,x_) in zip(L[:-1],L[1:]))
-    from bisect import bisect
-    def track_func(x,L=L,imax=len(L)): i = bisect(L,x); return (L[i-1],L[i]) if i<imax else None
-  return track_func
-
-#==================================================================================================
+AnimationStatus = Enum('AnimationStatus','playing paused')
 class BaseControlledAnimation (FuncAnimation):
   r"""
 An instance of this class is a controllable :mod:`matplotlib` animation, created by this constructor and attached to a :class:`Figure` instance stored as attribute :attr:`board`. The board creation is not performed in this class, so it must be performed in the constructor of a subclass, prior to invoking this constructor.
@@ -64,69 +34,106 @@ The speed of the animation is controlled by two parameters whose product determi
 So long as each frame takes less than *interval* to be constructed and displayed, it remains displayed until the end of the interval, and the next frame is constructed and displayed starting at the beginning of the next interval. A reasonable value for *interval* is ca. 40 ms/frame (flicker fusion threshold).
 
 :param display: the function which takes a simulation time and displays the corresponding (closest) frame
-:param track: track map decomposing the simulation domain into tracks (typically obtained by :func:`track_function`)
+:param track_spec: specification of a track map, passed to method :meth:`track_function`
 :param frame_per_stu: frame rate, in frames per simulation time (if :const:`None` use animation real time rate)
 :param ka: passed to the :class:`FuncAnimation` constructor
   """
 #==================================================================================================
   board: Figure
   r"""The figure on which to start the animation"""
-  interrupt: int|None
-  r"""The current frame displayed by the animation"""
   frame_per_stu: float
   r"""The frame rate, in frames per simulation time units"""
-  track: Callable[[float],Tuple[float,float]]
+  track_func: Callable[[float],Tuple[float,float]]
   r"""The track map"""
-  show_running:Callable[[bool],None]
+  show_status:Callable[[Enum],None]
   r"""Show the running state of the animation"""
   show_control:Callable[[int,bool],None]
   r"""Show the control state of the animation (current frame index,whether current track was modified)"""
-  pause_after_interrupt: bool
+  st_type: type = float
+  r"""Type of simulation time (typically :class:`int` or :class:`float`)"""
+  jump_to: Callable[[int,bool],None]
+  track:Sequence[int]
 
-  def __init__(self,display:Callable[[float],None],frame_per_stu:float|None=None,track=None,**ka):
+  #--------------------------------------------------------------------------------------------------
+  def __init__(self,display:Callable[[Any],None],frame_per_stu:float|None=None,interval:float|None=None,track_spec=None,**ka):
+  #--------------------------------------------------------------------------------------------------
+    def set_status(f:Callable[[],None],s:AnimationStatus): f(); self.show_status(s)
+    self.resume = partial(set_status,self.resume,AnimationStatus.playing)
+    self.pause  = partial(set_status,self.pause,AnimationStatus.paused)
+    def jump_to(n:int,check:bool=False):
+      v = n/self.frame_per_stu; new_track = False
+      if check is True:
+        d = n-track[0]; new_track = d<0 or d>=track[2]
+        if new_track:
+          if (tr:=track_func(v)) is None: return None
+          track[:2] = (int(v_*self.frame_per_stu) for v_ in tr)
+          track[2] = track[1]-track[0]
+      self.show_control(n,new_track)
+      return v
     def frames():
-      n = 0; self.interrupt = None
+      n:int = 0
+      def jump_to_(n_:int,check:bool=False)->bool:
+        nonlocal n
+        if (v:=jump_to(n_,check)) is None: return False
+        n = n_; display(v); self.board.canvas.draw_idle(); return True
+      self.jump_to = jump_to_
       while True:
         self.pause(); yield None
-        while True:
-          if self.interrupt is None:
-            if self.accept(n_:=n+1): n = n_
-            else: break
-          else:
-            n = self.interrupt; self.interrupt = None
-            if self.pause_after_interrupt: self.pause()
-          yield n
-    self.ctrack = [-1,0,1] # first frame (included), last frame (excluded), length (in frames) of current track
-    self.track = track_function(track,float)
-    if frame_per_stu is None: frame_per_stu = 1000./self._interval
-    else: frame_per_stu = float(frame_per_stu); assert frame_per_stu > 0
+        while (v:=jump_to((n_:=n+1),check=True)) is not None: n = n_; yield v
+    self.track = track = [-1,0,1] # first frame (included), last frame (excluded), length (in frames) of current track
+    track_func = self.track_function(track_spec,self.st_type)
+    def positive(v): v = float(v); assert v>0; return v
+    if frame_per_stu is None:
+      assert interval is not None, 'At least one of frame_per_stu or interval must be provided'
+      interval = positive(interval); frame_per_stu = 1000./interval
+    else:
+      frame_per_stu = positive(frame_per_stu)
+      interval = 1000./frame_per_stu if interval is None else positive(interval)
     self.frame_per_stu = frame_per_stu
-    super().__init__(
-      self.board,
-      (lambda n: (None if n is None else display(n/frame_per_stu))),
-      frames,init_func=(lambda:display(0.)),
-      repeat=False,cache_frame_data=False,**ka
-    )
+    super().__init__(self.board,(lambda v: None if v is None else display(v)),frames,init_func=(lambda:display(0.)),repeat=False,cache_frame_data=False,interval=interval,**ka)
 
-  def accept(self,n:int)->bool:
-    d = n-self.ctrack[0]; new_track = d<0 or d>=self.ctrack[2]
-    if new_track:
-      if (tr:=self.track(n/self.frame_per_stu)) is None: return False
-      self.ctrack[:2] = (int(v_*self.frame_per_stu) for v_ in tr)
-      self.ctrack[2] = self.ctrack[1]-self.ctrack[0]
-    self.show_control(n,new_track)
-    return True
+#--------------------------------------------------------------------------------------------------
+  @staticmethod
+  def track_function(spec:float|Sequence[float]|Callable[[float],Tuple[float,float]],stype:type=float)->Callable[[float],Tuple[float,float]]:
+    r"""
+Builds a track map from a specification *spec*. A track map is a callable of one scalar input returning two scalar outputs (bounds of its track interval), or :const:`None` (when input is out of domain).
 
-  def resume(self): super().resume(); self.pause_after_interrupt = False; self.show_running(True)
-  def resume_at(self,n:int): super().resume(); self.interrupt = n
-  def pause(self): super().pause(); self.pause_after_interrupt = True; self.show_running(False)
+* Its domain must be an interval (not necessarily bounded) containing 0
+* The mapping of a scalar to the lower bound of its track interval should be non decreasing and right-continuous.
 
+The specification *spec* can be the track map itself, returned as such after minimal checks. As a helper, *spec* can also be
+
+* a positive scalar, in which case the track map is based on intervals of constant length equal to that scalar, starting at 0 and never ending
+* an increasing sequence of positive scalars, in which case the track map is based on intervals which are the consecutive pairs in that sequence (prefixed with 0)
+
+:param spec: the track map specification
+:param stype: the type of scalars passed to the track map
+  """
+#--------------------------------------------------------------------------------------------------
+    assert stype in (int,float)
+    if callable(spec):
+      track_func = spec
+      track_ = spec(stype(0))
+      assert track_ is not None and len(track_)==2 and isinstance((t0:=track_[0]),stype) and isinstance((t1:=track_[1]),stype) and t0<=0<t1 and spec(t0) == track_ and ((t:=spec(t1)[0]) is None or t == t1)
+    elif isinstance(spec,(int,float)):
+      T = stype(spec)
+      assert T>0
+      def track_func(x,T=T): x -= x%T; return x,x+T
+    else:
+      L = tuple(map(stype,[0,*spec]))
+      assert len(L)>1 and all(x<x_ for (x,x_) in zip(L[:-1],L[1:]))
+      from bisect import bisect
+      def track_func(x,L=L,imax=len(L)): i = bisect(L,x); return (L[i-1],L[i]) if i<imax else None
+    return track_func
+
+#--------------------------------------------------------------------------------------------------
   def panes(self,nrows:int=1,ncols:int=1,sharex:str|bool=False,sharey:str|bool=False,gridspec_kw:Mapping|None=None,gridlines:bool=True,aspect:str='equal',**ka):
     r"""
 Generator of panes on the board.
 
 :param ka: a dictionary of keyword arguments passed to the :meth:`matplotlib.figure.add_subplot` method of each part (key ``gridlines`` is also allowed and denotes whether gridlines should be displayed)
     """
+#--------------------------------------------------------------------------------------------------
     from numpy import zeros
     share:dict[str|bool,Callable[[int,int],tuple[int,int]]] = {
       'all': (lambda row,col: (0,0)),
@@ -163,30 +170,30 @@ A instance of this class is a player for :mod:`matplotlib` animations controlled
     def show_control(n:int,new_track:bool=False):
       with deactivate(self):
         if new_track:
-          for w,v in zip(w_clock_bounds,self.ctrack[:2]): w.value = f'{v/self.frame_per_stu:.2f}'
-          w_track_manager.max = self.ctrack[2]
-        w_track_manager.value,w_clock.value = n-self.ctrack[0],n/self.frame_per_stu
+          for w,n_ in zip(w_clock_bounds,self.track[:2]): w.value = f'{n_/self.frame_per_stu:.2f}'
+          w_track_manager.max = self.track[2]
+        w_track_manager.value,w_clock.value = n-self.track[0],n/self.frame_per_stu
     self.show_control = show_control
-    def show_running(b,D={True:'pause',False:'play'}): w_play_toggler.icon = D[b]
-    self.show_running = show_running
+    def show_status(b,D={AnimationStatus.playing:('pause',(lambda: self.pause())),AnimationStatus.paused:('play',(lambda: self.resume()))}):
+      w_play_toggler.icon,w_play_toggler.callback_ = D[b]
+    self.show_status = show_status
     # global design and widget definitions
-    w_play_toggler = SimpleButton((lambda D={'pause':self.pause,'play':self.resume}:D[w_play_toggler.icon]()),icon='')
-    w_track_manager = IntSlider(0,min=0,readout=False)
+    w_play_toggler = SimpleButton((lambda: w_play_toggler.callback_()),icon='')
+    w_track_manager = IntSlider(0,min=0,step=1,readout=False)
     w_clock_bounds = [Label('',style={'font_size':'xx-small'}) for _ in range(2)]
-    w_clock_edit = FloatText(0.,min=0.,layout={'width':'1.6cm','padding':'0cm'})
+    w_clock_edit = FloatText(0.,min=0.,step=1e-10,layout={'width':'1.6cm','padding':'0cm'})
     w_clock = Stable(w_clock_edit,'{:.2f}'.format)
     app.__init__(self,toolbar=(w_play_toggler,w_clock_bounds[0],w_track_manager,w_clock_bounds[1],w_clock,*toolbar))
     self.board = self.mpl_figure(**fig_kw)
     self.active = True
     # callbacks
     def from_track(d):
-      if self.active: n = self.ctrack[0]+d; self.resume_at(n); show_control(n)
+      if self.active: self.jump_to(self.track[0]+d)
     w_track_manager.observe((lambda c:from_track(c.new)),'value')
-    def from_clock(v):
-      if self.active:
-        if self.accept(n:=int(v*self.frame_per_stu)): self.resume_at(n)
-        else: show_control(w_track_manager.value)
-    w_clock.observe((lambda c:from_clock(c.new)),'value')
+    def from_clock(v,v_old):
+      if self.active and not self.jump_to(int(v*self.frame_per_stu),check=True):
+        with deactivate(self): w_clock.value = v_old
+    w_clock.observe((lambda c:from_clock(c.new,c.old)),'value')
     super().__init__(*args,**kwargs)
 
 #==================================================================================================
@@ -216,15 +223,14 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
     def show_control(n:int,new_track:bool=False):
       track_manager.val = n
       if not edit_value: clock.set(text=f'{n/self.frame_per_stu:.02f}',color='k')
-      track_manager.set(width=(n-self.ctrack[0])/self.ctrack[2])
+      track_manager.set(width=(n-self.track[0])/self.track[2])
       if new_track:
-        track_bound_beg.set(text=f'{self.ctrack[0]/self.frame_per_stu:.2f}')
-        track_bound_end.set(text=f'{self.ctrack[1]/self.frame_per_stu:.2f}')
+        track_bound_beg.set(text=f'{self.track[0]/self.frame_per_stu:.2f}')
+        track_bound_end.set(text=f'{self.track[1]/self.frame_per_stu:.2f}')
     self.show_control = show_control
-    def show_running(b,D={True:(self.pause,'II'),False:(self.resume,r'$\blacktriangleright$')}): # '⏸︎︎', '⏵'
-      onclick,icon = D[b]
-      play_toggler.onclick = onclick; play_toggler.set(text=icon)
-    self.show_running = show_running
+    def show_status(b,D={AnimationStatus.playing:('II',(lambda: self.pause())),AnimationStatus.paused:(r'$\blacktriangleright$',(lambda: self.resume()))}): # '⏸︎︎', '⏵'
+      icon,onclick = D[b]; play_toggler.onclick = onclick; play_toggler.set(text=icon)
+    self.show_status = show_status
     # widget definitions
     axes_:dict[str,matplotlib.axes.Axes] = dict(zip(r,axes))
     def widget(f:Callable[[matplotlib.axes.Axes],None])->matplotlib.axes.Axes: return f(axes_[f.__name__])
@@ -244,23 +250,22 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
         if ev.inaxes is play_toggler.axes:
           play_toggler.onclick(); toolbar.canvas.draw_idle()
         elif ev.inaxes is track_manager.axes:
-          d = int(ev.xdata*self.ctrack[2]); n = self.ctrack[0]+d
-          self.resume_at(n); show_control(n)
+          self.jump_to(self.track[0]+int(ev.xdata*self.track[2]))
     edit_value:str = ''
     def on_key_press(ev):
       nonlocal edit_value
       key = ev.key
       if key == 'left' or key == 'right':
         if ev.inaxes is not None:
-          n = track_manager.val+{'left':-1,'right':1}[key]; n = min(max(n,self.ctrack[0]),self.ctrack[1]-1)
-          self.show_control(n); self.resume_at(n); return
+          n = track_manager.val+{'left':-1,'right':1}[key]
+          if n>=self.track[0] and n<self.track[1]: self.jump_to(n)
+          return
       elif ev.inaxes is clock.axes:
         if key=='enter':
           try: v_ = float(edit_value)
           except: return
           ev_ = edit_value; edit_value = ''
-          if self.accept(n:=int(v_*self.frame_per_stu)): self.resume_at(n)
-          else: edit_value = ev_
+          if not self.jump_to(int(v_*self.frame_per_stu),check=True): edit_value = ev_
           return
         elif key=='escape': edit_value = ''; v,c = f'{track_manager.val/self.frame_per_stu:.2f}','k'
         elif key=='backspace' and len(edit_value)>1:
@@ -274,4 +279,5 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
     toolbar.canvas.mpl_connect('key_press_event',on_key_press)
     super().__init__(*args,**kwargs)
 
-ControlledAnimation = IPYControlledAnimation if get_backend()=='widget' else MPLControlledAnimation
+def ControlledAnimation(*a,**ka):
+  return IPYControlledAnimation(*a,**ka) if get_backend() == 'widget' else MPLControlledAnimation(*a,**ka)

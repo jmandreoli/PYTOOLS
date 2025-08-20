@@ -2,7 +2,7 @@
 # Contributors:         Jean-Marc Andreoli
 # Language:             python
 # Purpose:              Illustration of the cache module
-from make import RUN; RUN(__name__,__file__) # trick for documentation
+from make import RUN; RUN(__name__,__file__) # doc gen trick
 #--------------------------------------------------------------------------------------------------
 
 import os,sys,functools,time

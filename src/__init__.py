@@ -526,7 +526,6 @@ Assumes that *pkgname* is the name of a python regular (non namespace) package a
   return c
 
 #==================================================================================================
-class SQLinitMetainfoException (Exception): pass
 def SQLinit(engine:str|sqlalchemy.engine.Engine,meta:sqlalchemy.MetaData)->sqlalchemy.engine.Engine:
   r"""
 :param engine: a sqlalchemy engine (or its url)
@@ -551,14 +550,14 @@ def SQLinit(engine:str|sqlalchemy.engine.Engine,meta:sqlalchemy.MetaData)->sqlal
     event.listen(engine,'begin',do_begin)
   meta_ = MetaData()
   meta_.reflect(bind=engine)
-  if meta_.tables:
+  if meta_.tables: # engine has some tables
     try:
       with engine.connect() as conn: metainfo, = conn.execute(select(meta_.tables['Metainfo'])).mappings()
       metainfo = dict(metainfo); del metainfo['created']
-    except: raise SQLinitMetainfoException('Not found')
+    except: raise SQLinit.MetainfoException('Metainfo table not found or wrong format')
     for k,v in meta.info.items():
       if (v_:=metainfo.get(k)) != str(v):
-        raise SQLinitMetainfoException(f'{k}[expected:{v},found:{v_}]')
+        raise SQLinit.MetainfoException(f'Metainfo field mismatch {k}[expected:{v},found:{v_}]')
   else: # engine is empty
     metainfo_table = Table(
       'Metainfo',meta_,
@@ -569,6 +568,72 @@ def SQLinit(engine:str|sqlalchemy.engine.Engine,meta:sqlalchemy.MetaData)->sqlal
     with engine.begin() as conn: conn.execute(insert(metainfo_table).values(created=datetime.now(),**meta.info))
     meta.create_all(bind=engine)
   return engine
+SQLinit.MetainfoException = type('MetainfoException',(Exception,),{})
+
+#==================================================================================================
+class SQLupgrade:
+  r"""
+:param modules: schema modules for the new and old database
+:param urls: urls for the new and old database
+:param old_name: a callable which maps a table name of the new db into its name in the old db
+
+An instance of this class is a context which helps transfer some database from an old schema to a new (created) one. A schema module must have at least the following members:
+
+  * ``__version__``: the version of the schema as an :class:`int`
+  * ``Base``: a subclass of class :class:`sqlalchemy.orm.DeclarativeBase`
+  * ``get_sessionmaker``: a callable which takes one input (typically a url) and returns a session maker (typically obtained by calling function :func:`sqlalchemy.orm.sessionmaker` on an engine bound to that url)
+  * all the mapped tables, as subclasses of ``Base``
+
+If *old_name* is a dictionary, each key should be a new table name, and its value should be either an old table name, or a dictionary mapping new column names in the new table to old ones in the old table (or a pair thereof).
+  """
+#==================================================================================================
+  session:sqlalchemy.orm.Session
+  r"""The session opened for access to the new database (only when the context is entered)"""
+  old_session:sqlalchemy.orm.Session
+  r"""The session opened for access to the old database (only when the context is entered)"""
+  transfer: Callable[[],None]
+  r"""Used to initiate the transfer from the old to the new database"""
+  register: Callable[[str,str,Callable[[Any],None]],None]
+  r"""Used as a decorator to register an entry in the converter (the decorator arguments are the table and column names; the decorated function name *must* be ``_``)"""
+
+  def __init__(self,modules,urls,*,versions=None,old_name:Callable[[str,str|None],str]|dict[str,str|dict[str,str]|Tuple[str,dict[str,str]]]|None=None):
+    assert len(modules) == 2
+    assert len(urls)==2 and all(isinstance(url,str) for url in urls)
+    if versions is not None: assert len(versions)==2 and all((v is None or mod.__version__==v) for mod,v in zip(modules,versions))
+    if old_name is None: old_name = (lambda name,cname: name if cname is None else cname)
+    elif isinstance(old_name,dict):
+      def old_name(name:str,cname:str|None=None,D=old_name):
+        x = D.get(name)
+        name_,D_ = (name,{}) if x is None else (x,{}) if isinstance(x,str) else (name,x) if isinstance(x,dict) else x
+        return name_ if cname is None else D_.get(cname,cname)
+    else: assert callable(old_name)
+    Mapper,OldMapper = ({m.class_.__tablename__:m for m in mod.Base.registry.mappers} for mod in modules)
+    lookup = lambda old_cname: (lambda old: getattr(old,old_cname))
+    TR = {
+      name:(mapper,old_mapper,{
+        cname:lookup(old_cname) for cname,c in mapper.columns.items()
+        if (old_c:=old_mapper.columns.get(old_cname:=old_name(name,cname))) is not None and old_c.type==c.type
+      })
+      for name,mapper in Mapper.items()
+      if (old_mapper:=OldMapper.get(old_name(name,None))) is not None
+    }
+    self._Sessions = tuple(mod.get_sessionmaker(u) for mod,u in zip(modules,urls))
+    def transfer():
+      TR_ = [(mapper,old_mapper,[(c.name,tr.get(c.name,lookup(c.name))) for c in mapper.columns]) for mapper,old_mapper,tr in TR.values()]
+      for mapper,old_mapper,tr_ in TR_:
+        for old in self.old_session.query(old_mapper.class_): self.session.add(mapper.class_(**{cname:f(old) for cname,f in tr_}))
+    self.transfer = transfer
+    def register(name:str,cname:str,f):
+      assert cname in Mapper[name].columns
+      TR[name][2][cname] = f
+    self.register = register
+  def __enter__(self):
+    self.session,self.old_session = (Session() for Session in self._Sessions)
+    return self
+  def __exit__(self,exc,*a):
+    if exc is None: self.session.commit()
+    for s in self.session,self.old_session: s.close()
+    del self.session,self.old_session
 
 #==================================================================================================
 class SQLHandler (logging.Handler):

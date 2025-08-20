@@ -28,14 +28,13 @@ An instance of this class is a controllable :mod:`matplotlib` animation, created
 
 The speed of the animation is controlled by two parameters whose product determines the number of real milliseconds per simulation time unit (stu):
 
-* parameter *frame_per_stu*: the number of frames per stu
-* parameter *interval*: the number of real milliseconds per frame
+:param frame_per_stu: the number of frames per stu
+:param interval: the number of real milliseconds per frame
 
-So long as each frame takes less than *interval* to be constructed and displayed, it remains displayed until the end of the interval, and the next frame is constructed and displayed starting at the beginning of the next interval. A reasonable value for *interval* is ca. 40 ms/frame (flicker fusion threshold).
+At least one of these parameters must be provided. If one is missing, the other is imputed so that the simulation unit is 1 real second. So long as each frame takes less than *interval* to be constructed and displayed, it remains displayed until the end of the interval, and the next frame is constructed and displayed starting at the beginning of the next interval. A reasonable value for *interval* is ca. 40 ms/frame (flicker fusion threshold).
 
-:param display: the function which takes a simulation time and displays the corresponding (closest) frame
+:param display: the function which takes a simulation time and displays it
 :param track_spec: specification of a track map, passed to method :meth:`track_function`
-:param frame_per_stu: frame rate, in frames per simulation time (if :const:`None` use animation real time rate)
 :param ka: passed to the :class:`FuncAnimation` constructor
   """
 #==================================================================================================
@@ -48,11 +47,11 @@ So long as each frame takes less than *interval* to be constructed and displayed
   show_status:Callable[[Enum],None]
   r"""Show the running state of the animation"""
   show_control:Callable[[int,bool],None]
-  r"""Show the control state of the animation (current frame index,whether current track was modified)"""
-  st_type: type = float
-  r"""Type of simulation time (typically :class:`int` or :class:`float`)"""
+  r"""Show the control state of the animation (current frame index, whether current track was modified)"""
   jump_to: Callable[[int,bool],None]
+  r"""Interrupt the normal sequence of the animation (frame to jump to, whether current track may require update)"""
   track:Sequence[int]
+  r"""Current track (start frame included, end frame excluded, length)"""
 
   #--------------------------------------------------------------------------------------------------
   def __init__(self,display:Callable[[Any],None],frame_per_stu:float|None=None,interval:float|None=None,track_spec=None,**ka):
@@ -67,7 +66,8 @@ So long as each frame takes less than *interval* to be constructed and displayed
         if new_track:
           if (tr:=track_func(v)) is None: return None
           track[:2] = (int(v_*self.frame_per_stu) for v_ in tr)
-          track[2] = track[1]-track[0]
+          track[2] = x = track[1]-track[0]
+          if x==0: track[1] += 1; track[2] += 1
       self.show_control(n,new_track)
       return v
     def frames():
@@ -80,11 +80,11 @@ So long as each frame takes less than *interval* to be constructed and displayed
       while True:
         self.pause(); yield None
         while (v:=jump_to((n_:=n+1),check=True)) is not None: n = n_; yield v
-    self.track = track = [-1,0,1] # first frame (included), last frame (excluded), length (in frames) of current track
-    track_func = self.track_function(track_spec,self.st_type)
+    self.track = track = [-1,0,1]
+    track_func = self.track_function(track_spec)
     def positive(v): v = float(v); assert v>0; return v
     if frame_per_stu is None:
-      assert interval is not None, 'At least one of frame_per_stu or interval must be provided'
+      assert interval is not None, 'At least one of *frame_per_stu* or *interval* must be provided'
       interval = positive(interval); frame_per_stu = 1000./interval
     else:
       frame_per_stu = positive(frame_per_stu)
@@ -94,36 +94,38 @@ So long as each frame takes less than *interval* to be constructed and displayed
 
 #--------------------------------------------------------------------------------------------------
   @staticmethod
-  def track_function(spec:float|Sequence[float]|Callable[[float],Tuple[float,float]],stype:type=float)->Callable[[float],Tuple[float,float]]:
+  def track_function(spec:int|float|Sequence[int|float]|Callable[[float],Tuple[float,float]])->Callable[[float],Tuple[float,float]]:
     r"""
 Builds a track map from a specification *spec*. A track map is a callable of one scalar input returning two scalar outputs (bounds of its track interval), or :const:`None` (when input is out of domain).
 
 * Its domain must be an interval (not necessarily bounded) containing 0
-* The mapping of a scalar to the lower bound of its track interval should be non decreasing and right-continuous.
+* The mapping of a scalar to the lower bound of its track interval should be non-decreasing and right-continuous.
 
 The specification *spec* can be the track map itself, returned as such after minimal checks. As a helper, *spec* can also be
 
-* a positive scalar, in which case the track map is based on intervals of constant length equal to that scalar, starting at 0 and never ending
-* an increasing sequence of positive scalars, in which case the track map is based on intervals which are the consecutive pairs in that sequence (prefixed with 0)
+* a positive scalar, in which case the track map is based on intervals of constant length equal to that scalar, starting at 0. and never ending
+* an increasing sequence of positive scalars, in which case the track map is based on intervals which are the consecutive pairs in that sequence (prefixed with 0.)
 
 :param spec: the track map specification
-:param stype: the type of scalars passed to the track map
   """
 #--------------------------------------------------------------------------------------------------
-    assert stype in (int,float)
     if callable(spec):
       track_func = spec
-      track_ = spec(stype(0))
-      assert track_ is not None and len(track_)==2 and isinstance((t0:=track_[0]),stype) and isinstance((t1:=track_[1]),stype) and t0<=0<t1 and spec(t0) == track_ and ((t:=spec(t1)[0]) is None or t == t1)
+      track_ = spec(0.)
+      assert track_ is not None and len(track_)==2 and isinstance((t0:=track_[0]),float) and isinstance((t1:=track_[1]),float) and t0<=0.<t1 and spec(t0) == track_ and ((t:=spec(t1)[0]) is None or t == t1)
     elif isinstance(spec,(int,float)):
-      T = stype(spec)
+      T = float(spec)
       assert T>0
-      def track_func(x,T=T): x -= x%T; return x,x+T
+      def track_func(x,T=T):
+        if x<0.: return None
+        x -= x%T; return x,x+T
     else:
-      L = tuple(map(stype,[0,*spec]))
+      L = (0.,*map(float,spec))
       assert len(L)>1 and all(x<x_ for (x,x_) in zip(L[:-1],L[1:]))
       from bisect import bisect
-      def track_func(x,L=L,imax=len(L)): i = bisect(L,x); return (L[i-1],L[i]) if i<imax else None
+      def track_func(x,L=L,imax=len(L)):
+        if x<0.: return None
+        i = bisect(L,x); return (L[i-1],L[i]) if i<imax else None
     return track_func
 
 #--------------------------------------------------------------------------------------------------
@@ -174,14 +176,15 @@ A instance of this class is a player for :mod:`matplotlib` animations controlled
           w_track_manager.max = self.track[2]
         w_track_manager.value,w_clock.value = n-self.track[0],n/self.frame_per_stu
     self.show_control = show_control
+    onclick = lambda: None
     def show_status(b,D={AnimationStatus.playing:('pause',(lambda: self.pause())),AnimationStatus.paused:('play',(lambda: self.resume()))}):
-      w_play_toggler.icon,w_play_toggler.callback_ = D[b]
+      nonlocal onclick; w_play_toggler.icon,onclick = D[b]
     self.show_status = show_status
     # global design and widget definitions
-    w_play_toggler = SimpleButton((lambda: w_play_toggler.callback_()),icon='')
+    w_play_toggler = SimpleButton((lambda: onclick()),icon='')
     w_track_manager = IntSlider(0,min=0,step=1,readout=False)
     w_clock_bounds = [Label('',style={'font_size':'xx-small'}) for _ in range(2)]
-    w_clock_edit = FloatText(0.,min=0.,step=1e-10,layout={'width':'1.6cm','padding':'0cm'})
+    w_clock_edit = FloatText(0.,min=0.,step=1e-10,style={'font_size':'xx-small'},layout={'width':'1.6cm','padding':'0cm'})
     w_clock = Stable(w_clock_edit,'{:.2f}'.format)
     app.__init__(self,toolbar=(w_play_toggler,w_clock_bounds[0],w_track_manager,w_clock_bounds[1],w_clock,*toolbar))
     self.board = self.mpl_figure(**fig_kw)
@@ -239,7 +242,7 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
     @widget
     def track_manager(ax): ax.set(xlim=(0,1),ylim=(0,1)); return ax.add_patch(Rectangle((0.,0.),0.,1.,fill=True))
     @widget
-    def clock(ax): return ax.text(.5,.5,'',ha='center',va='center',transform=ax.transAxes)
+    def clock(ax): return ax.text(.5,.5,'',ha='center',va='center',fontsize='xx-small',transform=ax.transAxes)
     @widget
     def track_bound_beg(ax): return ax.text(.5,.5,'',ha='center',va='center',fontsize='xx-small',transform=ax.transAxes)
     @widget

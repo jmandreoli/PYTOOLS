@@ -17,7 +17,7 @@ from collections import namedtuple, OrderedDict
 from collections.abc import MutableMapping
 from weakref import WeakValueDictionary
 from time import time
-from . import SQliteNew, size_fmt, time_fmt, html_table, html_parlist, HtmlPlugin, pickleclass
+from . import SQliteNew, size_fmt, time_fmt, pickleclass
 
 SCHEMA = '''
 CREATE TABLE Block (
@@ -52,7 +52,7 @@ sqlite3.enable_callback_tracebacks(True)
 BlockInfo = namedtuple('BlockInfo','hits ncell ncell_error ncell_pending')
 
 #==================================================================================================
-class CacheDB (MutableMapping,HtmlPlugin):
+class CacheDB (MutableMapping):
   r"""
 Instances of this class manage cache repositories. There is at most one instance of this class in a process for each normalised repository specification path. A cache repository contains cells, each cell corresponding to one cached value produced by a unique call, and possibly reused by later calls. Cells are clustered into blocks, each block grouping cells produced by the same call type, called a functor (of class :class:`AbstractFunctor`). Meta-information about blocks and cells are stored in an index in a sqlite3 database. The values themselves are persistently stored by a dedicated storage object (of class :class:`AbstractStorage`).
 
@@ -83,7 +83,7 @@ Finally, :class:`CacheDB` instances have an HTML ipython display.
   r"""the normalised path of this instance"""
   dbpath:str
   r"""the path to the sqlite database holding the index"""
-  storage:'AbstractStorage'
+  storage:AbstractStorage
   r"""the object managing the actual storage of the values"""
   timeout:float = 120.
 
@@ -198,7 +198,10 @@ Clears all the blocks which are obsolete.
 # Representation methods
 #--------------------------------------------------------------------------------------------------
 
+  def _repr_html_(self): from .html import repr_html; return repr_html(self)
+  _html_limit = 50
   def as_html(self,_):
+    from .html import html_table
     n = len(self)-self._html_limit
     L = self.items(); closing = None
     if n>0: L = islice(L,self._html_limit); closing = f'{n} more'
@@ -206,7 +209,7 @@ Clears all the blocks which are obsolete.
   def __repr__(self): return f'Cache<{self.path}>'
 
 #==================================================================================================
-class CacheBlock (MutableMapping,HtmlPlugin):
+class CacheBlock (MutableMapping):
   r"""
 Instances of this class implements blocks of cells sharing the same functor.
 
@@ -377,7 +380,10 @@ Implements cacheing as follows:
 # Representation methods
 #--------------------------------------------------------------------------------------------------
 
+  def _repr_html_(self): from .html import repr_html; return repr_html(self)
+  _html_limit = 50
   def as_html(self,_,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz)),time_fmt_=(lambda t: '' if t is None else time_fmt(t))):
+    from .html import html_table
     n = len(self)-self._html_limit
     L = self.items(); closing = None
     if n>0: L = islice(L,self._html_limit); closing = f'{n} more'
@@ -522,6 +528,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
 #--------------------------------------------------------------------------------------------------
   def html(self,ckey:bytes,_):
 #--------------------------------------------------------------------------------------------------
+    from .html import html_parlist
     a,ka = self.fpickle.loads(ckey)
     return html_parlist(_,a,ka)
 
@@ -726,43 +733,43 @@ def manage(*paths,ivname='db'):
 A simple tool to manage a set of :class:`CacheDB` instances, specified by their paths.
   """
 #--------------------------------------------------------------------------------------------------
-  import ipywidgets
+  from ipywidgets import Button, Dropdown, Checkbox, Output, VBox, HBox
   from IPython.display import clear_output, display
   from IPython.core.getipython import get_ipython
   def setdb(c): nonlocal db; db = c.new; interpreter.push({ivname:db}); showdb()
   def showdb():
-    wmsg.clear_output()
-    with wout: clear_output(); display(db)
+    w_msg.clear_output()
+    with w_out: clear_output(); display(db)
   def runc(c):
     label,op = c.new
     if op is None: return
-    wautorun.value = autorun[0]
+    w_autorun.value = autorun[0]
     try:
-      with wmsg:
+      with w_msg:
         clear_output()
-        print('Operation:','clear'+label,f'(dryrun: {ivname} unchanged)' if wdryrun.value else '')
+        print('Operation:','clear'+label,f'(dryrun: {ivname} unchanged)' if w_dryrun.value else '')
         r = op()
         print('Result:',r)
     except: return
-    if not wdryrun.value and r:
-      with wout: clear_output(); display(db)
+    if not w_dryrun.value and r:
+      with w_out: clear_output(); display(db)
   autorun = (
     ('clear...',None),
-    ('Error',(lambda: [x for x in ((c.block,c.clear_error(dry_run=wdryrun.value)) for c in list(db.values())) if x[1]])),
-    ('Obsolete',(lambda: db.clear_obsolete(False,dry_run=wdryrun.value))),
-    ('ObsoleteStrict',(lambda: db.clear_obsolete(True,dry_run=wdryrun.value))),
+    ('Error',(lambda: [x for x in ((c.block,c.clear_error(dry_run=w_dryrun.value)) for c in list(db.values())) if x[1]])),
+    ('Obsolete',(lambda: db.clear_obsolete(False,dry_run=w_dryrun.value))),
+    ('ObsoleteStrict',(lambda: db.clear_obsolete(True,dry_run=w_dryrun.value))),
   )
   db:CacheDB|None = None
   interpreter = get_ipython()
   interpreter.push({ivname:db})
-  wdb = ipywidgets.Dropdown(description=ivname,options=dict(chain((('...',()),),((p,CacheDB(p)) for p in paths))),style={'description_width':'initial'})
-  wshow = ipywidgets.Button(tooltip='show db',icon='fa-refresh',layout={'width':'.4cm','padding':'0cm'})
-  wautorun = ipywidgets.Dropdown(options=[(x[0],x) for x in autorun],layout={'width':'3cm'})
-  wdryrun = ipywidgets.Checkbox(description='dry-run',value=True,style={'description_width':'initial'})
-  wout = ipywidgets.Output()
-  wmsg = ipywidgets.Output(layout={'border':'thin solid black'})
-  wdb.observe(setdb,'value')
-  wautorun.observe(runc,'value')
-  wshow.on_click(lambda b: showdb())
+  w_db = Dropdown(description=ivname,options=dict(chain((('...',()),),((p,CacheDB(p)) for p in paths))),style={'description_width':'initial'})
+  w_show = Button(tooltip='show db',icon='fa-refresh',layout={'width':'.4cm','padding':'0cm'})
+  w_autorun = Dropdown(options=[(x[0],x) for x in autorun],layout={'width':'3cm'})
+  w_dryrun = Checkbox(description='dry-run',value=True,style={'description_width':'initial'})
+  w_out = Output()
+  w_msg = Output(layout={'border':'thin solid black'})
+  w_db.observe(setdb,'value')
+  w_autorun.observe(runc,'value')
+  w_show.on_click(lambda b: showdb())
   showdb()
-  return ipywidgets.VBox(children=(ipywidgets.HBox(children=(wdb,wshow,wautorun,wdryrun)),wmsg,wout))
+  return VBox(children=(HBox(children=(w_db,w_show,w_autorun,w_dryrun)),w_msg,w_out))

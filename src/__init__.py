@@ -6,14 +6,10 @@
 #
 
 from __future__ import annotations
-import logging;
-
-from jedi.inference.value.iterable import Sequence
-
-logger = logging.getLogger(__name__)
-import os, re, pickle, collections
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Tuple
-if False: import ast,sqlalchemy,lxml,imaplib,datetime # trick mypy to import these modules
+import logging; logger = logging.getLogger(__name__)
+import os, re, collections
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence, Tuple
+if False: import ast,imaplib,pickle,datetime # tricks mypy to import these modules
 
 #==================================================================================================
 class owrap:
@@ -74,7 +70,7 @@ This object allows to name callable members of module/packages without loading t
 #==================================================================================================
   __slot__ = '__spec__','__value__'
   def __init__(self,s=()): self.__spec__ = s; self.__value__ = None
-  def __getattr__(self,a): return self.__class__(self.__spec__+(a,))
+  def __getattr__(self,a): return _forward(self.__spec__+(a,))
   def __call__(self,*a,**ka):
     from importlib import import_module
     f = self.__value__
@@ -152,118 +148,12 @@ def autoconfig(module:str,name:str,dflt:Any=None,asfile:bool=False):
 Returns an object obtained from an environment variable whose name is derived from *module* and *name*. For example, if *module* is ``mypackage.mymodule`` and *name* is ``myparam`` then the environment variable is ``MYPACKAGE_MYMODULE_MYPARAM``. The value of that variable (or the content of the file pointed by it if *asfile* is set) is executed in an empty dictionary and the value attached to key *name* is returned. If the variable is not assigned, *dflt* is returned.
   """
 #==================================================================================================
-  x = config_env('{}_{}'.format(module.replace('.','_'),name).upper(),asfile=asfile)
-  if x:
-    d:dict[str,Any] = {}
-    exec(x,d)
-    return d[name]
+  x = config_env(f'{module.replace('.','_')}_{name}'.upper(),asfile=asfile)
+  if x: d:dict[str,Any] = {}; exec(x,d); return d[name]
   else: return dflt
 
 #==================================================================================================
-class HtmlPlugin:
-  r"""
-Instances of this class have an ipython HTML representation. The representation is by default simply the string representation of the instance (enclosed in a ``span`` element), but can be customised if it supports method :meth:`as_html`.
-
-Method :meth:`as_html` should only be defined for hashable objects. It takes as input a function *_* and returns the base HTML representation of the object (as understood by module :mod:`lxml.html`). If invoked on a compound object, it should not recursively invoke method :meth:`as_html` on its components to obtain their HTML representations, because that would be liable to unmanageable repetitions (if two components share a common sub-component) or infinite recursions. Instead, the representation of a component object should be obtained by calling function *_* with that object as argument. It returns a "pointer" in the form of a string ``?``\ *n* (within a ``span`` element) where *n* is a unique reference number. The scope of such pointers is the toplevel call of method :meth:`_repr_html_`, which guarantees that two occurrences of equal objects will have the same pointer.
-
-The :class:`HtmlPlugin` representation of an object is a ``table`` element whose head row is the base HTML representation of that object (including its pointers), and whose body rows align each pointer reference to the base HTML representation of its referenced object (possibly containing pointers itself, recursively). In the following example, the base HTML representation of a node in a graph is given by its label followed by the sequence of pointers to its successor nodes::
-
-   class N (HtmlPlugin): # class of nodes in a (possibly cyclic) directed graph
-     def __init__(self,tag,*succ): self.tag,self.succ = tag,list(succ)
-     def as_html(self,_):
-       from lxml.html.builder import E
-       return E.div(E.b(self.tag),'[|',*(y for x in self.succ for y in (_(x),'|')),']')
-   # Let's build a trellis DAG
-   n = N('')
-   na,nb,nc = N('a',n),N('b',n),N('c',n)
-   nab,nbc,nac = N('ab',na,nb),N('bc',nb,nc),N('ac',na,nc)
-   nabc = N('abc',nab,nbc,nac)
-   # n.succ.append(nabc) # makes the graph cyclic
-   from IPython.display import display
-   display(nabc)
-
-produces (up to some attributes):
-
-.. code-block:: html
-
-   <table>
-     <!-- thead: base HTML representation (with pointers) of the initial object -->
-     <thead><tr><td colspan="2"> <div><b>abc</b>[|<span>?1</span>|<span>?5</span>|<span>?7</span>|]</div> </td></tr></thead>
-     <!-- tbody: mapping each pointer to the base HTML representation of its reference -->
-     <tbody>
-       <tr> <th>?1</th> <td> <div><b>ab</b>[|<span>?2</span>|<span>?4</span>|]</div> </td> </tr>
-       <tr> <th>?2</th> <td> <div><b>a</b>[|<span>?3</span>|]</div> </td> </tr>
-       <tr> <th>?3</th> <td> <div><b></b>[|]</div> </td> </tr>
-       <tr> <th>?4</th> <td> <div><b>b</b>[|<span>?3</span>|]</div> </td> </tr>
-       <tr> <th>?5</th> <td> <div><b>bc</b>[|<span>?4</span>|<span>?6</span>|]</div> </td> </tr>
-       <tr> <th>?6</th> <td> <div><b>c</b>[|<span>?3</span>|]</div> </td> </tr>
-       <tr> <th>?7</th> <td> <div><b>ac</b>[|<span>?2</span>|<span>?6</span>|]</div> </td> </tr>
-     </tbody>
-   </table>
-
-which displays roughly as:
-
-   +----+----------------------+
-   | **abc**\[\|?1\|?5\|?7\|\] |
-   +----+----------------------+
-   | ?1 | **ab**\[\|?2\|?4\|\] |
-   +----+----------------------+
-   | ?2 | **a**\[\|?3\|\]      |
-   +----+----------------------+
-   | ?3 | \[\|\]               |
-   +----+----------------------+
-   | ?4 | **b**\[\|?3\|\]      |
-   +----+----------------------+
-   | ?5 | **bc**\[\|?4\|?6\|\] |
-   +----+----------------------+
-   | ?6 | **c**\[\|?3\|\]      |
-   +----+----------------------+
-   | ?7 | **ac**\[\|?2\|?6\|\] |
-   +----+----------------------+
-  """
-#==================================================================================================
-  _html_style = '''
-#toplevel { border-collapse: collapse; }
-#toplevel > thead > tr > td, #toplevel > tbody > tr > td { border: thin solid; text-align:left; }
-#toplevel > thead > tr { border-bottom: thick solid; }
-#toplevel > thead > tr > td > div, #toplevel > tbody > tr > td > div { padding:0; max-height: 5cm; overflow-y: auto; }
-#toplevel span.pointer { padding: 0; color: cyan; background-color: gray; font-weight:bold; }
-'''
-  _html_limit = 50
-  class Pointer:
-    _slots__ = 'element', 'element_', 'html'
-    def __init__(self,tid,k):
-      from lxml.html.builder import E
-      name = f'_{k}'
-      tref = f'document.getElementById(\'{tid}\').rows[{k}]'
-      cls = {'class': 'pointer'}
-      cls_ = dict(cls,onmouseenter=f'{tref}.style.outline=\'thin solid red\'',onmouseleave=f'{tref}.style.outline=\'\'',onclick=f'{tref}.scrollIntoView()')
-      self.element = lambda: E.span(name, **cls)
-      self.element_ = lambda: E.span(name, **cls_)
-  def _repr_html_(self):
-    from lxml.html.builder import E
-    from lxml.html import tostring
-    def hformat(p,*L,style=self._html_style):
-      if L:
-        table = E.table(E.thead(E.tr(E.td(p.html,colspan='2'))),E.tbody(*(E.tr(E.td(p.element()),E.td(p.html)) for p in L)),id=tid)
-        return E.div(E.style(style.replace('#toplevel','#'+tid),scoped='scoped'),table)
-      else: return p.html
-    def _(v):
-      try: p = ctx.get(v)
-      except TypeError: return E.span(repr(v)) # for unhashable objects
-      if p is None:
-        if isinstance(v,HtmlPlugin):
-          ctx[v] = p = self.Pointer(tid,len(ctx))
-          p.html = E.div(v.as_html(_))
-        else: return E.span(repr(v))
-      return p.element_()
-    tid = unid('htmlplugin')
-    ctx = dict()
-    e = _(self)
-    return tostring(hformat(*ctx.values()) if ctx else e,encoding=str)
-
-#==================================================================================================
-class Expr (HtmlPlugin):
+class Expr:
   r"""
 Instances of this class implement closed symbolic expressions.
 
@@ -321,12 +211,6 @@ Set *f* as the config function of this instance. Raises an error if the instance
       self.key = k = func,a,tuple(sorted(ka.items()))
     return k
 
-  def as_html(self,_):
-    from lxml.html.builder import E
-    func,a,ka = self.config
-    opn,clo = ((E.span if self.incarnated else E.em)(str(func),style='padding:5px;'),E.b('['),), (E.b(']'),)
-    return html_parlist(_,a,sorted(ka.items()),opening=opn,closing=clo)
-
   def __getstate__(self): return self.freeze()
   def __setstate__(self,key):
     self.reset()
@@ -341,6 +225,14 @@ Set *f* as the config function of this instance. Raises an error if the instance
     a = ','.join(repr(v) for v in a)
     ka = ','.join(f'{k}={repr(v)}' for k,v in sorted(ka.items()))
     return f'{func}({a}{sep}{ka})'
+  def _repr_html_(self):
+    from .html import repr_html
+    return repr_html(self)
+  def as_html(self,_):
+    from .html import html_parlist, E
+    func,a,ka = self.config
+    opn,clo = ((E.span if self.incarnated else E.em)(str(func),style='padding:5px;'),E.b('['),), (E.b(']'),)
+    return html_parlist(_,a,sorted(ka.items()),opening=opn,closing=clo)
 
 #--------------------------------------------------------------------------------------------------
 class MapExpr (Expr,collections.abc.Mapping):
@@ -359,76 +251,6 @@ Symbolic expressions of this class are also callables, and trigger incarnation o
   """
 #--------------------------------------------------------------------------------------------------
   def __call__(self,*a,**ka): self.incarnate(); return self.value(*a,**ka)
-
-#==================================================================================================
-def html_parlist(
-  html:Callable[[Any],lxml.html.Element],La:Iterable[Any],Lka:Iterable[Tuple[str,Any]],
-  opening:Iterable[lxml.html.Element]=(),closing:Iterable[lxml.html.Element]=(),style:str='padding: 5px'
-  )->lxml.html.HtmlElement:
-  r"""
-:param html: callable to use on components to get their HTML representation
-:param La: anonymous components
-:param Lka: named components
-:param opening: lists of HTML elements used as prolog
-:param closing: lists of HTML elements used as epilog
-
-Returns a default HTML representation of a compound object, where *La,Lka* are the lists of unnamed and named components.The representation consists of the HTML elements in *opening* followed by the representation of the components in *La* and *Lka* (the latter are prefixed with their names in bold), followed by the HTML elements in *closing*.
-  """
-#==================================================================================================
-  from lxml.html.builder import E
-  def content():
-    for v in La: yield E.span(html(v),style=style)
-    for k,v in Lka: yield E.span(E.b(str(k)),'=',html(v),style=style)
-  return E.div(*opening,*content(),*closing,style='padding:0')
-
-#==================================================================================================
-def html_table(
-    irows:Iterable[Tuple[Any,Tuple[Any,...]]],fmts:Tuple[Callable[[Any],str],...],
-    hdrs:Tuple[str,...]=None,opening:str=None,closing:str=None,encoding:type|str=None
-  )->str|lxml.html.HtmlElement:
-  r"""
-:param irows: a generator of pairs of an object (key) and a tuple of objects (value)
-:param fmts: a tuple of format functions matching the length of the value tuples
-:param hdrs: a tuple of strings matching the length of the value tuples
-:param opening: lists of HTML elements used as head of table
-:param closing: lists of HTML elements used as foot of table
-:param encoding: encoding of the result
-
-Returns an HTML table object (as understood by :mod:`lxml`) with one row for each pair generated from *irow*. The key of each pair is in a column of its own with no header, and the value must be a tuple whose length matches the number of columns. The format functions in *fmts*, one for each column, are expected to return HTML objects. *hdrs* may specify headers as a tuple of strings, one for each column. If *encoding* is :const:`None`, the result is returned as an :mod:`lxml.html` object, otherwise it is returned as a string with the specified encoding.
-  """
-#==================================================================================================
-  from lxml.html.builder import E
-  from lxml.html import tostring
-  def thead():
-    if opening is not None: yield E.tr(E.td(opening,colspan=str(1+len(fmts))))
-    if hdrs is not None: yield E.tr(E.td(),*(E.th(hdr) for hdr in hdrs))
-  def tbody():
-    for ind,row in irows:
-      yield E.tr(E.th(str(ind)),*(E.td(fmt(v)) for fmt,v in zip(fmts,row)))
-  def tfoot():
-    if closing is not None: yield E.tr(E.td(),E.td(closing,colspan=str(len(fmts))))
-  tid = unid('table')
-  t = E.div(E.style(html_table.style.replace('#toplevel','#'+tid),scoped='scoped'),E.table(E.thead(*thead()),E.tbody(*tbody()),E.tfoot(*tfoot()),id=tid))
-  return t if encoding is None else tostring(t,encoding=encoding)
-
-html_table.style = '''
-  #toplevel { border-collapse: collapse; }
-  #toplevel > thead > tr > th, #toplevel > thead > tr > td, #toplevel > tbody > tr > th, #toplevel > tbody > tr > td, #toplevel > tfoot > tr > td  { background-color: white; color:black; text-align: left; vertical-align: top; border: thin solid black; }
-  #toplevel > thead > tr > th, #toplevel > thead > tr > td { background-color: gray; color: white }
-  #toplevel > tfoot > tr > td { background-color: #f0f0f0; color: navy; }
-'''
-
-#==================================================================================================
-def html_stack(*a,**ka):
-  r"""
-:param a: a list of (lists of) HTML objects (as understood by :mod:`lxml.html`)
-:param ka: a dictionary of HTML attributes for the DIV encapsulating each object
-
-Merges the list of HTML objects into a single HTML object, which is returned.
-  """
-#==================================================================================================
-  from lxml.html.builder import E
-  return E.div(*(E.div(x,**ka) for x in a))
 
 #==================================================================================================
 class SQliteStack:
@@ -524,297 +346,6 @@ Assumes that *pkgname* is the name of a python regular (non namespace) package a
     m = modules.get(pkgname)
     if m is not None: logger.warning('Reloading %s',pkgname); reload(m)
   return c
-
-#==================================================================================================
-def SQLinit(engine:str|sqlalchemy.engine.Engine,meta:sqlalchemy.MetaData)->sqlalchemy.engine.Engine:
-  r"""
-:param engine: a sqlalchemy engine (or its url)
-:param meta: a sqlalchemy metadata structure
-
-* When the database is empty, a ``Metainfo`` table with a single row matching exactly the :attr:`info` attribute of *meta* is created, then the database is populated using *meta*.
-
-* When the database is not empty, it must contain a ``Metainfo`` table with a single row matching exactly the :attr:`info` attribute of *meta*, otherwise an exception is raised.
-  """
-#==================================================================================================
-  from datetime import datetime
-  from sqlalchemy import MetaData, Table, Column, create_engine, event
-  from sqlalchemy.types import DateTime, Text, Integer
-  from sqlalchemy.sql import select, insert, update, delete, and_
-  if isinstance(engine,str): engine = create_engine(engine)
-  if engine.driver == 'pysqlite':
-    # fixes a bug in the pysqlite driver; to be removed if fixed
-    # see http://docs.sqlalchemy.org/en/rel_1_0/dialects/sqlite.html
-    def do_connect(conn,rec): conn.isolation_level = None
-    def do_begin(conn): conn.connection.execute('BEGIN')
-    event.listen(engine,'connect',do_connect)
-    event.listen(engine,'begin',do_begin)
-  meta_ = MetaData()
-  meta_.reflect(bind=engine)
-  if meta_.tables: # engine has some tables
-    try:
-      with engine.connect() as conn: metainfo, = conn.execute(select(meta_.tables['Metainfo'])).mappings()
-      metainfo = dict(metainfo); del metainfo['created']
-    except: raise SQLinit.MetainfoException('Metainfo table not found or wrong format')
-    for k,v in meta.info.items():
-      if (v_:=metainfo.get(k)) != str(v):
-        raise SQLinit.MetainfoException(f'Metainfo field mismatch {k}[expected:{v},found:{v_}]')
-  else: # engine is empty
-    metainfo_table = Table(
-      'Metainfo',meta_,
-      Column('created',DateTime()),
-      *(Column(key,Text()) for key in meta.info)
-    )
-    meta_.create_all(bind=engine)
-    with engine.begin() as conn: conn.execute(insert(metainfo_table).values(created=datetime.now(),**meta.info))
-    meta.create_all(bind=engine)
-  return engine
-SQLinit.MetainfoException = type('MetainfoException',(Exception,),{})
-
-#==================================================================================================
-class SQLupgrade:
-  r"""
-:param modules: schema modules for the new and old database
-:param urls: urls for the new and old database
-:param old_name: a callable which maps a table name of the new db into its name in the old db
-
-An instance of this class is a context which helps transfer some database from an old schema to a new (created) one. A schema module must have at least the following members:
-
-  * ``__version__``: the version of the schema as an :class:`int`
-  * ``Base``: a subclass of class :class:`sqlalchemy.orm.DeclarativeBase`
-  * ``get_sessionmaker``: a callable which takes one input (typically a url) and returns a session maker (typically obtained by calling function :func:`sqlalchemy.orm.sessionmaker` on an engine bound to that url)
-  * all the mapped tables, as subclasses of ``Base``
-
-If *old_name* is a dictionary, each key should be a new table name, and its value should be either an old table name, or a dictionary mapping new column names in the new table to old ones in the old table (or a pair thereof).
-  """
-#==================================================================================================
-  session:sqlalchemy.orm.Session
-  r"""The session opened for access to the new database (only when the context is entered)"""
-  old_session:sqlalchemy.orm.Session
-  r"""The session opened for access to the old database (only when the context is entered)"""
-  transfer: Callable[[],None]
-  r"""Used to initiate the transfer from the old to the new database"""
-  register: Callable[[str,str,Callable[[Any],None]],None]
-  r"""Used as a decorator to register an entry in the converter (the decorator arguments are the table and column names; the decorated function name *must* be ``_``)"""
-
-  def __init__(self,modules,urls,*,versions=None,old_name:Callable[[str,str|None],str]|dict[str,str|dict[str,str]|Tuple[str,dict[str,str]]]|None=None):
-    assert len(modules) == 2
-    assert len(urls)==2 and all(isinstance(url,str) for url in urls)
-    if versions is not None: assert len(versions)==2 and all((v is None or mod.__version__==v) for mod,v in zip(modules,versions))
-    if old_name is None: old_name = (lambda name,cname: name if cname is None else cname)
-    elif isinstance(old_name,dict):
-      def old_name(name:str,cname:str|None=None,D=old_name):
-        x = D.get(name)
-        name_,D_ = (name,{}) if x is None else (x,{}) if isinstance(x,str) else (name,x) if isinstance(x,dict) else x
-        return name_ if cname is None else D_.get(cname,cname)
-    else: assert callable(old_name)
-    Mapper,OldMapper = ({m.class_.__tablename__:m for m in mod.Base.registry.mappers} for mod in modules)
-    lookup = lambda old_cname: (lambda old: getattr(old,old_cname))
-    TR = {
-      name:(mapper,old_mapper,{
-        cname:lookup(old_cname) for cname,c in mapper.columns.items()
-        if (old_c:=old_mapper.columns.get(old_cname:=old_name(name,cname))) is not None and old_c.type==c.type
-      })
-      for name,mapper in Mapper.items()
-      if (old_mapper:=OldMapper.get(old_name(name,None))) is not None
-    }
-    self._Sessions = tuple(mod.get_sessionmaker(u) for mod,u in zip(modules,urls))
-    def transfer():
-      TR_ = [(mapper,old_mapper,[(c.name,tr.get(c.name,lookup(c.name))) for c in mapper.columns]) for mapper,old_mapper,tr in TR.values()]
-      for mapper,old_mapper,tr_ in TR_:
-        for old in self.old_session.query(old_mapper.class_): self.session.add(mapper.class_(**{cname:f(old) for cname,f in tr_}))
-    self.transfer = transfer
-    def register(name:str,cname:str,f):
-      assert cname in Mapper[name].columns
-      TR[name][2][cname] = f
-    self.register = register
-  def __enter__(self):
-    self.session,self.old_session = (Session() for Session in self._Sessions)
-    return self
-  def __exit__(self,exc,*a):
-    if exc is None: self.session.commit()
-    for s in self.session,self.old_session: s.close()
-    del self.session,self.old_session
-
-#==================================================================================================
-class SQLHandler (logging.Handler):
-  r"""
-:param engine: a sqlalchemy engine (or its url)
-:param label: a text label
-
-A logging handler class which writes the log messages into a database.
-  """
-#==================================================================================================
-  def __init__(self,engine:str|sqlalchemy.Engine,label:str,*a,**ka):
-    from datetime import datetime
-    from sqlalchemy.sql import select, insert, update, delete, and_
-    meta = self.metadata()
-    engine = SQLinit(engine,meta)
-    session_table = meta.tables['Session']
-    log_table = meta.tables['Log']
-    with engine.begin() as conn:
-      if engine.dialect.name == 'sqlite': conn.execute('PRAGMA foreign_keys = 1')
-      conn.execute(delete(session_table).where(session_table.c.label==label))
-      c = conn.execute(insert(session_table).values(label=label,started=datetime.now()))
-      session = c.inserted_primary_key[0]
-      c.close()
-    def dbrecord(rec,log_table=log_table,session=session):
-      with engine.begin() as conn:
-        conn.execute(insert(log_table).values(session=session,level=rec.levelno,created=datetime.fromtimestamp(rec.created),module=rec.module,funcName=rec.funcName,message=rec.message))
-    self.dbrecord = dbrecord
-    super().__init__(*a,**ka)
-
-  def emit(self,rec):
-    self.format(rec)
-    self.dbrecord(rec)
-
-  #--------------------------------------------------------------------------------------------------
-  @staticmethod
-  def metadata(info=tuple({'origin':__name__+'.SQLHandler','version':1}.items()))->sqlalchemy.MetaData:
-  #--------------------------------------------------------------------------------------------------
-    from sqlalchemy import Table, Column, ForeignKey, MetaData
-    from sqlalchemy.types import DateTime, Text, Integer
-    meta = MetaData(info=dict(info))
-    Table(
-      'Session',meta,
-      Column('oid',Integer(),primary_key=True,autoincrement=True),
-      Column('started',DateTime()),
-      Column('label',Text(),index=True,unique=True,nullable=False),
-      )
-    Table(
-      'Log',meta,
-      Column('oid',Integer(),primary_key=True,autoincrement=True),
-      Column('session',ForeignKey('Session.oid',ondelete='CASCADE'),index=True,nullable=False),
-      Column('level',Integer(),nullable=False),
-      Column('created',DateTime(),nullable=False),
-      Column('module',Text(),index=True,nullable=False),
-      Column('funcName',Text(),nullable=False),
-      Column('message',Text(),nullable=False),
-      )
-    return meta
-
-#==================================================================================================
-class ormsroot (collections.abc.MutableMapping,HtmlPlugin):
-  r"""
-Instances of this class implement very simple persistent object managers based on the sqlalchemy ORM. This class should not be instantiated directly.
-
-Each subclass *C* of this class should define a class attribute :attr:`base` assigned an sqlalchemy declarative persistent class *B*. Once this is done, a specialised session maker can be obtained by invoking class method :meth:`sessionmaker` of class *C*, with the url of an sqlalchemy supported database as first argument, the other arguments being the same as those for :meth:`sqlalchemy.orm.sessionmaker`. This sessionmaker will produce sessions with the following characteristics:
-
-* they are attached to an sqlalchemy engine at this url (note that engines are reused across multiple sessionmakers with the same url)
-
-* they have a :attr:`root` attribute, pointing to an instance of *C*, which acts as a mapping where the keys are the primary keys of *B* and the values the corresponding ORM entries. The root object has a convenient ipython HTML representation.
-
-Class *C* should provide a method to insert new objects in the persistent class *B*, and they will then be reflected in the session root (and made persitent on session commit). Example::
-
-   from sqlalchemy.ext.declarative import declarative_base; Base = declarative_base()
-   from sqlalchemy import Column, Text, Integer
-
-   class Entry (Base): # example of sqlalchemy declarative persistent class definition
-     __tablename__ = 'Entry'
-     oid = Column(Integer(),primary_key=True)
-     name = Column(Text())
-     age = Column(Integer())
-     def __repr__(self): return 'Entry<{0.oid},{0.name},{0.age}>'.format(self)
-
-   class Root(ormsroot): # manager for class Entry
-     base = Entry
-
-   sessionmaker = Root.sessionmaker
-
-Example of use (assuming :func:`sessionmaker` as above has been imported)::
-
-   Session = sessionmaker('sqlite://') # memory db for the example
-
-   from contextlib import contextmanager
-   @contextmanager
-   def mysession(): # basic sessions as simple block of instructions
-     s = Session(autocommit=True)
-     try: yield s
-     finally: s.close()
-
-   with mysession() as s: assert len(s.root)==0
-
-   with mysession() as s:
-     # first session, define two entries. Use key None in assignment because Entry is autokey
-     self.root[None] = Entry(name='jack',age=42); self.root[None] = Entry(name='jill',age=29)
-     assert len(s.root) == 2 and s.root[1].name=='jack' and s.root[2].name=='jill'
-
-   with mysession() as s: # second session, possibly on another process (if not memory db)
-     jack = s.root.pop(1) # also removes from db
-     assert len(s.root) == 1 and jack.name=='jack'
-
-   with mysession() as s: # But of course direct sqlalchemy operations are available
-     assert len(s.root) == 1
-     x, = list(s.query(Entry.name).filter(Entry.age>25))
-   assert x.name == 'jill'
-    """
-#==================================================================================================
-
-  base = None # must be defined in subclasses, NOT at the instance level
-
-  def __init__(self,session):
-    self.pk = pk = self.base.__table__.primary_key.columns.values()
-    if len(pk) == 1:
-      getpk = lambda r,kn=pk[0].name: getattr(r,kn)
-      def setpk(k,r,kn=pk[0].name):
-        if k is not None: r[kn] = k # does nothing if k is None (autokeys)
-        return r
-    else:
-      getpk = lambda r,kns=tuple(c.name for c in pk): tuple(getattr(r,kn) for kn in kns)
-      def setpk(ks,r,kns=tuple(c.name for c in pk)):
-        assert len(ks) in (0,)
-        for kn,k in zip(kns,ks): r[kn] = k # does nothing if ks==() (autokeys)
-        return r
-    self.getpk,self.setpk = getpk,setpk
-    self.session = session
-
-  def __getitem__(self,k):
-    r = self.session.query(self.base,k)
-    if r is None: raise KeyError(k)
-    return r
-
-  def __delitem__(self,k):
-    self.session.delete(self[k])
-
-  def __setitem__(self,k,r):
-    assert isinstance(r,self.base)
-    self.session.add(self.setpk(k,r))
-
-  def __iter__(self):
-    for r in self.session.query(*self.pk): yield self.getpk(r)
-  def items(self): return ((self.getpk(r),r) for r in self.session.query(self.base))
-
-  def __len__(self):
-    return self.session.query(self.base).count()
-
-  def __hash__(self): return hash((self.session,self.base))
-
-  def as_html(self,_):
-    from itertools import islice
-    n = len(self)-self._html_limit
-    L = self.items(); closing = None
-    if n>0: L = islice(L,self._html_limit); closing = f'{n} more'
-    return html_table(sorted((k,(v,)) for k,v in L),fmts=(repr,),opening=repr(self),closing=closing)
-  def __repr__(self): return f'{self.__class__.__name__}<{self.base.__name__}>'
-
-  cache = {}
-  @classmethod
-  def sessionmaker(cls,url,execution_options={},*a,**ka):
-    from sqlalchemy import event
-    from sqlalchemy.orm import sessionmaker
-    engine = cls.cache.get(url)
-    if engine is None: cls.cache[url] = engine = SQLinit(url,cls.base.metadata)
-    if execution_options:
-      trace = execution_options.pop('trace',{})
-      engine = engine.execution_options(**execution_options)
-      for evt,log in trace.items():
-        if isinstance(log,int): log = lambda _lvl=log,_fmt=f'SQA:{evt}%s',**ka:logger.log(_lvl,_fmt,ka)
-        event.listen(engine,evt,log,named=True)
-    Session_ = sessionmaker(engine,*a,**ka)
-    def Session(**x):
-      s = Session_(**x)
-      s.root = cls(s)
-      return s
-    return Session
 
 #==================================================================================================
 class spark:
@@ -917,6 +448,7 @@ Instances of this class maintain basic statistics about a group of values.
   def __repr__(self): return f'basic_stats<weight:{repr(self.weight)},avg:{repr(self.avg)},var:{repr(self.var)}>'
   @property
   def std(self):
+    r"""standard deviation of the group"""
     from math import sqrt
     return sqrt(self.var)
 
@@ -1043,25 +575,24 @@ Returns a "unique" id for miscellanous uses.
   return (pre+str(time())+post).replace('.','_')
 
 #--------------------------------------------------------------------------------------------------
-def printast(x:str|ast.AST):
+def ast_tuple(x:str|ast.AST,top:str='top'):
   r"""
-:param x: an AST or string (parsed into an AST)
+:param x: an AST (python Abstract Syntax Tree) or string (parsed into an AST)
+:param top: the name of the top-level node (optional)
 
-Pretty-prints the AST object (python abstract syntax tree).
+returns a representation of the AST object using only tuples and str.
   """
 #--------------------------------------------------------------------------------------------------
   import ast
-  def pp(x,pre:str,indent:str):
+  def gen(x,pre:str):
     if isinstance(x,ast.AST):
-      print(indent,pre,':',x.__class__.__name__)
-      indent += ' | '
-      for k,y in ast.iter_fields(x): pp(y,k,indent)
+      yield f'{pre}:{x.__class__.__name__}',*(z for k,y in ast.iter_fields(x) for z in gen(y,k))
     elif isinstance(x,list):
-      for i,y in enumerate(x): pp(y, f'{pre}[{i}]', indent)
-    else: print(indent,pre,'=',x)
+      for i,y in enumerate(x): yield from gen(y,f'{pre}[{i}]')
+    else: yield pre,x
   if isinstance(x,str): x = ast.parse(x)
-  else: assert isinstance(x,ast.AST)
-  pp(x,'top','')
+  else: assert isinstance(x, ast.AST)
+  return tuple(gen(x,top))
 
 #--------------------------------------------------------------------------------------------------
 class pickleclass:

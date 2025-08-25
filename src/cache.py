@@ -6,8 +6,8 @@
 #
 
 from __future__ import annotations
-from typing import Any, Callable, Iterable, Mapping, Tuple
 import logging; logger = logging.getLogger(__name__)
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 import os, sqlite3, pickle, inspect, threading, abc
 from pathlib import Path
@@ -507,7 +507,7 @@ Generates a functor.
     class Unpickler (pickle.Unpickler):
       def persistent_load(self,pid): return pid
 
-  def getkey(self,arg:Tuple[Iterable[Any],Mapping[str,Any]]):
+  def getkey(self,arg:tuple[Iterable[Any],Mapping[str,Any]]):
 #--------------------------------------------------------------------------------------------------
     r"""
 Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are normalised against the signature of the functor and the pickled value of the result is returned. The pickling of versioned function objects is modified to embed their version.
@@ -516,7 +516,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
     a,ka = self.norm(arg)
     return self.fpickle.dumps((a,sorted(ka.items())))
 
-  def getval(self,arg:Tuple[Iterable[Any],Mapping[str,Any]]):
+  def getval(self,arg:tuple[Iterable[Any],Mapping[str,Any]]):
 #--------------------------------------------------------------------------------------------------
     r"""
 Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. Returns the value of calling attribute :attr:`func` with that positional argument list and keyword argument dict.
@@ -532,7 +532,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
     a,ka = self.fpickle.loads(ckey)
     return html_parlist(_,a,ka)
 
-  def norm(self,arg:Tuple[Iterable[Any],Mapping[str,Any]]):
+  def norm(self,arg:tuple[Iterable[Any],Mapping[str,Any]]):
     a,ka = arg
     b = self.sig.bind(*a,**ka)
     b.apply_defaults()

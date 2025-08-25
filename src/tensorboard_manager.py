@@ -6,6 +6,9 @@
 #
 
 from __future__ import annotations
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
+import logging; logger = logging.getLogger(__name__)
+
 import falcon,time,psutil,sys,shutil,json
 from pathlib import Path
 from collections import namedtuple
@@ -27,7 +30,7 @@ A resource of this class represents a store of Tensorboard experiments.
   def __init__(self,store): self.store = store; self.procs = {}
 
 #--------------------------------------------------------------------------------------------------
-  def on_get(self,req,resp,exp=None):
+  def on_get(self,req:falcon.Request,resp:falcon.Response,exp=None):
     r"""
 Starts or retrieves the tensorboard server associated with experiment *exp*, and returns a view of it (result: text/html).
     """
@@ -48,7 +51,7 @@ Starts or retrieves the tensorboard server associated with experiment *exp*, and
     resp.set_cookie('tensorboard_last_visited_experiment',exp)
 
 #--------------------------------------------------------------------------------------------------
-  def on_get_manage(self,req,resp,exp=None):
+  def on_get_manage(self,req:falcon.Request,resp:falcon.Response,exp=None):
     r"""
 Returns various aspects of experiment *exp* (result: text/json)
     """
@@ -65,7 +68,7 @@ Returns various aspects of experiment *exp* (result: text/json)
     resp.body = body
 
 #--------------------------------------------------------------------------------------------------
-  def on_post_manage(self,req,resp,exp=None):
+  def on_post_manage(self,req:falcon.Request,resp:falcon.Response,exp=None):
     r"""
 Performs various updates to experiment *exp* (result: text/plain).
     """
@@ -120,7 +123,7 @@ class LoggingMiddleware:
   def process_response(self,req,resp,resource,req_succeeded): print(datetime.now(),req.uri,resp.status,file=self.file,flush=True)
 
 #==================================================================================================
-def main(store=None):
+def main(store:str|Path|None=None):
   r"""
 Returns the main wsgi application object (to be used by the wsgi server).
 

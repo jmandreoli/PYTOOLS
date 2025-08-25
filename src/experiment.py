@@ -6,9 +6,8 @@
 #
 
 from __future__ import annotations
-
-from typing import Sequence, Any, Callable, Iterable, Mapping, Tuple, Optional, MutableSequence, IO, NamedTuple, TypeVar, Generic
 import logging; logger = logging.getLogger(__name__)
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence, MutableSequence, IO, NamedTuple
 
 from contextlib import contextmanager
 from functools import partial, cached_property, singledispatch
@@ -61,7 +60,7 @@ An instance of this class controls a run. It can
 * update the run's progress
   """
 #==================================================================================================
-  path: Optional[Path]
+  path: Path|None
   r"""Checkpoint path"""
   interval: float
   r"""Minimum time interval (in sec) between a successful checkpoint and its next checkpoint attempt"""
@@ -71,7 +70,7 @@ An instance of this class controls a run. It can
   r"""Progress indicator (return value must be between 0. and 1.)"""
   temporary: Callable[[],IO] # helper function to open a temporary path to save checkpoints
 
-  def __init__(self,path:Optional[str|Path]=None,interval:float=float('inf'),penalty:float=1.5,progress:Callable[[Run],float]=(lambda run: 0.)):
+  def __init__(self,path:str|Path|None=None,interval:float=float('inf'),penalty:float=1.5,progress:Callable[[Run],float]=(lambda run: 0.)):
     from tempfile import NamedTemporaryFile
     if path is not None:
       path = Path(path)
@@ -125,15 +124,15 @@ Attributes (\*) must be explicitly instantiated at creation time.
   _events_ = 'init','open','close','start_step','end_step','start_epoch','end_epoch','checkpoint'
 
   ## set at instantiation
-  device: Optional[torch.device|str] = None
+  device: torch.device|str|None = None
   r"""(\*)The device on which to run the model"""
   net: Net
   r"""(\*)The model (initially on cpu, but loaded on :attr:`device` at the beginning of the run and restored to cpu at the end)"""
-  train_loader: Iterable[Tuple[torch.Tensor,torch.Tensor]]
+  train_loader: Iterable[tuple[torch.Tensor,torch.Tensor]]
   r"""(\*)Iterable of batches. Each batch is a tuple of input tensors (first dim = size of batch)"""
-  valid_loader: Iterable[Tuple[torch.Tensor,torch.Tensor]]
+  valid_loader: Iterable[tuple[torch.Tensor,torch.Tensor]]
   r"""(\*)Same format as :attr:`train_loader`"""
-  test_loader: Iterable[Tuple[torch.Tensor,torch.Tensor]]
+  test_loader: Iterable[tuple[torch.Tensor,torch.Tensor]]
   r"""(\*)Same format as :attr:`train_loader`"""
   optimiser_factory: Callable[[Sequence[torch.nn.Parameter]],torch.optim.Optimizer]
   r"""(\*)The optimiser factory"""
@@ -150,7 +149,7 @@ Attributes (\*) must be explicitly instantiated at creation time.
   r"""Number of optimiser updates"""
   epoch: int = 0
   r"""Number of passes through the data"""
-  loss: Optional[float] = None
+  loss: float|None = None
   r"""Last step loss, if any"""
   walltime: Callable[[],float]
   r"""Wall time elapsed (in sec) since real start of run, set by monitor"""
@@ -158,7 +157,7 @@ Attributes (\*) must be explicitly instantiated at creation time.
   r"""Progress as a number between 0. and 1., set by monitor"""
   threshold: float = 1.-1.e-9
   r"""Threshold on progress to stop the run"""
-  checkpoint: MutableSequence[Tuple[float,Optional[Exception]]]
+  checkpoint: MutableSequence[tuple[float,Exception|None]]
   r"""Checkpoint history, set by monitor"""
   r_step: int = 0
   r"""Running number of optimiser updates in current data pass"""
@@ -243,7 +242,7 @@ Executes the run.
     return {'err':self.checkpoint[-1][1],'nerr':sum([1 for c in self.checkpoint if c[1] is not None]) or None}
 
 #--------------------------------------------------------------------------------------------------
-  def eval(self,data:Iterable[Tuple[float,Tuple[torch.Tensor,...],Tuple[torch.Tensor,...]]])->dict[str,float]:
+  def eval(self,data:Iterable[tuple[float,tuple[torch.Tensor,...],tuple[torch.Tensor,...]]])->dict[str,float]:
     r"""
 Evaluates the embedding part of model :attr:`net` on *data* according to :attr:`measures`. With measures aggregated by mean (default), the batches may not be constant-sized.
 
@@ -346,7 +345,7 @@ Instances of this class are nets with an embedding phase immediately followed by
   loss_factory: Callable[[Any,...],Callable[[torch.Tensor,...],torch.Tensor]]
   r"""Factory for the :attr:`loss`"""
 
-  def __init__(self,loss:Optional[Callable]=None):
+  def __init__(self,loss:Callable|None=None):
     super().__init__()
     self.loss = self.loss_factory(**(loss or {})) if isinstance(loss,(dict,type(None))) else loss
 
@@ -431,7 +430,7 @@ Instances of this class are listener objects, which can be bound to a :class:`Ru
       ivalid:Callable[[Run],dict[str,Any]]=(lambda run: run.eval_valid()),
       itest:Callable[[Run],dict[str,Any]]=(lambda run: run.eval_test()),
       icheckpoint:Callable[[Run],dict[str,Any]]=(lambda run: run.checkpoint_status()),
-      cond:Mapping[str,Tuple[float|Iterable[float]|int|Iterable[int],Callable[[Run],float|int]]|str]={},
+      cond:Mapping[str,tuple[float|Iterable[float]|int|Iterable[int],Callable[[Run],float|int]]|str]={},
       active:bool=True,
   ):
     r"""
@@ -474,13 +473,13 @@ An instance of this class logs run events through a :class:`logging.Logger` inst
 #--------------------------------------------------------------------------------------------------
   def __init__(
       self,
-      logger:Optional[logging.Logger]=logger,
-      status: Tuple[Tuple[str,...],Callable[[Run],Tuple]] = (
+      logger:logging.Logger|None=logger,
+      status: tuple[tuple[str,...],Callable[[Run],tuple]] = (
           ('TIME','COMP','STEP','EPO','BAT'),
           (lambda run: (run.walltime(),100*(run.progress),run.step,run.epoch,run.r_step)),
       ),
-      status_fmt: Tuple[str,str]=('%6s %5s%% %6s %4s/%5s','%6.1f %5.1f%% %6d %4d/%5d'),
-      fmt: Optional[Mapping[str,str]]=None,
+      status_fmt: tuple[str,str]=('%6s %5s%% %6s %4s/%5s','%6.1f %5.1f%% %6d %4d/%5d'),
+      fmt: Mapping[str,str]|None=None,
       **ka
   ):
     r"""
@@ -675,9 +674,9 @@ Returns a dictionary which can be passed as keyword arguments to the :class:`Run
 
 #--------------------------------------------------------------------------------------------------
   def display(self,
-    rowspec:float|Tuple[float,int]|Tuple[float,int,float],
-    colspec:float|Tuple[float,int]|Tuple[float,int,float],
-    dataset:Iterable[Tuple[Any,int]]=None,
+    rowspec:float|tuple[float,int]|tuple[float,int,float],
+    colspec:float|tuple[float,int]|tuple[float,int,float],
+    dataset:Iterable[tuple[Any,int]]=None,
     **ka
     ):
     r"""

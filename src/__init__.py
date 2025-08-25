@@ -7,8 +7,9 @@
 
 from __future__ import annotations
 import logging; logger = logging.getLogger(__name__)
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
+
 import os, re, collections
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence, Tuple
 if False: import ast,imaplib,pickle,datetime # tricks mypy to import these modules
 
 #==================================================================================================
@@ -453,7 +454,7 @@ Instances of this class maintain basic statistics about a group of values.
     return sqrt(self.var)
 
 #==================================================================================================
-def iso2date(iso:Tuple[int,int,int])->datetime.date:
+def iso2date(iso:tuple[int,int,int])->datetime.date:
   r"""
 :param iso: triple as returned by :meth:`datetime.date.isocalendar`
 

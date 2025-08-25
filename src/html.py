@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 import logging; logger = logging.getLogger(__name__)
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence, Tuple
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 import lxml
 from lxml.html.builder import E
 from lxml.html import tostring
@@ -113,7 +113,7 @@ which displays roughly as:
 
 #==================================================================================================
 def html_parlist(
-  html:Callable[[Any],lxml.html.Element],La:Iterable[Any],Lka:Iterable[Tuple[str,Any]],
+  html:Callable[[Any],lxml.html.Element],La:Iterable[Any],Lka:Iterable[tuple[str,Any]],
   opening:Iterable[lxml.html.Element]=(),closing:Iterable[lxml.html.Element]=(),style:str='padding: 5px'
   )->lxml.html.HtmlElement:
   r"""
@@ -133,8 +133,8 @@ Returns a default HTML representation of a compound object, where *La,Lka* are t
 
 #==================================================================================================
 def html_table(
-    irows:Iterable[Tuple[Any,Tuple[Any,...]]],fmts:Tuple[Callable[[Any],str],...],
-    hdrs:Tuple[str,...]=None,opening:str=None,closing:str=None,encoding:type|str=None
+    irows:Iterable[tuple[Any,tuple[Any,...]]],fmts:tuple[Callable[[Any],str],...],
+    hdrs:tuple[str,...]=None,opening:str=None,closing:str=None,encoding:type|str=None
   )->str|lxml.html.HtmlElement:
   r"""
 :param irows: a generator of pairs of an object (key) and a tuple of objects (value)

@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 import logging; logger = logging.getLogger(__name__)
-from typing import Any, Callable, Iterable, Mapping, Sequence, Tuple, Literal
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 from enum import Enum
 from functools import partial
@@ -42,7 +42,7 @@ At least one of these parameters must be provided. If one is missing, the other 
   r"""The figure on which to start the animation"""
   frame_per_stu: float
   r"""The frame rate, in frames per simulation time units"""
-  track_func: Callable[[float],Tuple[float,float]]
+  track_func: Callable[[float],tuple[float,float]]
   r"""The track map"""
   show_status:Callable[[Enum],None]
   r"""Show the running state of the animation"""
@@ -94,7 +94,7 @@ At least one of these parameters must be provided. If one is missing, the other 
 
 #--------------------------------------------------------------------------------------------------
   @staticmethod
-  def track_function(spec:int|float|Sequence[int|float]|Callable[[float],Tuple[float,float]])->Callable[[float],Tuple[float,float]]:
+  def track_function(spec:int|float|Sequence[int|float]|Callable[[float],tuple[float,float]])->Callable[[float],tuple[float,float]]:
     r"""
 Builds a track map from a specification *spec*. A track map is a callable of one scalar input returning two scalar outputs (bounds of its track interval), or :const:`None` (when input is out of domain).
 

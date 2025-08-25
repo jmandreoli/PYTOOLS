@@ -7,7 +7,8 @@
 
 from __future__ import annotations
 import logging; logger = logging.getLogger(__name__)
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence, Tuple
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
+
 import collections, sqlalchemy
 from sqlalchemy import Engine, MetaData, create_engine
 from datetime import datetime
@@ -60,7 +61,7 @@ class SQLupgrade:
   r"""
 :param modules: schema modules for the new and old database
 :param urls: urls for the new and old database
-:param name_to_old_name: a callable which maps a table name of the new db into its name in the old db
+:param name_to_old_name: a renaming of the new db into the old db (see below)
 
 An instance of this class is a context which helps transfer some database from an old schema to a new (created) one. A schema module must have at least the following members:
 
@@ -69,7 +70,7 @@ An instance of this class is a context which helps transfer some database from a
   * ``get_sessionmaker``: a callable which takes one input (typically a url) and returns a session maker (typically obtained by calling function :func:`sqlalchemy.orm.sessionmaker` on an engine bound to that url)
   * all the mapped tables, as subclasses of ``Base``
 
-If *old_name* is a dictionary, each key should be a new table name, and its value should be either an old table name, or a dictionary mapping new column names in the new table to old ones in the old table (or a pair thereof).
+Each key in *name_to_old_name* should be a table name of the new db, and its value should be either a table name in the old db, or a dictionary mapping new column names in the new table to old ones in the old table (or a pair thereof). By default, tables in the new db map to old tables with the same name (if any), and columns of the new table map to columns in the old table if they have the same name and python type (or, in the case of :class:`Enum` types, strictly equivalent ones).
   """
 #==================================================================================================
   session:sqlalchemy.orm.Session
@@ -79,9 +80,9 @@ If *old_name* is a dictionary, each key should be a new table name, and its valu
   transfer: Callable[[],None]
   r"""Used to initiate the transfer from the old to the new database"""
   register: Callable[[str,str,Callable[[Any],None]],None]
-  r"""Used as a decorator to register an entry in the converter (the decorator arguments are the table and column names; the decorated function name *must* be ``_``)"""
+  r"""Registers an entry in the converter (the arguments are a table and column name of the new db)"""
 
-  def __init__(self,modules,urls,*,versions=None,name_to_old_name:Mapping[str,str|dict[str,str]|Tuple[str,dict[str,str]]]|None=None):
+  def __init__(self,modules,urls,*,versions=None,name_to_old_name:Mapping[str,str|dict[str,str]|tuple[str,dict[str,str]]]|None=None):
     assert len(modules) == 2
     assert len(urls)==2 and all(isinstance(url,str) for url in urls)
     if versions is not None: assert len(versions)==2 and all((v is None or mod.__version__==v) for mod,v in zip(modules,versions))

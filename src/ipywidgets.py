@@ -6,16 +6,16 @@
 #
 
 from __future__ import annotations
-from typing import Any, Callable, Iterable, Mapping, Sequence, Tuple, Optional
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 import logging; logger = logging.getLogger(__name__)
 
 import pandas, traceback
 import sqlalchemy.engine
-from functools import wraps, partial
+from functools import wraps
 from contextlib import contextmanager
 from pathlib import Path
 import traitlets
-from ipywidgets import Widget, Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, Password, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, Stack, VBox, HBox, Box, Layout, Valid, Play, jslink, AppLayout
+from ipywidgets import Widget, Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, Password, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, Stack, VBox, HBox, Layout, Valid, Play, jslink, AppLayout
 
 __all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'animator', 'SelectMultipleOrdered', 'SimpleButton', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
 
@@ -120,7 +120,7 @@ An instance of this class is an app to browse the file at *path*, possibly while
 :param context: pair of number of lines before and after to display around current position
   """
 #==================================================================================================
-  def __init__(self,path:str|Path,start:Optional[int|float]=None,step:int=50,track:bool=True,context:Tuple[int,int]=(10,5)):
+  def __init__(self,path:str|Path,start:int|float|None=None,step:int=50,track:bool=True,context:tuple[int,int]=(10,5)):
     # content initialisation
     path = Path(path).absolute()
     file = path.open('rb')
@@ -447,9 +447,9 @@ A number of other widgets are accessible in addition to :attr:`main`: :attr:`too
   """
 #==================================================================================================
 
-  def __init__(self,children=(),toolbar=(),track:int|Sequence[int]|Callable[[int],Tuple[int,int]]|None=None,rate=None,**ka):
+  def __init__(self,children=(),toolbar=(),track:int|Sequence[int]|Callable[[int],tuple[int,int]]|None=None,rate=None,**ka):
     from ipywidgets import Play, IntSlider, jslink
-    track_func: Callable[[int],Tuple[int, int]]
+    track_func: Callable[[int],tuple[int, int]]
     if callable(track):
       track_func = track
       track_ = track_func(0)
@@ -511,7 +511,7 @@ class Login (HBox):
 A widget holding a server,username,password. The passwords are protected and cached in memory.
   """
 #==================================================================================================
-  _cache:dict[Tuple[str,str],str] = {}
+  _cache:dict[tuple[str,str],str] = {}
   def __init__(self,name,host='',user=''):
     self._host = Text(description=name,value=host,style=AutoWidthStyle,layout={'width':'8cm'})
     self._user = Text(description='user',value=user,style=AutoWidthStyle,layout={'width':'3cm'})
@@ -595,7 +595,7 @@ Helper class to define buttons with a single callback and predefined default lay
   """
 #==================================================================================================
   default_layout = {'width':'auto','padding':'0 1mm 0 1mm'}
-  def __init__(self,callback:Optional[Callable[[],None]]=None,layout=None,**ka):
+  def __init__(self,callback:Callable[[],None]|None=None,layout=None,**ka):
     super().__init__(layout=(self.default_layout|(layout or {})),**ka)
     if callback is not None: self.on_click(lambda _: callback())
 

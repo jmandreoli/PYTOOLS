@@ -6,7 +6,7 @@
 #
 
 from __future__ import annotations
-from typing import Any, Callable, Iterable, Mapping, Tuple, Optional
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 import logging; logger = logging.getLogger(__name__)
 
 import os,socket,sqlite3,time,threading,traceback
@@ -78,7 +78,7 @@ Each field descriptor is a pair of an sql column specification and a function wi
     sql_create = 'CREATE TABLE Status ({})'.format(', '.join(f'{f[0]} {f[1]}' for l in (staticfields_, fields_) for f in l))
     sql_init = 'INSERT INTO Status ({}) VALUES ({})'.format(','.join(f[0] for f in staticfields_),','.join(len(staticfields_)*'?'))
     sql_update = 'UPDATE Status SET {}'.format(', '.join(f'{f[0]}=?' for f in fields_))
-    conn:Optional[sqlite3.Connection] = None
+    conn:sqlite3.Connection|None = None
     def init_(sql_create=sql_create,sql_init=sql_init,initv=tuple(f[2] for f in staticfields_)):
       conn.execute(sql_create)
       conn.execute(sql_init,initv)

@@ -13,10 +13,12 @@ PYTOOLS package documentation
    mod_init.rst
    mod_torch.rst
    mod_animation.rst
-   mod_cache.rst
-   mod_ipywidgets.rst
-   mod_polling.rst
    mod_simpy.rst
+   mod_sql.rst
+   mod_ipywidgets.rst
+   mod_html.rst
+   mod_polling.rst
+   mod_cache.rst
    mod_experiment.rst
    mod_tensorboard_manager.rst
 

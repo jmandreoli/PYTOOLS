@@ -11,14 +11,16 @@ from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 from enum import Enum
 from functools import partial
-import matplotlib.axes
+from matplotlib.axes import Axes
 from matplotlib import rcParams, get_backend
 from matplotlib.pyplot import figure
 from matplotlib.figure import Figure
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Rectangle
-try: from .ipywidgets import app # so this works even if ipywidgets is not available
-except: app = object
+from . import Panes
+from .ipywidgets import app
+
+__all__ = 'AnimationStatus', 'ControlledAnimation',
 
 #==================================================================================================
 AnimationStatus = Enum('AnimationStatus','playing paused')
@@ -31,7 +33,7 @@ The speed of the animation is controlled by two parameters whose product determi
 :param frame_per_stu: the number of frames per stu
 :param interval: the number of real milliseconds per frame
 
-At least one of these parameters must be provided. If one is missing, the other is imputed so that the simulation unit is 1 real second. So long as each frame takes less than *interval* to be constructed and displayed, it remains displayed until the end of the interval, and the next frame is constructed and displayed starting at the beginning of the next interval. A reasonable value for *interval* is ca. 40 ms/frame (flicker fusion threshold).
+At least one of these parameters must be provided. If one is missing, the other is imputed so that 1 stu = 1 sec. So long as each frame takes less than *interval* to be constructed and displayed, it remains displayed until the end of the interval, and the next frame is constructed and displayed starting at the beginning of the next interval. A reasonable lower bound for *interval* is 40 ms/frame (flicker fusion threshold), i.e. 25 frame/s, which is also the value of *frame_per_stu* achieving 1 stu = 1 sec.
 
 :param display: the function which takes a simulation time and displays it
 :param track_spec: specification of a track map, passed to method :meth:`track_function`
@@ -41,13 +43,13 @@ At least one of these parameters must be provided. If one is missing, the other 
   board: Figure
   r"""The figure on which to start the animation"""
   frame_per_stu: float
-  r"""The frame rate, in frames per simulation time units"""
+  r"""The frame rate, in frames per simulation time unit"""
   track_func: Callable[[float],tuple[float,float]]
   r"""The track map"""
-  show_status:Callable[[Enum],None]
-  r"""Show the running state of the animation"""
+  show_status:Callable[[AnimationStatus],None]
+  r"""Show the running state of the animation (playing or paused)"""
   show_control:Callable[[int,bool],None]
-  r"""Show the control state of the animation (current frame index, whether current track was modified)"""
+  r"""Show the control state of the animation (current frame index, whether current track is different from that of previous frame)"""
   jump_to: Callable[[int,bool],None]
   r"""Interrupt the normal sequence of the animation (frame to jump to, whether current track may require update)"""
   track:Sequence[int]
@@ -128,33 +130,7 @@ The specification *spec* can be the track map itself, returned as such after min
         i = bisect(L,x); return (L[i-1],L[i]) if i<imax else None
     return track_func
 
-#--------------------------------------------------------------------------------------------------
-  def panes(self,nrows:int=1,ncols:int=1,sharex:str|bool=False,sharey:str|bool=False,gridspec_kw:Mapping|None=None,gridlines:bool=True,aspect:str='equal',**ka):
-    r"""
-Generator of panes on the board.
-
-:param ka: a dictionary of keyword arguments passed to the :meth:`matplotlib.figure.add_subplot` method of each part (key ``gridlines`` is also allowed and denotes whether gridlines should be displayed)
-    """
-#--------------------------------------------------------------------------------------------------
-    from numpy import zeros
-    share:dict[str|bool,Callable[[int,int],tuple[int,int]]] = {
-      'all': (lambda row,col: (0,0)),
-      True:  (lambda row,col: (0,0)),   # alias
-      'row': (lambda row,col: (row,0)),
-      'col': (lambda row,col: (0,col)),
-      'none':(lambda row,col: (-1,-1)),
-      False: (lambda row,col: (-1,-1)), # alias
-    }
-    share_ = tuple((dim,share[s]) for dim,s in (('sharex',sharex),('sharey',sharey)))
-    gridspec = self.board.add_gridspec(nrows=nrows,ncols=ncols,**(gridspec_kw or {}))
-    axes = zeros((nrows,ncols),dtype=object); axes[...] = None
-    for row in range(nrows):
-      for col in range(ncols):
-        ax = self.board.add_subplot(gridspec[row,col],**dict((dim,axes[s(row,col)]) for dim,s in share_),aspect=aspect,**ka)
-        ax.grid(gridlines)
-        axes[row,col] = ax
-        yield ax
-    raise Exception(f'Insufficient number of parts on this board: {nrows*ncols}')
+  def panes(self,**ka): return Panes(self.board,**ka)
 
 #==================================================================================================
 class IPYControlledAnimation (BaseControlledAnimation,app):
@@ -235,8 +211,8 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
       icon,onclick = D[b]; play_toggler.onclick = onclick; play_toggler.set(text=icon)
     self.show_status = show_status
     # widget definitions
-    axes_:dict[str,matplotlib.axes.Axes] = dict(zip(r,axes))
-    def widget(f:Callable[[matplotlib.axes.Axes],None])->matplotlib.axes.Axes: return f(axes_[f.__name__])
+    axes_:dict[str,Axes] = dict(zip(r,axes))
+    def widget(f:Callable[[Axes],None])->Axes: return f(axes_[f.__name__])
     @widget
     def play_toggler(ax): return ax.text(.5,.5,'',ha='center',va='center',transform=ax.transAxes)
     @widget

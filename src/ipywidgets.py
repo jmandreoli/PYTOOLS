@@ -14,10 +14,11 @@ import sqlalchemy.engine
 from functools import wraps
 from contextlib import contextmanager
 from pathlib import Path
+from collections import namedtuple
 import traitlets
 from ipywidgets import Widget, Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, Password, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, Stack, VBox, HBox, Layout, Valid, Play, jslink, AppLayout
 
-__all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'animator', 'SelectMultipleOrdered', 'SimpleButton', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
+__all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'PlayTracks', 'SelectMultipleOrdered', 'SimpleButton', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
 
 AutoWidthStyle = {'description_width':'auto'}
 
@@ -429,81 +430,84 @@ class hastrait_editor_trait:
     self.widget = HBox([resetb,label,w])
 
 #==================================================================================================
-class animator (app):
+class PlayTracks (HBox):
   r"""
-An instance of this class is an app to control abstract animations. An animation is any callback which can be passed a frame number, enumerated by the animation widgets. The set of frame numbers is split into a sequence of contiguous intervals called tracks. Parameter *track* is a function which returns, for each valid frame number, the bounds of its track interval, and :const:`None` for invalid frame numbers.
+Widgets of this class are similar to :class:`Play` widgets, with more functionality to navigate its value domain (interval of whole numbers). The domain is split into a sequence of contiguous intervals called tracks. Parameter *track* is a function which returns, for each number in the domain, the bounds of its track interval (closed on the left, open on the right), and :const:`None` outside the domain.
 
 * If *track* is an :class:`int` instance, the intervals are of constant length *track*
-* If *track* is an increasing sequence of :class:`int` instances, the intervals are the consecutive pairs in the sequence
+* If *track* is a sequence of :class:`int` instances, possibly ended by the ellipsis `...`, it gives the length of the intervals (and repeat if ellipsis)
 * Otherwise, *track* must be a function of one :class:`int` input returning two :class:`int` outputs
 
-A number of other widgets are accessible in addition to :attr:`main`: :attr:`toolbar`, :attr:`w_console`
+The current position in the domain is reported on a clock, showing the value of the position divided by a constant rate.
 
-:param track: track function
-:param children: additional children widgets
-:param toolbar: additional toolbar widgets
-:param continuity: if :const:`True` (default), proceeds to the next track at the end of each track
+:param track_spec: track function specification
+:param rate: position to clock-time ratio (default: clock-time ~ real time in sec)
+:param value: initial clock-time (same as in :class:`Play` widgets, divided by *rate*)
+:param playing: whether the widget is initially playing (same as in :class:`Play` widgets)
 :param ka: passed to the :class:`Play` constructor
   """
 #==================================================================================================
-
-  def __init__(self,children=(),toolbar=(),track:int|Sequence[int]|Callable[[int],tuple[int,int]]|None=None,rate=None,**ka):
-    from ipywidgets import Play, IntSlider, jslink
-    track_func: Callable[[int],tuple[int, int]]
-    if callable(track):
-      track_func = track
-      track_ = track_func(0)
-      assert track_ is not None and len(track_) == 2 and isinstance((t0:=track_[0]),int) and isinstance((t1:=track_[1]),int) and t0<=0<t1 and track_func(t0)==track_ and ((t:=track(t1)[0]) is None or t==t1)
-    elif isinstance(track,int):
-      assert track>0
-      def track_func(x,T=track): x -= x%T; return x,x+T
-    else:
-      L = tuple((0,*track))
-      assert len(L)>1 and all(x<x_ for (x,x_) in zip(L[:-1],L[1:]))
-      from bisect import bisect
-      def track_func(x,L=L,imax=len(L)): i = bisect(L,x); return (L[i-1],L[i]) if i<imax else None
-    self.track = track_func
+  value = traitlets.Float(min=0.)
+  r"""Current clock-time (always rounded to an integer multiple of *rate*)"""
+  playing = traitlets.Bool()
+  r"""Whether the widget is currently playing"""
+  def __init__(self,track_spec:int|Sequence[int]|Callable[[int],tuple[int,int]],rate:float|None=None,value:float=0.,playing:bool=False,**ka):
+    def track_func_()->Callable[[int],tuple[int, int]]:
+      if callable(track_spec):
+        n = 0
+        for _ in range(5): # check the first 5 values
+          track_ = track_spec(n)
+          if track_ is None: assert n>0; break
+          else:
+            p,q = track_
+            assert isinstance(p,int) and isinstance(q,int) and p==n<q and all(track_spec(m) == track_ for m in range(n+1,q))
+            n = q
+        track_func = track_spec
+      elif isinstance(track_spec,int):
+        assert track_spec>0
+        def track_func(x,T=track_spec): x -= x%T; return x,x+T
+      else:
+        Ld = list(track_spec)
+        if (rep:=Ld[-1]==...): del Ld[-1]
+        assert len(Ld)>0 and all(isinstance(x,int) and x>0 for x in Ld)
+        L = [n:=0]
+        for d in Ld: L.append(n:=n+d)
+        from bisect import bisect
+        N = len(L)
+        if rep:
+          def track_func(x,T=L[-1]):
+            if x<0: return None
+            r = x%T; x -= r; i = bisect(L,r); return x+L[i-1],x+L[i]
+        else:
+          def track_func(x): return (L[i-1],L[i]) if (i:=bisect(L,x))>0 and i<N else None
+      return track_func
+    track_func = track_func_()
     #
-    ini = track_func(0)
-    self.w_play = w_play = Play(0,min=ini[0],max=ini[1],show_repeat=False,**ka)
-    w_ind = IntSlider(0,readout=False)
-    if rate is None: rate = 1000/self.w_play.interval # frame/sec
-    w_clock_edit = FloatText(0,min=0,layout={'width':'1.6cm','padding':'0cm'})
-    w_clock = Stable(w_clock_edit,'{:.2f}'.format)
-    super().__init__(toolbar=[w_play,w_ind,w_clock,*toolbar],children=children)
-    self.on_close(w_play.close)
+    style = ka.pop('style',{}); layout = ka.pop('layout',{})
+    p,q = track_func(0)
+    w_play = Play(p,min=p,max=q,show_repeat=False,layout={'width':'1.9cm'},**ka)
+    w_ind = IntSlider(p,min=p,max=q,readout=False,continuous_update=False)
+    w_clock_edit = FloatText(layout={'width':'1.6cm','padding':'0cm'})
+    w_clock = Stable(w_clock_edit,'{:.2f}')
     jslink((w_play,'value'),(w_ind,'value'))
     jslink((w_play,'min'),(w_ind,'min'))
     jslink((w_play,'max'),(w_ind,'max'))
-    self.active = True
-    def new_play(n):
-      if self.active:
-        w_clock.value = n/rate
-        if n >= w_play.max and (tr:=track_func(n)) is not None: w_play.max = tr[1]; w_play.value = n; w_play.min = tr[0]
-    w_play.observe((lambda c: new_play(c.new)),'value')
-    def new_clock(v):
+    if rate is None: rate = 1000./w_play.interval
+    w_play.observe((lambda c: setattr(self,'value',(c.new+1.e-6)/rate) if self.active else None),'value')
+    w_clock.observe((lambda c: setattr(self,'value',c.new) if self.active else None),'value')
+    def from_self(v):
       with deactivate(self):
-        n = int(v*rate)
-        if (tr:=track_func(n)) is not None:
-          if n >= w_play.max: w_play.max = tr[1]; w_play.value = n; w_play.min = tr[0]
-          elif n <= w_play.min: w_play.min = tr[0]; w_play.value = n; w_play.max = tr[1]
-    w_clock.observe((lambda c: new_clock(c.new)),'value')
-
-  def pause(self):
-    r"""Pauses the animation"""
-    self.w_play.playing = False
-
-  @property
-  def value(self):
-    r"""Value of the current frame number; uses the track function to redefine the current track interval when set"""
-    return self.w_play.value
-  @value.setter
-  def value(self,n:int):
-    tmin,tmax = self.track(n)
-    w = self.w_play
-    # by construction, the intervals (tmin,tmax) and (w.min,w.max) are either disjoint or identical
-    if w.max > tmax: w.min = tmin; w.value = n; w.max = tmax
-    else: w.max = tmax; w.value = n; w.min = tmin
+        assert v>=0.; n = int(v*rate); w_clock.value = (n+1.e-6)/rate
+        if n >= w_play.max:
+          if (tr:=track_func(n)) is not None: w_play.max = tr[1]; w_play.value,w_play.min = n,tr[0]
+        elif n < w_play.min:
+          if (tr:=track_func(n)) is not None: w_play.min = tr[0]; w_play.value,w_play.max = n,tr[1]
+        else: w_play.value = n
+    self.observe((lambda c: from_self(c.new)),'value')
+    self.observe((lambda c: setattr(w_play,'playing',c.new)),'playing')
+    w_play.observe((lambda c: setattr(self,'playing',c.new)),'playing')
+    self.active = True; self.value = value; self.playing = playing
+    super().__init__([w_play,w_ind,w_clock],style=style,layout=layout)
 
 #==================================================================================================
 class Login (HBox):
@@ -513,21 +517,27 @@ A widget holding a server,username,password. The passwords are protected and cac
 #==================================================================================================
   _cache:dict[tuple[str,str],str] = {}
   def __init__(self,name,host='',user=''):
-    self._host = Text(description=name,value=host,style=AutoWidthStyle,layout={'width':'8cm'})
-    self._user = Text(description='user',value=user,style=AutoWidthStyle,layout={'width':'3cm'})
-    self._password = Password(description='password',value='',style=AutoWidthStyle,layout={'width':'5cm'})
-    super().__init__(children=(self._host,self._user,self._password))
+    w_host = Text(description=name,value='',style=AutoWidthStyle,layout={'width':'8cm'})
+    w_user = Text(description='user',value='',style=AutoWidthStyle,layout={'width':'3cm'})
+    w_password = Password(description='password',value='',style=AutoWidthStyle,layout={'width':'5cm'})
+    self.active = True
+    def from_hw():
+      with deactivate(self):
+        w_password.value = self._cache.get((w_host.value,w_user.value),'')
+    def from_pw(v): self._cache[w_host.value,w_user.value] = v
+    for w in (w_host,w_user): w.observe((lambda c: from_hw()),'value')
+    w_password.observe((lambda c: from_pw(c.new)),'value')
+    def get_v(): return w_host.value,w_user.value,w_password.value
+    def set_v(v):
+      w_host.value,w_user.value = v[:2]
+      if len(v)>2: w_password.value, = v[2:]
+    self.get_v,self.set_v = get_v,set_v
+    set_v((host,user))
+    super().__init__((w_host,w_user,w_password))
   @property
-  def host(self): return self._host.value
-  @property
-  def user(self): return self._user.value
-  @property
-  def password(self):
-    host_user = self.host,self.user
-    v = self._password.value
-    if v: self._cache[host_user] = v
-    else: v = self._password.value = self._cache.get(host_user,'')
-    return v
+  def value(self): return self.get_v()
+  @value.setter
+  def value(self,v): self.set_v(v)
 
 #==================================================================================================
 class SelectMultipleOrdered (VBox):
@@ -542,7 +552,6 @@ Essentially like :class:`SelectMultiple` but preserves order of selection.
     w_sel = SelectMultiple(**ka)
     w_echo = Text(disabled=True)
     w_echo.layout.width = w_sel.layout.width
-    super().__init__((w_sel,w_echo))
     def reorder(L):
       L = set(L)
       for x in self.value:
@@ -559,27 +568,28 @@ Essentially like :class:`SelectMultiple` but preserves order of selection.
     for name in 'options','rows':
       self.observe((lambda c,name=name: setattr(w_sel,name,c.new)),name)
     self.value = tuple(value)
+    super().__init__((w_sel,w_echo))
 
 #==================================================================================================
 class Stable (Stack):
   r"""
-Essentially a wrapper around *main* allowing it to be safely interacted with even when other widgets are updating it concurrently (*main* is frozen during the interaction). Do not bind callbacks to *main*: they can be equivalently bound to its wrapper.
+Essentially a wrapper around widget *main* allowing it to be safely interacted with even when it is updated concurrently. Widget *main* should not have callbacks bound to its value, nor should have its value updated externally: binding callbacks to or modifying the value should be done on the wrapper. Widget *main* is then used only to edit a frozen value of the wrapper, which becomes its current value when submitted. Note: unfortunately, there is no way in ipywidget to cancel an edition once it has started (e.g. using the escape key).
 
 :param main: the widget to wrap
 :param fmt: a callable which returns a :class:`str` representation of any value of *main*
   """
 #==================================================================================================
-  def __init__(self,main:Widget,fmt:Callable[[Any],str],**ka):
+  def __init__(self,main:Widget,fmt:Callable[[Any],str]|str,**ka):
     self.add_traits(value=type(main).value)
     self.active = True
+    fmt_ = fmt.format if isinstance(fmt,str) else fmt
     layout = {k:x for k in main.layout.keys if not k.startswith('_') and (x:=getattr(main.layout,k)) is not None}
-    w_display = SimpleButton((lambda: show_editor()),description='',tooltip='Click to edit',layout=layout)
+    w_display = SimpleButton((lambda: show_editor()),description=fmt_(main.value),tooltip='Click to edit',layout=layout)
     w_editor = HBox(children=[main,SimpleButton((lambda: hide_editor()),icon='close')],layout={'border':'thin solid blue'})
     def show_editor():
       with deactivate(self): main.value = self.value; self.selected_index = 1
     def hide_editor(): self.selected_index = 0
-    def from_self(v): w_display.description = fmt(v)
-    self.observe((lambda c: from_self(c.new)),'value')
+    self.observe((lambda c: setattr(w_display,'description',fmt_(c.new))),'value')
     def from_main(v):
       if self.active: self.value = v; hide_editor()
     main.observe((lambda c: from_main(c.new)),'value')
@@ -619,13 +629,13 @@ An instance of this class is a button with states which form a cycle. Each click
     if isinstance(shape,str): w,h = (2,5) if shape=='T' else map(int,shape.split('x',1))
     else: assert all(isinstance(x,int) for x in shape); w,h = shape
     layout = {'width':f'{w}mm','height':f'{h}mm','padding':'0','border':'0'}|layout
-    super().__init__(layout=layout,**ka)
-    self.on_click(step)
     self.on_click_ = lambda colour,callback: callbacks[colour_[colour] if isinstance(colour,str) else colour].append(callback)
     self.style.button_color = colours[-1]
     state:int = -1; N = len(colours)
     colour_ = {c:k for k,c in enumerate(colours)}
-    callbacks:list[list[Callable[[],None]]] = [[] for _ in range(N)]
+    callbacks:list[list[Callable[[],None]]] = [[] for _ in colours]
+    super().__init__(layout=layout,**ka)
+    self.on_click(step)
 
 #==================================================================================================
 def activable(w:Widget,ini=True):

@@ -9,8 +9,8 @@ from __future__ import annotations
 import logging; logger = logging.getLogger(__name__)
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
-import os, re, collections
-if False: import ast,imaplib,pickle,datetime,matplotlib # tricks mypy to import these modules
+import re, collections
+if False: import ast,imaplib,pickle,datetime,matplotlib,simpy # tricks mypy to import these modules
 
 #==================================================================================================
 class owrap:
@@ -132,7 +132,8 @@ def config_env(name:str,dflt:str=None,asfile:bool=False)->str|None:
 Returns the string value of an environment variable (or the content of the file pointed by it if *asfile* is set) or *dflt* if the environment variable is not assigned.
   """
 #==================================================================================================
-  x = os.environ.get(name)
+  from os import environ
+  x = environ.get(name)
   if x is None: return dflt
   if asfile:
     with open(x) as u: return u.read()
@@ -426,6 +427,34 @@ An instance of this class is an iterable enumerating the unread messages in a fo
   def __len__(self): return self.content_len
 
 #==================================================================================================
+class ResettableSimpyEnvironment:
+  r"""
+An instance of this class wraps a :class:`simpy.Environment` instance, allowing :meth:`run` to violate the chronological order. When a violation occurs, the proxy environment is reset and reconfigured before being advanced to the new time. For stochastic environments, it is important to include the seed in the configuration.
+
+:param init_t: the initial time of the environment
+  """
+#==================================================================================================
+  configs:list[Callable[[simpy.Environment],None]]
+  def add_config(self,*C:Callable[[simpy.Environment],None]):
+    r"""Adds a configuration to the environment. It is applied to the proxy each time it is reset."""
+    self.configs.extend(C)
+  def __init__(self,init_t:float=0.):
+    from simpy import Environment
+    self.configs = []
+    def reset(v:float):
+      self._proxy = env = Environment(init_t)
+      for c in self.configs: c(env)
+      if v>init_t: self._proxy.run(v)
+    def run(v:float):
+      #assert isinstance(v,float) and v >= init_t
+      now = self._proxy.now
+      if v>now: self._proxy.run(v)
+      if v<now: reset(v)
+    def run_init(v:float): self.run = run; reset(v)
+    self.run = run_init
+  def __getattr__(self,name:str): return getattr(self._proxy,name)
+
+#==================================================================================================
 class basic_stats:
   r"""
 Instances of this class maintain basic statistics about a group of values.
@@ -452,45 +481,6 @@ Instances of this class maintain basic statistics about a group of values.
     r"""standard deviation of the group"""
     from math import sqrt
     return sqrt(self.var)
-
-class Panes (collections.abc.Mapping):
-  r"""
-Generator of panes on the board.
-
-:param ka: a dictionary of keyword arguments passed to the :meth:`matplotlib.figure.add_subplot` method of each part (key ``gridlines`` is also allowed and denotes whether gridlines should be displayed)
-  """
-
-  def __init__(self,fig:matplotlib.figure.Figure,nrows:int=1,ncols:int=1,sharex:str|bool=False,sharey:str|bool=False,gridspec_kw:Mapping|None=None,gridlines:bool=True,aspect:str='equal',**ka):
-    from numpy import array,sum
-    from matplotlib.figure import Figure,SubFigure
-    from matplotlib.axes import Axes
-    assert isinstance(fig,(Figure,SubFigure))
-    axes = array(nrows*[ncols*[None]],dtype=object)
-    share:dict[str|bool,Callable[[int,int],Axes|None]] = {
-      'all': (lambda row,col: None if row==col==0 else axes[0,0]),
-      True:  (lambda row,col: None if row==col==0 else axes[0,0]),   # alias
-      'row': (lambda row,col: None if row==0 else axes[row,0]),
-      'col': (lambda row,col: None if col==0 else axes[0,col]),
-      'none':(lambda row,col: None),
-      False: (lambda row,col: None), # alias
-    }
-    share_ = tuple((dim,share[s]) for dim,s in (('sharex',sharex),('sharey',sharey)))
-    gridspec = fig.add_gridspec(nrows=nrows,ncols=ncols,**(gridspec_kw or {}))
-    def _get(row,col):
-      ax = axes[row,col]
-      if ax is None:
-        ax = axes[row,col] = fig.add_subplot(gridspec[row,col],**dict((dim,s(row,col)) for dim,s in share_),aspect=aspect,**ka)
-        ax.grid(gridlines)
-      return ax
-    self._get = _get
-    def _iter(): yield from ((row,col) for row in range(nrows) for col in range(ncols) if axes[row,col] is not None)
-    self._iter = _iter
-    self._len = lambda: int(sum(axes!=None))
-    self.new = lambda: next(self[row,col] for row in range(nrows) for col in range(ncols) if axes[row,col] is None)
-  def __getitem__(self,key): return self._get(*key)
-  def __iter__(self): yield from self._iter()
-  def __len__(self): return self._len()
-  def new(self): raise NotImplementedError() # defined in __init__ at instance level
 
 #==================================================================================================
 def iso2date(iso:tuple[int,int,int])->datetime.date:

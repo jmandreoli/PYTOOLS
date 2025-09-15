@@ -6,36 +6,36 @@
 #
 
 from __future__ import annotations
-import logging; logger = logging.getLogger(__name__)
+import logging;logger = logging.getLogger(__name__)
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 from enum import Enum
 from functools import partial
-from matplotlib.axes import Axes
+from collections import defaultdict
 from matplotlib import rcParams, get_backend
 from matplotlib.pyplot import figure
-from matplotlib.figure import Figure
+from matplotlib.figure import Figure, SubFigure
+from matplotlib.axes import Axes
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Rectangle
-from . import Panes
 from .ipywidgets import app
 
-__all__ = 'AnimationStatus', 'ControlledAnimation',
+__all__ = 'AnimationStatus', 'PanesDisplayer',
 
 #==================================================================================================
 AnimationStatus = Enum('AnimationStatus','playing paused')
 class BaseControlledAnimation (FuncAnimation):
   r"""
-An instance of this class is a controllable :mod:`matplotlib` animation, created by this constructor and attached to a :class:`Figure` instance stored as attribute :attr:`board`. The board creation is not performed in this class, so it must be performed in the constructor of a subclass, prior to invoking this constructor.
+An instance of this class is a controllable :mod:`matplotlib` animation, attached to a :class:`Figure` instance stored as attribute :attr:`board`. The board creation is not performed in this class, so it must be performed in the constructor of a subclass, prior to invoking this constructor.
 
 The speed of the animation is controlled by two parameters whose product determines the number of real milliseconds per simulation time unit (stu):
 
 :param frame_per_stu: the number of frames per stu
 :param interval: the number of real milliseconds per frame
 
-At least one of these parameters must be provided. If one is missing, the other is imputed so that 1 stu = 1 sec. So long as each frame takes less than *interval* to be constructed and displayed, it remains displayed until the end of the interval, and the next frame is constructed and displayed starting at the beginning of the next interval. A reasonable lower bound for *interval* is 40 ms/frame (flicker fusion threshold), i.e. 25 frame/s, which is also the value of *frame_per_stu* achieving 1 stu = 1 sec.
+At least one of these parameters must be provided. If only one is present, the other is imputed so that 1 stu = 1 sec. So long as each frame takes less than *interval* to be constructed and displayed, it remains displayed until the end of the interval, and the next frame is constructed and displayed starting at the beginning of the next interval. A reasonable lower bound for *interval* is 40 ms/frame (flicker fusion threshold), i.e. 25 frame/s, which is also the value of *frame_per_stu* achieving 1 stu = 1 sec.
 
-:param display: the function which takes a simulation time and displays it
+:param displayer: callable which, given a board, returns a callable which, given a frame, paints it on the board
 :param track_spec: specification of a track map, passed to method :meth:`track_function`
 :param ka: passed to the :class:`FuncAnimation` constructor
   """
@@ -44,24 +44,24 @@ At least one of these parameters must be provided. If one is missing, the other 
   r"""The figure on which to start the animation"""
   frame_per_stu: float
   r"""The frame rate, in frames per simulation time unit"""
-  track_func: Callable[[float],tuple[float,float]]
+  track_func: Callable[[float],tuple[float,float]|None]
   r"""The track map"""
   show_status:Callable[[AnimationStatus],None]
   r"""Show the running state of the animation (playing or paused)"""
   show_control:Callable[[int,bool],None]
   r"""Show the control state of the animation (current frame index, whether current track is different from that of previous frame)"""
-  jump_to: Callable[[int,bool],None]
+  jump_to: Callable[[int,bool],bool]
   r"""Interrupt the normal sequence of the animation (frame to jump to, whether current track may require update)"""
   track:Sequence[int]
   r"""Current track (start frame included, end frame excluded, length)"""
 
   #--------------------------------------------------------------------------------------------------
-  def __init__(self,display:Callable[[Any],None],frame_per_stu:float|None=None,interval:float|None=None,track_spec=None,**ka):
+  def __init__(self,displayer:Callable[[Any],Callable[[float],None]],frame_per_stu:float|None=None,interval:float|None=None,track_spec=None,**ka):
   #--------------------------------------------------------------------------------------------------
     def set_status(f:Callable[[],None],s:AnimationStatus): f(); self.show_status(s)
     self.resume = partial(set_status,self.resume,AnimationStatus.playing)
     self.pause  = partial(set_status,self.pause,AnimationStatus.paused)
-    def jump_to(n:int,check:bool=False):
+    def jump_to_(n:int,check:bool)->float|None:
       v = n/self.frame_per_stu; new_track = False
       if check is True:
         d = n-track[0]; new_track = d<0 or d>=track[2]
@@ -74,14 +74,14 @@ At least one of these parameters must be provided. If one is missing, the other 
       return v
     def frames():
       n:int = 0
-      def jump_to_(n_:int,check:bool=False)->bool:
+      def jump_to(n_:int,check:bool)->bool:
         nonlocal n
-        if (v:=jump_to(n_,check)) is None: return False
+        if (v:=jump_to_(n_,check)) is None: return False
         n = n_; display(v); self.board.canvas.draw_idle(); return True
-      self.jump_to = jump_to_
+      self.jump_to = jump_to
       while True:
         self.pause(); yield None
-        while (v:=jump_to((n_:=n+1),check=True)) is not None: n = n_; yield v
+        while (v:=jump_to_((n_:=n+1),True)) is not None: n = n_; yield v
     self.track = track = [-1,0,1]
     track_func = self.track_function(track_spec)
     def positive(v): v = float(v); assert v>0; return v
@@ -92,11 +92,12 @@ At least one of these parameters must be provided. If one is missing, the other 
       frame_per_stu = positive(frame_per_stu)
       interval = 1000./frame_per_stu if interval is None else positive(interval)
     self.frame_per_stu = frame_per_stu
+    display = displayer(self.board)
     super().__init__(self.board,(lambda v: None if v is None else display(v)),frames,init_func=(lambda:display(0.)),repeat=False,cache_frame_data=False,interval=interval,**ka)
 
 #--------------------------------------------------------------------------------------------------
   @staticmethod
-  def track_function(spec:int|float|Sequence[int|float]|Callable[[float],tuple[float,float]])->Callable[[float],tuple[float,float]]:
+  def track_function(spec:int|float|Sequence[int|float]|Callable[[float],tuple[float,float]])->Callable[[float],tuple[float,float]|None]:
     r"""
 Builds a track map from a specification *spec*. A track map is a callable of one scalar input returning two scalar outputs (bounds of its track interval), or :const:`None` (when input is out of domain).
 
@@ -167,10 +168,10 @@ A instance of this class is a player for :mod:`matplotlib` animations controlled
     self.active = True
     # callbacks
     def from_track(d):
-      if self.active: self.jump_to(self.track[0]+d)
+      if self.active: self.jump_to(self.track[0]+d,False)
     w_track_manager.observe((lambda c:from_track(c.new)),'value')
     def from_clock(v,v_old):
-      if self.active and not self.jump_to(int(v*self.frame_per_stu),check=True):
+      if self.active and not self.jump_to(int(v*self.frame_per_stu),True):
         with deactivate(self): w_clock.value = v_old
     w_clock.observe((lambda c:from_clock(c.new,c.old)),'value')
     super().__init__(*args,**kwargs)
@@ -212,7 +213,7 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
     self.show_status = show_status
     # widget definitions
     axes_:dict[str,Axes] = dict(zip(r,axes))
-    def widget(f:Callable[[Axes],None])->Axes: return f(axes_[f.__name__])
+    def widget(f:Callable[[Axes],Any])->Any: return f(axes_[f.__name__])
     @widget
     def play_toggler(ax): return ax.text(.5,.5,'',ha='center',va='center',transform=ax.transAxes)
     @widget
@@ -229,7 +230,7 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
         if ev.inaxes is play_toggler.axes:
           play_toggler.onclick(); toolbar.canvas.draw_idle()
         elif ev.inaxes is track_manager.axes:
-          self.jump_to(self.track[0]+int(ev.xdata*self.track[2]))
+          self.jump_to(self.track[0]+int(ev.xdata*self.track[2]),False)
     edit_value:str = ''
     def on_key_press(ev):
       nonlocal edit_value
@@ -237,14 +238,14 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
       if key == 'left' or key == 'right':
         if ev.inaxes is not None:
           n = track_manager.val+{'left':-1,'right':1}[key]
-          if n>=self.track[0] and n<self.track[1]: self.jump_to(n)
+          if n>=self.track[0] and n<self.track[1]: self.jump_to(n,False)
           return
       elif ev.inaxes is clock.axes:
         if key=='enter':
           try: v_ = float(edit_value)
           except: return
           ev_ = edit_value; edit_value = ''
-          if not self.jump_to(int(v_*self.frame_per_stu),check=True): edit_value = ev_
+          if not self.jump_to(int(v_*self.frame_per_stu),True): edit_value = ev_
           return
         elif key=='escape': edit_value = ''; v,c = f'{track_manager.val/self.frame_per_stu:.2f}','k'
         elif key=='backspace' and len(edit_value)>1:
@@ -258,5 +259,75 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
     toolbar.canvas.mpl_connect('key_press_event',on_key_press)
     super().__init__(*args,**kwargs)
 
-def ControlledAnimation(*a,**ka):
-  return IPYControlledAnimation(*a,**ka) if get_backend() == 'widget' else MPLControlledAnimation(*a,**ka)
+#==================================================================================================
+class PanesDisplayer:
+  r"""
+An instance of this class is a callable which takes as input a board (here an instance of class :class:`Figure`) divided into panes (here instances of class :class:`Axes`), prepares it for display, and returns a callable which, given a frame, paints the board accordingly. Typically used as a first argument (*displayer* callable) in a :class:`BaseControlledAnimation` constructor.
+  """
+#==================================================================================================
+  setup:Callable[[Any],None]
+  r"""Invoked before displaying a frame"""
+  displayers:dict[tuple[int,int],list[tuple[str,Callable[[Any],Callable[[Any],None]]]]]
+  def add_displayer(self,pos:tuple[int,int]=(0,0),**ka:Callable[[Any],Callable[[Any],None]]):
+    r"""
+Adds a pane-displayer to this displayer. A pane-displayer is a callable which takes as input a pane, prepares it for display, and returns a callable which, given a frame, paints the pane accordingly.
+    """
+    self.displayers[pos].extend((view,D) for view,D in ka.items())
+    return self # so it can be chained
+  def __init__(self): self.displayers = defaultdict(list); self.setup = (lambda frm: None)
+#--------------------------------------------------------------------------------------------------
+  call_defaults = {'aspect':'equal'}
+  def __call__(self,fig:Figure|SubFigure,nrows:int=1,ncols:int=1,sharex:str|bool=False,sharey:str|bool=False,gridspec_kw:Mapping|None=None,view_cfg:Mapping[str,dict]|None=None,gridlines:bool=True,**ka)->Callable[[Any],None]:
+    r"""
+Prepare the board for display, and returns a callable which takes as input a frame and actually displays it on the board.
+
+:param fig: the board
+:param nrows: the number of rows
+:param ncols: the number of columns
+:param sharex: sharing specification for the x-axis
+:param sharey: sharing specification for the y-axis
+:param gridspec_kw: a grid specification for the board
+:param view_cfg: a dictionary of view configurations (each configuration is a :class:`dict`)
+:param gridlines: whether to display gridlines on the axes
+:param ka: passed on as subplot keywords to construct the axes
+    """
+#--------------------------------------------------------------------------------------------------
+    from numpy import array
+    assert isinstance(fig,(Figure,SubFigure))
+    axes = array(nrows*[ncols*[None]],dtype=object)
+    share:dict[str|bool,Callable[[int,int],Axes|None]] = {
+      'all': (lambda row,col: None if row==col==0 else axes[0,0]),
+      True:  (lambda row,col: None if row==col==0 else axes[0,0]),   # alias
+      'row': (lambda row,col: None if row==0 else axes[row,0]),
+      'col': (lambda row,col: None if col==0 else axes[0,col]),
+      'none':(lambda row,col: None),
+      False: (lambda row,col: None), # alias
+    }
+    share_ = tuple((dim,share[s]) for dim,s in (('sharex',sharex),('sharey',sharey)))
+    gridspec = fig.add_gridspec(nrows=nrows,ncols=ncols,**(gridspec_kw or {}))
+    ka = self.call_defaults|ka
+    def _get(row,col):
+      ax = axes[row,col]
+      if ax is None:
+        ax = axes[row,col] = fig.add_subplot(gridspec[row,col],**dict((dim,s(row,col)) for dim,s in share_),**ka)
+        ax.grid(gridlines)
+      return ax
+    get_view_cfg:Callable[[str],dict] = (lambda view: {}) if view_cfg is None else view_cfg.get
+    display_list = [self.setup,*(D(_get(*pos),**kw) for pos,L in self.displayers.items() for view,D in L if (kw:=get_view_cfg(view)) is not None)]
+    def display(frm):
+      for f in display_list: f(frm)
+    return display
+#--------------------------------------------------------------------------------------------------
+  play_defaults = {'interval':40}
+  r"""The default arguments passed to method :meth:`play`"""
+  def play(self,displayer_kw=None,**ka):
+    r"""
+Returns an animation based on this displayer.
+
+:param displayer_kw: a dictionary of keyword arguments passed when invoking this displayer
+:param ka: passed to the animation constructor
+    """
+#--------------------------------------------------------------------------------------------------
+    animation_factory = IPYControlledAnimation if get_backend() == 'widget' else MPLControlledAnimation
+    ka = self.play_defaults|ka
+    return animation_factory((self if displayer_kw is None else partial(self,**displayer_kw)),**ka)

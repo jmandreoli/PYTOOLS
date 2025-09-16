@@ -448,7 +448,7 @@ An instance of this class wraps a :class:`simpy.Environment` instance, allowing 
     def run(v:float):
       #assert isinstance(v,float) and v >= init_t
       now = self._proxy.now
-      if v>now: self._proxy.run(v)
+      if v>now: self._proxy.run(v); return
       if v<now: reset(v)
     def run_init(v:float): self.run = run; reset(v)
     self.run = run_init

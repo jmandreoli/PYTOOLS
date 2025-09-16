@@ -20,13 +20,13 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Rectangle
 from .ipywidgets import app
 
-__all__ = 'AnimationStatus', 'PanesDisplayer',
+__all__ = 'AnimationStatus', 'BoardDisplayer',
 
 #==================================================================================================
 AnimationStatus = Enum('AnimationStatus','playing paused')
 class BaseControlledAnimation (FuncAnimation):
   r"""
-An instance of this class is a controllable :mod:`matplotlib` animation, attached to a :class:`Figure` instance stored as attribute :attr:`board`. The board creation is not performed in this class, so it must be performed in the constructor of a subclass, prior to invoking this constructor.
+An instance of this class is a controllable animation (of type :class:`FuncAnimation`), attached to a board (of type :class:`Figure`) stored as attribute :attr:`board`. The board creation is not performed in this class, so it must be performed in the constructor of a subclass, prior to invoking this constructor.
 
 The speed of the animation is controlled by two parameters whose product determines the number of real milliseconds per simulation time unit (stu):
 
@@ -260,26 +260,41 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
     super().__init__(*args,**kwargs)
 
 #==================================================================================================
-class PanesDisplayer:
+class BoardDisplayer:
   r"""
-An instance of this class is a callable which takes as input a board (here an instance of class :class:`Figure`) divided into panes (here instances of class :class:`Axes`), prepares it for display, and returns a callable which, given a frame, paints the board accordingly. Typically used as a first argument (*displayer* callable) in a :class:`BaseControlledAnimation` constructor.
+An instance of this class is a callable which takes as input a board, prepares it for display, and returns a callable which, given a frame, paints it on the board. Typically used as a first argument (*displayer* callable) in a :class:`BaseControlledAnimation` constructor. The board (here an instance of class :class:`Figure`) is divided into panes (here instances of class :class:`Axes`). Each pane can be assigned a list of named pane displayers, corresponding to different views of the displayed phenomenon. The name of each view can be used to configure the view using parameter *view_cfg* in method :meth:`__call__` (invocation of this displayer).
   """
 #==================================================================================================
   setup:Callable[[Any],None]
-  r"""Invoked before displaying a frame"""
+  r"""Invoked before invoking the pane displayers on a frame"""
   displayers:dict[tuple[int,int],list[tuple[str,Callable[[Any],Callable[[Any],None]]]]]
-  def add_displayer(self,pos:tuple[int,int]=(0,0),**ka:Callable[[Any],Callable[[Any],None]]):
+  def add_displayer(self,pos:tuple[int,int]|None=None,**ka:Callable[[Any],Callable[[Any],None]]):
     r"""
-Adds a pane-displayer to this displayer. A pane-displayer is a callable which takes as input a pane, prepares it for display, and returns a callable which, given a frame, paints the pane accordingly.
+Adds a named pane displayer to this board displayer. A pane displayer is a callable which takes as input a pane, prepares it for display, and returns a callable which, given a frame, paints it on the pane according to the view name.
+
+:param pos: the position of the pane on the board
+:param ka: the keys are view names and the values are pane displayers
     """
+    if pos is None: pos = (0,0)
     self.displayers[pos].extend((view,D) for view,D in ka.items())
     return self # so it can be chained
-  def __init__(self): self.displayers = defaultdict(list); self.setup = (lambda frm: None)
+  def __init__(self): self.displayers = defaultdict(list)
+#--------------------------------------------------------------------------------------------------
+  def with_simpy_setup(self):
+    r"""
+Initialises attribute :attr:`setup` for a :mod:`simpy` simulation.
+    """
+#--------------------------------------------------------------------------------------------------
+    from . import ResettableSimpyEnvironment
+    env = ResettableSimpyEnvironment(0.)
+    self.setup = lambda v: env.run(v)
+    self.env = env
+    return self
 #--------------------------------------------------------------------------------------------------
   call_defaults = {'aspect':'equal'}
   def __call__(self,fig:Figure|SubFigure,nrows:int=1,ncols:int=1,sharex:str|bool=False,sharey:str|bool=False,gridspec_kw:Mapping|None=None,view_cfg:Mapping[str,dict]|None=None,gridlines:bool=True,**ka)->Callable[[Any],None]:
     r"""
-Prepare the board for display, and returns a callable which takes as input a frame and actually displays it on the board.
+Prepares the board for display, and returns a callable which takes as input a frame and actually displays it on the board.
 
 :param fig: the board
 :param nrows: the number of rows

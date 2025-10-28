@@ -9,16 +9,13 @@ from __future__ import annotations
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 import logging; logger = logging.getLogger(__name__)
 
-import pandas, traceback
-import sqlalchemy.engine
-from functools import wraps
+import traitlets
 from contextlib import contextmanager
 from pathlib import Path
-from collections import namedtuple
-import traitlets
 from ipywidgets import Widget, Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, Password, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, Stack, VBox, HBox, Layout, Valid, Play, jslink, AppLayout
+if False: import pandas, sqlalchemy.engine
 
-__all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'PlayTracks', 'SelectMultipleOrdered', 'SimpleButton', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
+__all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'PlayTracks', 'SelectMultipleOrdered', 'DblClickButton', 'RoundRobinButton', 'simple_button', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
 
 AutoWidthStyle = {'description_width':'auto'}
 
@@ -38,24 +35,18 @@ An instance of this class is an app based on module :mod:`ipywidgets`, consistin
   r"""A console terminal (just below :attr:`toolbar`)"""
 
   def __init__(self,toolbar:Sequence[Widget]=(),children:Sequence[Widget]=(),**ka):
-    w_closeb = SimpleButton(icon='close',tooltip='Close app')
+    w_closeb = simple_button(icon='close',tooltip='Close app')
     self.console = console = Output()
-    w_clearb = SimpleButton(icon='trash',tooltip='Clear console')
+    w_clearb = simple_button(callback=console.clear_output,icon='trash',tooltip='Clear console')
     w_console = HBox([w_clearb,console],layout={'border': 'thin solid', 'display': 'none'})
     self.toolbar = HBox([w_closeb,*toolbar])
     super().__init__(header=VBox([self.toolbar,w_console]),center=VBox(children),**ka)
     self.layout.grid_template_rows = self.layout.grid_template_columns = None
-    def _console_clear(b):
-      from IPython.display import clear_output
-      with console: clear_output()
-    w_clearb.on_click(_console_clear)
     def _console_display(c): w_console.layout.display = '' if c.new else 'none'
     console.observe(_console_display,'outputs')
     _close_callbacks = [self.close_all]
     self.on_close = _close_callbacks.append
     w_closeb.on_click(lambda b: [f() for f in _close_callbacks])
-  def __enter__(self): return self.console.__enter__()
-  def __exit__(self,*a): self.console.__exit__(*a)
 
   def mpl_figure(self,*a,**ka):
     r"""
@@ -64,17 +55,8 @@ Adds a :mod:`matplotlib` figure to this app.
     from matplotlib.pyplot import close
     fig,w = mpl_figure(*a,asapp=False,**ka)
     self.center.children += (w,)
-    self.on_close(lambda:close(fig))
+    self.on_close(lambda: close(fig))
     return fig
-
-  def protect(self,f):
-    r"""A decorator to redirect output and errors to the console."""
-    @wraps(f)
-    def F(*a,**ka):
-      with self:
-        try: return f(*a,**ka)
-        except: traceback.print_exc(); raise
-    return F
 
 #==================================================================================================
 class seq_browser (app):
@@ -138,8 +120,8 @@ An instance of this class is an app to browse the file at *path*, possibly while
     # widget creation
     self.w_win = w_win = HTML(layout={'width':'15cm','border':'thin solid','overflow':'auto hidden'})
     self.w_ctrl = w_ctrl = IntSlider(start,min=0,max=fsize,step=step,readout=False,layout={'width':w_win.layout.width})
-    w_toend = SimpleButton(icon='fast-forward',tooltip='Jump to end of file')
-    w_tobeg = SimpleButton(icon='fast-backward',tooltip='Jump to beginning of file')
+    w_toend = simple_button(icon='fast-forward',tooltip='Jump to end of file')
+    w_tobeg = simple_button(icon='fast-backward',tooltip='Jump to beginning of file')
     w_pos = Label('')
     super().__init__(toolbar=[w_ctrl,w_pos,w_tobeg,w_toend],children=[w_win])
     self.on_close(file.close)
@@ -233,8 +215,8 @@ An instance of this class is an app to explore a database specified by *spec*. I
     w_ordr = SelectMultipleOrdered(layout={'width':'6cm'})
     d_titles,d_children = zip(('Column definitions',w_schema),('Column selection',w_scol),('Display ordering',w_ordr))
     w_detail = Tab(titles=d_titles,children=d_children,layout={'display':'none'})
-    w_detailb = SimpleButton(tooltip='toggle detail display (red border means some columns are hidden)',icon='info-circle')
-    w_reloadb = SimpleButton(tooltip='reload table',icon='refresh')
+    w_detailb = simple_button(tooltip='toggle detail display (red border means some columns are hidden)',icon='info-circle')
+    w_reloadb = simple_button(tooltip='reload table',icon='refresh')
     w_nsample = BoundedIntText(description='sample:',min=1,max=50,step=1,layout={'width':'2.5cm'},style=AutoWidthStyle)
     w_size = Text('',disabled=True,tooltip='Number of rows',layout={'width':'4cm'},style=AutoWidthStyle)
     w_offset = IntSlider(description='offset',min=0,step=1,layout={'width':'10cm'},readout=False,style=AutoWidthStyle)
@@ -249,7 +231,7 @@ An instance of this class is an app to explore a database specified by *spec*. I
       r = read_sql_query(sql,engine)
       r.index = list(range(offset,offset+min(nsample,len(r))))
       return r
-    @self.protect
+    @self.console.capture()
     def show():
       with w_out:
         clear_output(wait=True)
@@ -356,7 +338,7 @@ An instance of this class is an app to edit a traitlets structure. The construct
     # widget creation
     layouts = default_widget_layout, label_layout
     config = dict((name,hastrait_editor_trait(name,t,*layouts)) for name,t in target.traits().items() if t.metadata.get('widget') is not None)
-    w_resetb = SimpleButton(icon='undo',description='reset')
+    w_resetb = simple_button(icon='undo',description='reset')
     self.header = VBox()
     self.footer = VBox()
     super().__init__(toolbar=[w_resetb],children=[self.header,*(cfg.widget for cfg in config.values()),self.footer])
@@ -379,8 +361,8 @@ An instance of this class is an app to edit a traitlets structure. The construct
 class hastrait_editor_trait:
   """An instance of this data class holds the configuration and widget of a trait."""
 #==================================================================================================
-  default_label_layout = dict(width='2cm',padding='0 0 0 .2cm',align_self='flex-start')
-  default_widget_layout = dict(width='15cm')
+  default_label_layout = {'width':'2cm','padding':'0 0 0 .2cm','align_self':'flex-start'}
+  default_widget_layout = {'width':'15cm'}
   def __init__(self,name,t,default_widget_layout,label_layout):
     def g_numeric(t,ws,typ):
       slider = {int:IntSlider,float:FloatSlider}
@@ -411,22 +393,17 @@ class hastrait_editor_trait:
     if callable(ws): w = ws()
     else: # guessing
       ws = dict(ws)
-      if isinstance(t,traitlets.Integer):
-        w = g_numeric(t,ws,int)
-      elif isinstance(t,traitlets.Float):
-        w = g_numeric(t,ws,float)
-      elif isinstance(t,traitlets.Bool):
-        w = Checkbox(**ws)
-      elif isinstance(t,traitlets.Enum):
-        w = g_selector(t,ws)
-      elif isinstance(t,traitlets.List) and isinstance(t._trait,traitlets.Enum):
-        w = g_mselector(t,ws)
-      else:
-        raise Exception('Cannot guess widget')
+      match t:
+        case traitlets.Integer(): w = g_numeric(t,ws,int)
+        case traitlets.Float(): w = g_numeric(t,ws,float)
+        case traitlets.Bool(): w = Checkbox(**ws)
+        case traitlets.Enum(): w = g_selector(t,ws)
+        case traitlets.List(_trait=traitlets.Enum()): w = g_mselector(t,ws)
+        case _: raise Exception('Cannot guess widget')
     setdefault_layout(w,**dict(self.default_widget_layout,**(default_widget_layout or {})))
     self.interact = w
     label = HTML(f'<span title="{t.help}">{name}</span>',layout=dict(self.default_label_layout,**(label_layout or {})))
-    self.resetb = resetb = SimpleButton(icon='undo',tooltip='Reset to default')
+    self.resetb = resetb = simple_button(icon='undo',tooltip='Reset to default')
     self.widget = HBox([resetb,label,w])
 
 #==================================================================================================
@@ -584,8 +561,8 @@ Essentially a wrapper around widget *main* allowing it to be safely interacted w
     self.active = True
     fmt_ = fmt.format if isinstance(fmt,str) else fmt
     layout = {k:x for k in main.layout.keys if not k.startswith('_') and (x:=getattr(main.layout,k)) is not None}
-    w_display = SimpleButton((lambda: show_editor()),description=fmt_(main.value),tooltip='Click to edit',layout=layout)
-    w_editor = HBox(children=[main,SimpleButton((lambda: hide_editor()),icon='close')],layout={'border':'thin solid blue'})
+    w_display = simple_button(callback=(lambda: show_editor()),description=fmt_(main.value),tooltip='Click to edit',layout=layout)
+    w_editor = HBox(children=[main,simple_button(callback=(lambda: hide_editor()),icon='close')],layout={'border':'thin solid blue'})
     def show_editor():
       with deactivate(self): main.value = self.value; self.selected_index = 1
     def hide_editor(): self.selected_index = 0
@@ -596,18 +573,38 @@ Essentially a wrapper around widget *main* allowing it to be safely interacted w
     super().__init__([w_display,w_editor],selected_index=0,**ka)
 
 #==================================================================================================
-class SimpleButton (Button):
+class DblClickButton (Button):
   r"""
-Helper class to define buttons with a single callback and predefined default layout components.
+Helper class to define buttons with double-click behaviour.
 
-:param callback: the callback for the button (optional)
-:param ka: override the default layout components
+:param delay: duration (in sec between .05 and 1.) between two clicks to produce a double-click (default: .2)
+:param a: passed to the super class constructor
+:param ka: passed to the super class constructor
   """
 #==================================================================================================
-  default_layout = {'width':'auto','padding':'0 1mm 0 1mm'}
-  def __init__(self,callback:Callable[[],None]|None=None,layout=None,**ka):
-    super().__init__(layout=(self.default_layout|(layout or {})),**ka)
-    if callback is not None: self.on_click(lambda _: callback())
+  double_clicked: bool
+  r"""State of the button (whether it has been double-clicked)"""
+  def __init__(self,delay:float|None=None,**ka):
+    from threading import Thread, Condition
+    def loop():
+      with cond:
+        while True:
+          cond.wait()
+          if alive: self.double_clicked = cond.wait(delay); self.click()
+          else: break
+    def kill():
+      nonlocal alive; alive = False
+      with cond: cond.notify()
+    def handle_button_msg(_,content,buffer):
+      if content.get('event','') == 'click': # a normal button calls self.click() here
+        with cond: cond.notify() # instead: notify the click loop
+    if delay is None: delay = .2
+    else: delay = float(delay); assert .05<=delay<=1.
+    self._handle_button_msg = handle_button_msg
+    self._kill_click_loop = kill
+    cond = Condition(); alive = True; Thread(target=loop,daemon=True).start()
+    super().__init__(**ka)
+  def close(self): self._kill_click_loop(); super().close()
 
 #==================================================================================================
 class RoundRobinButton (Button):
@@ -654,17 +651,32 @@ def deactivate(w):
   finally: w.active = a
 
 #==================================================================================================
+def simple_button(_factory=Button,callback:Callable[[],None]|None=None,**ka):
+  r"""
+A helper function to create a :class:`Button` instance by applying *_factory* to *ka*, configure it with a predefined layout, and assign it a *callback* (taking no input parameter).
+  """
+#==================================================================================================
+  w = _factory(**ka); assert isinstance(w,Button)
+  layout = w.layout
+  for k,v in simple_button.layout.items():
+    if getattr(layout,k) is None: setattr(layout,k,v)
+  if callback is not None: w.on_click(lambda _: callback())
+  return w
+simple_button.layout = {'width':'auto','padding':'0 1mm 0 1mm'}
+
+#==================================================================================================
 def setdefault_layout(*a,**ka):
 #==================================================================================================
-  if not ka: return
+  if not ka: return a
   for w in a:
     for k,v in ka.items():
       if getattr(w.layout,k) is None: setattr(w.layout,k,v)
+  return a
 
 #==================================================================================================
 def setdefault_children_layout(w,f=(lambda w: True),**ka):
 #==================================================================================================
-  if not ka: return
+  if not ka: return w
   setdefault_layout(*filter(f,w.children),**ka)
   w.observe((lambda c: setdefault_layout(*filter(f,c.new),**ka)),'children')
   return w

@@ -93,7 +93,7 @@ Each key in *name_to_old_name* should be a table name of the new db, and its val
       x = name_to_old_name.get(name)
       old_name,D = (name,{}) if x is None else (x,{}) if isinstance(x,str) else (name,x) if isinstance(x,dict) else x
       return old_name if cname is None else (old_name,D.get(cname,cname))
-    copy = (lambda x:x); copy.__doc__ = 'COPY'
+    def copy(x): 'COPY'; return x
     def converter(old_t,t,enum_d=(lambda e:{x.name:x.value for x in e})):
       from sqlalchemy import Enum
       if t.python_type == old_t.python_type: return copy

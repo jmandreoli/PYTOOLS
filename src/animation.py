@@ -131,8 +131,6 @@ The specification *spec* can be the track map itself, returned as such after min
         i = bisect(L,x); return (L[i-1],L[i]) if i<imax else None
     return track_func
 
-  def panes(self,**ka): return Panes(self.board,**ka)
-
 #==================================================================================================
 class IPYControlledAnimation (BaseControlledAnimation,app):
   r"""
@@ -144,7 +142,7 @@ A instance of this class is a player for :mod:`matplotlib` animations controlled
 #==================================================================================================
   active:bool
   def __init__(self,*args,fig_kw={},toolbar=(),**kwargs):
-    from .ipywidgets import deactivate, SimpleButton, Stable
+    from .ipywidgets import deactivate, simple_button, Stable
     from ipywidgets import FloatText, IntSlider, Label
     def show_control(n:int,new_track:bool=False):
       with deactivate(self):
@@ -158,7 +156,7 @@ A instance of this class is a player for :mod:`matplotlib` animations controlled
       nonlocal onclick; w_play_toggler.icon,onclick = D[b]
     self.show_status = show_status
     # global design and widget definitions
-    w_play_toggler = SimpleButton((lambda: onclick()),icon='')
+    w_play_toggler = simple_button(callback=(lambda: onclick()),icon='')
     w_track_manager = IntSlider(0,min=0,step=1,readout=False)
     w_clock_bounds = [Label('',style={'font_size':'xx-small'}) for _ in range(2)]
     w_clock_edit = FloatText(0.,min=0.,step=1e-10,style={'font_size':'xx-small'},layout={'width':'1.6cm','padding':'0cm'})
@@ -183,7 +181,7 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
 
 :param fig_kw: configuration of the animation figure (excluding the toolbar)
 :param tbsize: size (inches) of the toolbar as ((hsize(play-button),hsize(track-manager),hsize(clock)),vsize(toolbar))
-:param ka: passed to the superclass
+:param kwargs: passed to the superclass
   """
 # ==================================================================================================
   def __init__(self,*args,fig_kw={},tbsize=({'play_toggler':.2,'track_bound_beg':.4,'track_manager':2.,'track_bound_end':.4,'clock':.4},.15),**kwargs):
@@ -277,7 +275,7 @@ Adds a named pane displayer to this board displayer. A pane displayer is a calla
     """
     if pos is None: pos = (0,0)
     self.displayers[pos].extend((view,D) for view,D in ka.items())
-    return self # so it can be chained
+    return self # so other invocations of the method can be chained
   def __init__(self): self.displayers = defaultdict(list)
 #--------------------------------------------------------------------------------------------------
   def with_simpy_setup(self):

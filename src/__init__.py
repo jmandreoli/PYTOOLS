@@ -396,6 +396,9 @@ Returns an instance of :class:`pyspark.SparkContext` created with the predefined
 class ImapFolder:
   r"""
 An instance of this class is an iterable enumerating the unread messages in a folder of an IMAP server. On calling method :meth:`commit`, the messages which have been enumerated since the last commit or rollback (triggered by method :meth:`rollback`) are marked as read. The total number of messages in the folder is held in attribute :attr:`total`, and the number of unread message is given by function :func:`len`.
+
+:param server: the IMAP server
+:param folder: the folder to scan
   """
 # ==================================================================================================
   def __init__(self,server:imaplib.IMAP4,folder:str):
@@ -429,30 +432,34 @@ An instance of this class is an iterable enumerating the unread messages in a fo
 #==================================================================================================
 class ResettableSimpyEnvironment:
   r"""
-An instance of this class wraps a :class:`simpy.Environment` instance, allowing :meth:`run` to violate the chronological order. When a violation occurs, the proxy environment is reset and reconfigured before being advanced to the new time. For stochastic environments, it is important to include the seed in the configuration.
+An instance of this class wraps a :class:`simpy.Environment` instance, allowing calls to method :meth:`run` to violate the chronological order. When a violation occurs, the wrapped environment is reset and reconfigured before being advanced to the new time. For reconfiguration to work, updates to the wrapped object should not be done directly, but only by invoking method:`add_config` on the wrapper. For stochastic environments, to ensure predictable outcome, make sure to add a configuration which resets the seed to a fixed value.
 
 :param init_t: the initial time of the environment
   """
 #==================================================================================================
   configs:list[Callable[[simpy.Environment],None]]
   def add_config(self,*C:Callable[[simpy.Environment],None]):
-    r"""Adds a configuration to the environment. It is applied to the proxy each time it is reset."""
+    r"""
+Adds a configuration to the environment. It is applied to the proxy each time it is reset.
+
+:param C: the list of configurations to add
+    """
     self.configs.extend(C)
   def __init__(self,init_t:float=0.):
     from simpy import Environment
     self.configs = []
     def reset(v:float):
-      self._proxy = env = Environment(init_t)
+      self._wrapped = env = Environment(init_t)
       for c in self.configs: c(env)
-      if v>init_t: self._proxy.run(v)
+      if v>init_t: self._wrapped.run(v)
     def run(v:float):
       #assert isinstance(v,float) and v >= init_t
-      now = self._proxy.now
-      if v>now: self._proxy.run(v); return
+      now = self._wrapped.now
+      if v>now: self._wrapped.run(v); return
       if v<now: reset(v)
     def run_init(v:float): self.run = run; reset(v)
     self.run = run_init
-  def __getattr__(self,name:str): return getattr(self._proxy,name)
+  def __getattr__(self,name:str): return getattr(self._wrapped,name)
 
 #==================================================================================================
 class basic_stats:

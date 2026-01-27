@@ -13,7 +13,7 @@ import os, sqlite3, pickle, inspect, threading, abc
 from pathlib import Path
 from functools import update_wrapper
 from itertools import islice, chain
-from collections import namedtuple, OrderedDict
+from collections import namedtuple
 from collections.abc import MutableMapping
 from weakref import WeakValueDictionary
 from time import time
@@ -279,7 +279,7 @@ Returns information about this block. Available attributes:
     with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
       ncell = dict(conn.execute('SELECT CASE WHEN size ISNULL THEN \'pending\' WHEN size<0 THEN \'error\' ELSE \'\' END AS status, count(*) FROM Cell WHERE block=? GROUP BY status',(self.block,)))
       hits, = conn.execute('SELECT sum(hits) FROM Cell WHERE block=?',(self.block,)).fetchone()
-    BlockInfo((hits or 0),sum(ncell.values()),ncell.get('error',0),ncell.get('pending',0))
+    return BlockInfo((hits or 0),sum(ncell.values()),ncell.get('error',0),ncell.get('pending',0))
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self,arg:Any):
@@ -608,15 +608,15 @@ Removes the content file path for *cell* as well as the corresponding synch lock
     except: pass
 
 #--------------------------------------------------------------------------------------------------
-  def getpath(self,cell:int,masks=tuple((5*n,31*32**n) for n in range(5))):
+  def getpath(self,cell:int,masks=tuple((n,31<<n) for n in range(20,-5,-5))):
     r"""
 Returns the content file path (as a :class:`pathlib.Path` instance) associated to *cell* (of type :class:`int`). It is composed of two parts (a directory name and a file name), joined to the main :attr:`path` attribute. The directory is created if it does not already exist. The concatenation of the directory name (without its prefix ``X``) and the file name (without its suffix ``.pck``) is the representation of *cell* in base 32 (digits are 0-9A-V). This mapping of cells to paths ensures that no sub-directory holds more than 1024 cells. It assumes that cells are created sequentially (which is what AUTOINCREMENT in sqlite3 does), so the number of sub-directories grows slowly.
     """
 #--------------------------------------------------------------------------------------------------
     s = ''.join('0123456789ABCDEFGHIJKLMNOPQRSTUV'[(cell&m)>>n] for n,m in masks)
-    p = self.path/('X'+s[:1:-1])
+    p = self.path/('X'+s[:3])
     if not p.exists(): p.mkdir(exist_ok=True); p.chmod(self.mode)
-    return (p/s[1::-1]).with_suffix('.pck')
+    return (p/s[3:]).with_suffix('.pck')
 
 #--------------------------------------------------------------------------------------------------
 # Synchronisation mechanism based on sqlite (for portability: could probably be simplified)
@@ -708,7 +708,7 @@ Instances of this class are defined from versioned functions (ie. functions defi
   def __eq__(self,other): return isinstance(other,Shadow) and self.config==other.config
   def __repr__(self):
     module,name,version = self.config
-    return '{}.{}{}'.format(module,name,('' if version is None else f'{{{version}}}'))
+    return f'{module}.{name}{'' if version is None else f'{{{version}}}'}'
   def obsolete(self):
     r"""
 Returns :const:`None` if this instance is up-to-date. It may be obsolete for two reasons:
@@ -740,36 +740,35 @@ A simple tool to manage a set of :class:`CacheDB` instances, specified by their 
   def showdb():
     w_msg.clear_output()
     with w_out: clear_output(); display(db)
-  def runc(c):
-    label,op = c.new
+  def clear(op):
     if op is None: return
-    w_autorun.value = autorun[0]
+    w_clear.value = None
     try:
       with w_msg:
         clear_output()
-        print('Operation:','clear'+label,f'(dryrun: {ivname} unchanged)' if w_dryrun.value else '')
+        print('Operation:','clear'+op.label,f'(dryrun: {ivname} unchanged)' if w_dryrun.value else '')
         r = op()
         print('Result:',r)
     except: return
     if not w_dryrun.value and r:
       with w_out: clear_output(); display(db)
-  autorun = (
-    ('clear...',None),
-    ('Error',(lambda: [x for x in ((c.block,c.clear_error(dry_run=w_dryrun.value)) for c in list(db.values())) if x[1]])),
-    ('Obsolete',(lambda: db.clear_obsolete(False,dry_run=w_dryrun.value))),
-    ('ObsoleteStrict',(lambda: db.clear_obsolete(True,dry_run=w_dryrun.value))),
-  )
+  clearops = {
+    'Error':(lambda: [x for x in ((c.block,c.clear_error(dry_run=w_dryrun.value)) for c in list(db.values())) if x[1]]),
+    'Obsolete':(lambda: db.clear_obsolete(False,dry_run=w_dryrun.value)),
+    'ObsoleteStrict':(lambda: db.clear_obsolete(True,dry_run=w_dryrun.value)),
+  }
+  for k,op in clearops.items(): op.label = k
   db:CacheDB|None = None
   interpreter = get_ipython()
   interpreter.push({ivname:db})
-  w_db = Dropdown(description=ivname,options=dict(chain((('...',()),),((p,CacheDB(p)) for p in paths))),style={'description_width':'initial'})
+  w_db = Dropdown(description=ivname,options={'...':()}|{p:CacheDB(p) for p in paths},style={'description_width':'initial'})
   w_show = Button(tooltip='show db',icon='fa-refresh',layout={'width':'.4cm','padding':'0cm'})
-  w_autorun = Dropdown(options=[(x[0],x) for x in autorun],layout={'width':'3cm'})
+  w_clear = Dropdown(options={'clear...':None}|clearops,layout={'width':'3cm'})
   w_dryrun = Checkbox(description='dry-run',value=True,style={'description_width':'initial'})
   w_out = Output()
   w_msg = Output(layout={'border':'thin solid black'})
   w_db.observe(setdb,'value')
-  w_autorun.observe(runc,'value')
+  w_clear.observe((lambda c: clear(c.new)),'value')
   w_show.on_click(lambda b: showdb())
   showdb()
-  return VBox(children=(HBox(children=(w_db,w_show,w_autorun,w_dryrun)),w_msg,w_out))
+  return VBox([HBox([w_db,w_show,w_clear,w_dryrun]),w_msg,w_out])

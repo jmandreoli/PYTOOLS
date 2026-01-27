@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 import logging; logger = logging.getLogger(__name__)
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence, Iterator
 
 import re, collections
 if False: import ast,imaplib,pickle,datetime,matplotlib,simpy # tricks mypy to import these modules
@@ -91,7 +91,7 @@ Returns a class of tuples with named fields. It is identical to :func:`collectio
 * The returned class has an attribute :attr:`_field_index` which is an instance of that class where each field is set to its index in the field list. e.g.::
 
    c = namedtuple('c','u v')
-   assert c._field_index.u == 0 and c._field_index.v == 1
+   assert isinstance(c._field_index,c) and c._field_index.u == 0 and c._field_index.v == 1
 
 * Furthermore, if *f* and *x* are instances of the returned class *c*, then calling *f* with argument *x* returns a new instance of class *c* in which each field is set to the result of applying the corresponding field in *f* (which must be a callable) to the corresponding field in *x*. Additional keyword arguments can be passed to the calls. E.g.::
 
@@ -153,6 +153,28 @@ Returns an object obtained from an environment variable whose name is derived fr
   x = config_env(f'{module.replace('.','_')}_{name}'.upper(),asfile=asfile)
   if x: d:dict[str,Any] = {}; exec(x,d); return d[name]
   else: return dflt
+
+#==================================================================================================
+def secret_tool(attr_list:Iterable[dict[str,str]])->Iterator[Iterable[tuple[dict[str,str],bytes]]]:
+  r"""
+Retrieves a (possibly empty) stream of attribute-secret pair(s) for each of a list of dictionaries. Each input dictionary is looked up in the *default* keyring, and the corresponding stream consists of the attribute-secret pair of matching items. The attribute in each pair is the dictionary associated with the keyring item, and, by construction, contains the input dictionary.
+
+:param attr_list: a list of dictionaries
+:returns: an iterable of streams of attribute-secret pairs
+
+Example::
+
+   L = {'a':'x'},{'b':'y','c':'z'}
+   for d,stream in zip(L,secret_tool(L)):
+     for D,secret in stream: assert all(D[k]==v for k,v in d.items()) and isinstance(secret,bytes)
+  """
+#==================================================================================================
+  from secretstorage import dbus_init, get_default_collection
+  conn = dbus_init()
+  try:
+    coll = get_default_collection(conn)
+    for attr in attr_list: yield ((item.get_attributes(),item.get_secret()) for item in coll.search_items(attr))
+  finally: conn.close()
 
 #==================================================================================================
 class Expr:
@@ -609,7 +631,7 @@ Returns a "unique" id for miscellanous uses.
   """
 #--------------------------------------------------------------------------------------------------
   from time import time
-  return (pre+str(time())+post).replace('.','_')
+  return f'{pre}{time()}{post}'.replace('.','_')
 
 #--------------------------------------------------------------------------------------------------
 def ast_tuple(x:str|ast.AST,top:str='top'):

@@ -8,7 +8,8 @@ An example
 
 The following piece of code illustrates the use of this module.
 
-.. literalinclude:: ../demo/cache.py
+.. literalinclude:: mod_cache.py
+   :lines: 6-
    :language: python
    :tab-width: 2
 
@@ -22,7 +23,7 @@ To illustrate the cross-process capability of the cache, function :func:`demo` r
 
 * Function :func:`proc` builds a closed symbolic expression (instance of :class:`Expr`) which implements the following workflow based on the two cached functions :func:`stepI` and :func:`stepK`.
 
-  .. image:: cache.png
+  .. image:: _resource/mod_cache-timeline.png
      :scale: 65%
      :alt: workflow representation of function :func:`proc`
 
@@ -35,14 +36,14 @@ To illustrate the cross-process capability of the cache, function :func:`demo` r
 
   Of course, cacheing such simple operations is not very interesting, but the purpose of the example is to illustrate cacheing in the presence of dependencies between arbitrary tasks which could be much more complex (and computationaly heavy). The logged trace of the computation illustrated in the diagram below shows how the evaluation mechanism of symbolic expressions (called incarnation) in class :class:`MapExpr` and that of map chaining in class :class:`collections.ChainMap` interact with persistent cacheing to provide a flexible workflow implementation.
 
-  .. figure:: cache-diag.png
+  .. figure:: _resource/mod_cache-workflow.png
      :scale: 65%
 
   Note that this diagram assumes a full garbage collection before each demo, otherwise, some cache accesses are skipped. Indeed, within a process, a persistent cache keeps weak references to all its past accesses (when their values are amenable to weak reference) and reuses them as long as they are not collected.
 
 Typical output:
 
-.. literalinclude:: ../demo/cache.out
+.. literalinclude:: _resource/mod_cache.out
 
 Discussion
 ----------

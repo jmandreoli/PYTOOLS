@@ -1,5 +1,5 @@
 PYTHON :=
-TARGET := cache.out polling.out
+TARGET := cache.out polling.out html.out
 
 all: ${TARGET}
 

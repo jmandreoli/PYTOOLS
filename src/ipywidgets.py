@@ -15,7 +15,7 @@ from pathlib import Path
 from ipywidgets import Widget, Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, Password, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, Stack, VBox, HBox, Layout, Valid, Play, jslink, AppLayout
 if False: import pandas, sqlalchemy.engine
 
-__all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'PlayTracks', 'SelectMultipleOrdered', 'DblClickButton', 'RoundRobinButton', 'simple_button', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
+__all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'TrackPlay', 'SelectMultipleOrdered', 'DblClickButton', 'RoundRobinButton', 'simple_button', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
 
 AutoWidthStyle = {'description_width':'auto'}
 
@@ -407,7 +407,7 @@ class hastrait_editor_trait:
     self.widget = HBox([resetb,label,w])
 
 #==================================================================================================
-class PlayTracks (HBox):
+class TrackPlay (HBox):
   r"""
 Widgets of this class are similar to :class:`Play` widgets, with more functionality to navigate its value domain (interval of whole numbers). The domain is split into a sequence of contiguous intervals called tracks. Parameter *track* is a function which returns, for each number in the domain, the bounds of its track interval (closed on the left, open on the right), and :const:`None` outside the domain.
 

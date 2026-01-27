@@ -18,80 +18,104 @@ class PollingThread (threading.Thread):
 Objects of this class are python contexts which can be used to encapsulate any piece of code into a monitor executing on a separate thread. The monitor polls the code at regular intervals and stores a report. Only one report is stored at all time (any new report replaces the previous one).
 
 :param path: location of the monitor reporting file
-:param interval: polling rate in seconds
-:param maxerror: maximum number of consecutive errors before giving up
-:param fields: list of field descriptors (see below) specifying what to record at each polling
-:param staticfields: dictionary of static values specifying what to record initially
+:param _interval: polling rate in seconds
+:param _maxerror: maximum number of consecutive errors before giving up
+:param fields: dictionary of field descriptors
 
-Each field descriptor is a pair of an sql column specification and a function with no input which returns a value compatible with the column type. An optional third component can specify an other function to be used in case of error.
+Each field descriptor is either a value or a dictionary of a value (key: `value`), its SQL type (key: `type`), and optionally a callable to use in case of error (key: `error`). The field is dynamic if the value is callable (with no argument) or static otherwise. The SQL type, if not specified, is inferred either from the value for a static field or from a single call to the value otherwise.
   """
-  def __init__(self,path:str|Path,*fields,interval:float=1.,maxerror:int=3,**staticfields):
-    def open_():
-      nonlocal conn
-      if path.exists(): path.unlink()
-      conn = sqlite3.connect(str(path))
-      try: init_()
-      except: close_(); raise
-    def close_():
-      try: conn.close()
-      except: pass
+  def __init__(self,path:str|Path,_interval:float=1.,_maxerror:int=3,**fields):
     def run_():
-      try: open_()
+      try: self.open_()
       except Exception as exc: logger.warning('Unable to open status file %s (giving up): %s',path,exc); return
       error = 0
       lasterr = None
       ongoing = True
       while ongoing:
-        ongoing = not self.stop_requested.wait(interval)
+        ongoing = not self.stop_requested.wait(_interval)
         try:
-          try: updates_(); error=0; continue
+          try: self.updates_(); error=0; continue
           except sqlite3.Error: raise
           except Exception as exc:
             error += 1
-            if error < maxerror:
-              updates_error()
+            if error < _maxerror:
+              self.updates_error()
               continue
             else: lasterr = str(exc)
         except sqlite3.Error as exc:
           error += 1
-          if error < maxerror:
-            close_()
-            try: open_(); continue
+          if error < _maxerror:
+            self.close_()
+            try: self.open_(); continue
             except Exception as exc2: lasterr = str(exc2)
           else: lasterr = str(exc)
         logger.warning('Unable to record status in %s (giving up after %d errors): %s',path,error,lasterr)
         return
-      try: conn.execute('PRAGMA user_version = 1'); conn.commit()
-      except: pass
-      close_()
+      self.close_()
+    path = Path(path)
+    self.config(path,fields)
     super().__init__(target=run_,daemon=True)
-    NoneFunc = lambda: None
-    DefaultTypes={int:'INTEGER',float:'FLOAT',str:'TEXT',datetime:'DATETIME',bytes:'BLOB'}
-    def field(cdef:str,upd:Callable[[],Any],upd_error:Callable[[],Any]=NoneFunc)->tuple[str,str,Callable[[],Any],Callable[[],Any]]:
-      cdef_ = cdef.strip().split(' ',1)
-      return cdef_[0],(DefaultTypes.get(type(upd()),'BLOB') if len(cdef_)==1 else cdef_[1]),upd,upd_error
-    def staticfield(name:str,value)->tuple[str,str,Any]:
-      return name,DefaultTypes.get(type(value),'BLOB'),value
-    started = time.time(); elapsed = lambda started=started:time.time()-started
-    staticfields_ = [staticfield(*x) for x in (('started',datetime.fromtimestamp(started)), ('pid', f'{socket.getfqdn()}:{os.getpid()}'),*staticfields.items())]
-    fields_ = [field(*x) for x in (('elapsed',elapsed,elapsed),('error TEXT',NoneFunc,traceback.format_exc),*fields)]
-    sql_create = 'CREATE TABLE Status ({})'.format(', '.join(f'{f[0]} {f[1]}' for l in (staticfields_, fields_) for f in l))
-    sql_init = 'INSERT INTO Status ({}) VALUES ({})'.format(','.join(f[0] for f in staticfields_),','.join(len(staticfields_)*'?'))
-    sql_update = 'UPDATE Status SET {}'.format(', '.join(f'{f[0]}=?' for f in fields_))
-    conn:sqlite3.Connection|None = None
-    def init_(sql_create=sql_create,sql_init=sql_init,initv=tuple(f[2] for f in staticfields_)):
-      conn.execute(sql_create)
-      conn.execute(sql_init,initv)
-      conn.commit()
-    def updates_(updf=tuple(f[2] for f in fields_),sql_update=sql_update):
-      conn.execute(sql_update,tuple(u() for u in updf))
-      conn.commit()
-    def updates_error(updf=tuple(f[3] for f in fields_)): updates_(updf)
-    self.stop_requested = threading.Event()
-    if isinstance(path,str): path = Path(path)
   def __enter__(self):
+    self.stop_requested = threading.Event()
     self.start()
     return self
   def __exit__(self,*a):
     self.stop_requested.set()
     self.join()
+
+  def config(self,path:Path,fields:dict[str,Any]):
+    started = time.time(); elapsed = lambda started=started:time.time()-started
+    fields_ = [
+      Field('started', datetime.fromtimestamp(started)),
+      Field('pid',f'{socket.getfqdn()}:{os.getpid()}'),
+      Field('elapsed',elapsed,type='FLOAT',error=elapsed),
+      Field('error',(lambda:None),error=traceback.format_exc),
+      *(Field(name,**(x if isinstance(x,dict) else {'value':x})) for name,x in fields.items())
+    ]
+    fields_s = [f for f in fields_ if f.static is True]
+    fields_c = [f for f in fields_ if f.static is False]
+    sql_create = 'CREATE TABLE Status ({})'.format(', '.join(f'{f.name} {f.type}' for f in fields_))
+    sql_init = 'INSERT INTO Status ({}) VALUES ({})'.format(','.join(f.name for f in fields_s),','.join(len(fields_s)*'?'))
+    sql_update = 'UPDATE Status SET {}'.format(', '.join(f'{f.name}=?' for f in fields_c))
+    def open_(sql_create=sql_create,sql_init=sql_init,initv=tuple(f.value for f in fields_s)):
+      nonlocal conn
+      if path.exists(): path.unlink()
+      conn = sqlite3.connect(path)
+      try:
+        conn.execute('PRAGMA user_version = 1')
+        conn.execute(sql_create)
+        conn.execute(sql_init,initv)
+        conn.commit()
+      except: close_(); raise
+    def updates_(updf=tuple(f.value for f in fields_c),sql_update=sql_update):
+      conn.execute(sql_update,tuple(u() for u in updf))
+      conn.commit()
+    def updates_error(updf=tuple(f.error for f in fields_c)): updates_(updf)
+    def close_():
+      try: conn.close()
+      except: pass
+    self.open_,self.updates_,self.updates_error,self.close_ = open_,updates_,updates_error,close_
+    conn:sqlite3.Connection|None = None
+
+class Field:
+  __slots__ = 'name','value','type','error','static'
+  DefaultTypes = {int:'INTEGER',float: 'FLOAT',str:'TEXT',datetime:'DATETIME',bytes:'BLOB'}
+  def __init__(self,name:str,value:Any,type:str|None=None,error:Callable[[],Any]|None=None):
+    static = not callable(value)
+    if type is None: type = self.DefaultTypes.get((value if static else value()),'BLOB')
+    if static: assert error is None
+    elif error is None: error = (lambda:None)
+    else: assert callable(error)
+    self.name,self.value,self.type,self.error,self.static = name,value,type,error,static
+
+def status(path:str|Path):
+  r"""
+Returns the contents of a monitor reporting file.
+
+:param path: location of the monitor reporting file
+  """
+  path = Path(path)
+  assert path.is_file()
+  with sqlite3.connect(path) as conn:
+    conn.row_factory = sqlite3.Row
+    return dict(conn.execute('SELECT * FROM Status').fetchone())

@@ -3,7 +3,6 @@
 # Language:             python
 # Purpose:              Illustration of the polling module
 
-from myutil.make import RUN # doc gen trick
 import time
 from PYTOOLS.polling import PollingThread, status
 DB = RUN.path('.db')

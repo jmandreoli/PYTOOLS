@@ -1,7 +1,11 @@
-# from make import RUN
-# at the beginning of a python file to access various doc generation utilities
+# File:                 make.py
+# Creation date:        2026-01-27
+# Contributors:         Jean-Marc Andreoli
+# Language:             python
+# Purpose:              Helper functions to facilitate doc generation
+#
 
-import os,sys,time,subprocess
+import os,sys,time
 from threading import Thread, Timer
 
 class RUN:
@@ -27,8 +31,7 @@ class RUN:
   def record(cls,player,ext=None):
     from matplotlib.pyplot import close
     for a in 'get_size_inches','set_size_inches','savefig': setattr(player.board,a,getattr(player.main,a))  # very ugly trick because board is a subfigure
-    p_mp4,p_gif = str(cls.path('.mp4',ext)), str(cls.path('.gif',ext))
-    player.save(p_mp4)
+    player.save(str(cls.path('.mp4',ext)))
     close()
 
 if __name__=='__main__':
@@ -38,7 +41,6 @@ if __name__=='__main__':
   from shutil import rmtree
   from socket import getfqdn
   p_in,p_out = (Path(p).resolve() for p in sys.argv[1:])
-  RUN = import_module('.make',__package__).RUN
   RUN.target = p_out
   def clock(name,v):
     print(' ',name,end='\r',file=v,flush=True)

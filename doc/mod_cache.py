@@ -16,7 +16,6 @@ if __name__=='__main__':
   # Master process. For each entry in DEMOS,
   #   * execute it in 2 separate processes launched at 2 sec interval and
   #   * wait for them both to complete
-  from myutil.make import RUN  # doc gen trick
   from PYTOOLS.cache import CacheDB
   import subprocess
   dbpath = RUN.path('.dir')

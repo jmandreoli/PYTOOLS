@@ -56,12 +56,12 @@ Generalised Convolution formula (with biases):
 
 .. math::
 
-   \begin{align*}
+   \begin{array}{rl}
    y_b & = \sum_k A_{bk}^\top\bar{x}_{bk}\Theta_k^{\textrm{(y)}\top}+\mathbf{1}_N\otimes\eta^{\textrm{(o)}}\\
    \textrm{where } & A_{bk}{:}\langle M,N \rangle\; \bar{x}_{bk}{:}\langle M,D \rangle\\
    A_{bk} & = \textrm{softmax}_{\textrm{col}}\frac{1}{\textrm{temp}}(\bar{A}_{bk}+\textrm{mask}_b)\\
    \bar{x}_{bk} &= x_b \Theta_k^{\textrm{(x)}}+\mathbf{1}_M\otimes\eta_k
-   \end{align*}
+   \end{array}
 
 :param score: tensor :math:`\bar{A}{:}\langle B,K,M,N \rangle` (attention scores)
 :param x: tensor :math:`x{:}\langle B,M,P \rangle` (input)
@@ -130,11 +130,11 @@ Uses generalised attention scores obtained from projection of the (key and query
 
   .. math::
 
-   \begin{align*}
+   \begin{array}{rl}
    & \bar{x}_{bk}{:}\langle M,D' \rangle,\; \bar{y}_{bk}{:}\langle N,D' \rangle\\
    \bar{x}_{bk} & = x'_b\Lambda_k^{\textrm{(x)}}+\mathbf{1}_M\otimes\beta^{\textrm{(x)}}_k\\
    \bar{y}_{bk} & = y'_b\Lambda_k^{\textrm{(y)}}+\mathbf{1}_N\otimes\beta^{\textrm{(y)}}_k
-   \end{align*}
+   \end{array}
 
 :param yʹ: tensor :math:`y'{:}\langle B,N,Q' \rangle` (query-input)
 :param xʹ: tensor :math:`x'{:}\langle B,M,P' \rangle` (key-input), default :math:`y'`
@@ -281,9 +281,9 @@ Computes the attention scores passed to generalised convolution:
 
 .. math::
 
-   \begin{align*}
+   \begin{array}{rl}
    \bar{A}_{bk} & = E_{\frac{nmd,mnd}{mn}}(\;\mathbf{1}_N{\otimes}\bar{x}_{bk}{+}E_{\frac{mnr,rd}{nmd}}(z'_b,\Lambda_k^{\textrm{(zx)}})\;,\;\mathbf{1}_M{\otimes}\bar{y}_{bk}{+}E_{\frac{mnr,rd}{mnd}}(z'_b,\Lambda_k^{\textrm{(zy)}})\;)
-   \end{align*}
+   \end{array}
 
 :param x̄: tensor :math:`\bar{x}{:}\langle B,K,M,D' \rangle` (key-proj)
 :param ȳ: tensor :math:`\bar{y}{:}\langle B,K,N,D' \rangle` (query-proj)
@@ -347,9 +347,9 @@ Computes the attention scores passed to generalised convolution:
 
 .. math::
 
-   \begin{align*}
+   \begin{array}{rl}
    \bar{A}_{bk} & = \bar{x}_{bk}\bar{y}_{bk}^\top+E_{\frac{md,mnr,rd}{mn}}(\bar{x}_{bk},z'_b,\Lambda_k^{\textrm{(zy)}})+E_{\frac{nd,mnr,rd}{mn}}(\bar{y}_{bk},z'_b,\Lambda_k^{\textrm{(zx)}})
-   \end{align*}
+   \end{array}
 
 :param x̄: tensor :math:`\bar{x}{:}\langle B,K,M,D' \rangle` (key-proj)
 :param ȳ: tensor :math:`\bar{y}{:}\langle B,K,N,D' \rangle` (query-proj)
@@ -418,9 +418,9 @@ Computes the attention scores passed to generalised convolution:
 
 .. math::
 
-   \begin{align*}
+   \begin{array}{rl}
    \bar{A}_{bk} & = \textrm{relu}(\bar{x}_{bk}\bar{y}_{bk}^\top\otimes\alpha_k+z'_b\Lambda_k^{\textrm{(z)}})\alpha'_k
-   \end{align*}
+   \end{array}
 
 :param x̄: tensor :math:`\bar{x}{:}\langle B,K,M,D' \rangle` (key-proj)
 :param ȳ: tensor :math:`\bar{y}{:}\langle B,K,N,D' \rangle` (query-proj)

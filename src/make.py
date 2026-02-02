@@ -10,6 +10,7 @@ from threading import Thread, Timer
 
 class RUN:
 
+  source = None
   target = None
 
   @classmethod
@@ -35,13 +36,12 @@ class RUN:
     close()
 
 if __name__=='__main__':
-  from importlib import import_module
   from pathlib import Path
   from itertools import cycle
   from shutil import rmtree
   from socket import getfqdn
   p_in,p_out = (Path(p).resolve() for p in sys.argv[1:])
-  RUN.target = p_out
+  RUN.source,RUN.target = p_in,p_out
   def clock(name,v):
     print(' ',name,end='\r',file=v,flush=True)
     for c in cycle(r'\|/-'):

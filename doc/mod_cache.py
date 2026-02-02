@@ -3,36 +3,39 @@
 # Language:             python
 # Purpose:              Illustration of the cache module
 
-import os,time,sys
+import time,sys
 
 DEMOS = {
-  ' simple': ('simplefunc(1,2)', 'simplefunc(1,y=2)',),
-  '   long': ('longfunc(42,6)', 'longfunc(None,4)',),
-  'version': ('vfunc(3)',),
-  'process': ("proc()['abc']", "proc(rabc='abc2')['abc']", "proc(rbc='bc2')['abc']",),
+  'simplefunc': ('(1,2)', '(1,y=2)',),
+  'longfunc': ('(42,6)', '(None,4)',),
+  'vfunc': ('(3)',),
+  'proc': (f"{a}['abc']" for a in ("()", "(rabc='abc2')", "(rbc='bc2')",)),
 }
 
-if __name__=='__main__':
+if __name__ == '__main__':
   # Master process. For each entry in DEMOS,
   #   * execute it in 2 separate processes launched at 2 sec interval and
   #   * wait for them both to complete
   from PYTOOLS.cache import CacheDB
   import subprocess
-  dbpath = RUN.path('.dir')
+  source,dbpath = RUN.source,RUN.path('.dir')
   CacheDB(dbpath).clear()
-  os.environ['cache_db'] = str(dbpath)
+  modname = 'example' # __name__ of module loaded in spawned processes (must be the same for all for cacheing to work)
+  source,dbpath = map(str,(source,dbpath))
   def spawn(key,runid):
-    return subprocess.Popen([sys.executable,'-c',f'from mod_cache import demo; demo(\'{key}\',\'{runid}\')'])
+    # instruction to dynamically import this file as a module and launch demo; must be a standard module (not exec-dict or runpy)
+    instr = f'from PYTOOLS import import_module_from_file; import_module_from_file({modname!r},{source!r},dict(_dbpath={dbpath!r},_version={runid!r})).demo({key!r},{runid!r})'
+    return subprocess.Popen([sys.executable,'-c',instr])
   for key in DEMOS.keys():
     print(80*'-',flush=True)
     wA = spawn(key,'A'); time.sleep(2); wB = spawn(key,'B')
-    wA.wait(); wB.wait()
+    if any(rc:=(wA.wait(),wB.wait())): raise Exception(f'rc:{rc}')
 else:
-  # Spawned process. Although each execution is in a separate process, the cache is shared.
+  # Spawned process. The cache is shared (persistent) across all spawned processes
   from collections import ChainMap
   from PYTOOLS import MapExpr, versioned
   from PYTOOLS.cache import persistent_cache
-  import functools; persistent_cache = functools.partial(persistent_cache,db=os.environ['cache_db'])
+  import functools; persistent_cache = functools.partial(persistent_cache,db=_dbpath)
 
   @persistent_cache
   def simplefunc(x,y=3): return x,y
@@ -43,10 +46,9 @@ else:
     if x is None: raise Exception('longfunc error')
     return x
 
-  V = os.getpid()
   @persistent_cache
-  @versioned(V)
-  def vfunc(x): return x+V
+  @versioned(_version)
+  def vfunc(x): return x*x
 
   @persistent_cache
   def stepI(d,**ini): return {k:f'I({v}{d})' for k,v in ini.items()}
@@ -65,11 +67,11 @@ else:
 
   def demo(key,runid):
     import logging
-    logging.basicConfig(level=logging.INFO,format=f'[{key} {runid} @ t=%(asctime)s] %(message)s',datefmt='%S')
+    logging.basicConfig(level=logging.INFO,format=f'[{runid}@%(asctime)s] %(message)s',datefmt='%S')
     logger = logging.getLogger()
     for expr in DEMOS[key]:
-      logger.info('Computing: %s',expr)
-      try: val = eval(expr)
-      except Exception as exc: val = 'raised[{}]'.format(exc)
-      logger.info('Result: %s = %s',expr,val)
+      logger.info('??? %s%s',key,expr)
+      try: val = eval(key+expr)
+      except Exception as exc: val = f'raised[{exc}]'
+      logger.info('>>> %s%s = %s',key,expr,val)
       time.sleep(.1)

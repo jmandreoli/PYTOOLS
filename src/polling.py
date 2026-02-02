@@ -68,13 +68,13 @@ Each field descriptor is either a value or a dictionary of a value (key: `value`
     fields_ = [
       Field('started', datetime.fromtimestamp(started)),
       Field('pid',f'{socket.getfqdn()}:{os.getpid()}'),
-      Field('elapsed',elapsed,type='FLOAT',error=elapsed),
+      Field('elapsed',elapsed,sqltype='FLOAT',error=elapsed),
       Field('error',(lambda:None),error=traceback.format_exc),
       *(Field(name,**(x if isinstance(x,dict) else {'value':x})) for name,x in fields.items())
     ]
     fields_s = [f for f in fields_ if f.static is True]
     fields_c = [f for f in fields_ if f.static is False]
-    sql_create = 'CREATE TABLE Status ({})'.format(', '.join(f'{f.name} {f.type}' for f in fields_))
+    sql_create = 'CREATE TABLE Status ({})'.format(', '.join(f'{f.name} {f.sqltype}' for f in fields_))
     sql_init = 'INSERT INTO Status ({}) VALUES ({})'.format(','.join(f.name for f in fields_s),','.join(len(fields_s)*'?'))
     sql_update = 'UPDATE Status SET {}'.format(', '.join(f'{f.name}=?' for f in fields_c))
     def open_(sql_create=sql_create,sql_init=sql_init,initv=tuple(f.value for f in fields_s)):
@@ -82,7 +82,6 @@ Each field descriptor is either a value or a dictionary of a value (key: `value`
       if path.exists(): path.unlink()
       conn = sqlite3.connect(path)
       try:
-        conn.execute('PRAGMA user_version = 1')
         conn.execute(sql_create)
         conn.execute(sql_init,initv)
         conn.commit()
@@ -98,15 +97,15 @@ Each field descriptor is either a value or a dictionary of a value (key: `value`
     conn:sqlite3.Connection|None = None
 
 class Field:
-  __slots__ = 'name','value','type','error','static'
+  __slots__ = 'name','value','sqltype','error','static'
   DefaultTypes = {int:'INTEGER',float: 'FLOAT',str:'TEXT',datetime:'DATETIME',bytes:'BLOB'}
-  def __init__(self,name:str,value:Any,type:str|None=None,error:Callable[[],Any]|None=None):
+  def __init__(self,name:str,value:Any,sqltype:str|None=None,error:Callable[[],Any]|None=None):
     static = not callable(value)
-    if type is None: type = self.DefaultTypes.get((value if static else value()),'BLOB')
+    if sqltype is None: sqltype = self.DefaultTypes.get(type(value if static else value()),'BLOB')
     if static: assert error is None
     elif error is None: error = (lambda:None)
     else: assert callable(error)
-    self.name,self.value,self.type,self.error,self.static = name,value,type,error,static
+    self.name,self.value,self.sqltype,self.error,self.static = name,value,sqltype,error,static
 
 def status(path:str|Path):
   r"""
@@ -116,6 +115,8 @@ Returns the contents of a monitor reporting file.
   """
   path = Path(path)
   assert path.is_file()
-  with sqlite3.connect(path) as conn:
+  with sqlite3.connect(f'file:{path}?mode=ro',uri=True) as conn:
     conn.row_factory = sqlite3.Row
-    return dict(conn.execute('SELECT * FROM Status').fetchone())
+    r = conn.execute('SELECT * FROM Status').fetchone()
+    assert r is not None
+    return dict(r)

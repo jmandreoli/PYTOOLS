@@ -20,6 +20,7 @@ PYTOOLS package documentation
    mod_cache.rst
    mod_experiment.rst
    mod_tensorboard_manager.rst
+   mod_genshi.rst
 
 Indices and tables
 ==================

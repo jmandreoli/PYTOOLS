@@ -20,7 +20,7 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Rectangle
 from .ipywidgets import app
 
-__all__ = 'AnimationStatus', 'BoardDisplayer',
+__all__ = 'AnimationStatus', 'BoardDisplayer', 'BaseControlledAnimation'
 
 #==================================================================================================
 AnimationStatus = Enum('AnimationStatus','playing paused')
@@ -268,7 +268,7 @@ An instance of this class is a callable which takes as input a board, prepares i
   displayers:dict[tuple[int,int],list[tuple[str,Callable[[Any],Callable[[Any],None]]]]]
   def add_displayer(self,pos:tuple[int,int]|None=None,**ka:Callable[[Any],Callable[[Any],None]]):
     r"""
-Adds a named pane displayer to this board displayer. A pane displayer is a callable which takes as input a pane, prepares it for display, and returns a callable which, given a frame, paints it on the pane according to the view name.
+Adds a pane displayer to this board displayer. A pane displayer is a callable which takes as input a pane, prepares it for display, and returns a callable which, given a frame, paints it on the pane according to the view name.
 
 :param pos: the position of the pane on the board
 :param ka: the keys are view names and the values are pane displayers
@@ -278,16 +278,22 @@ Adds a named pane displayer to this board displayer. A pane displayer is a calla
     return self # so other invocations of the method can be chained
   def __init__(self): self.displayers = defaultdict(list)
 #--------------------------------------------------------------------------------------------------
+  def with_setup(self,setup):
+    r"""
+Initialises attribute :attr:`setup`.
+    """
+#--------------------------------------------------------------------------------------------------
+    self.setup = setup
+    return self # so other invocations of the method can be chained
+#--------------------------------------------------------------------------------------------------
   def with_simpy_setup(self):
     r"""
 Initialises attribute :attr:`setup` for a :mod:`simpy` simulation.
     """
 #--------------------------------------------------------------------------------------------------
     from . import ResettableSimpyEnvironment
-    env = ResettableSimpyEnvironment(0.)
-    self.setup = lambda v: env.run(v)
-    self.env = env
-    return self
+    self.env = env = ResettableSimpyEnvironment(0.)
+    return self.with_setup(lambda v: env.run(v))
 #--------------------------------------------------------------------------------------------------
   call_defaults = {'aspect':'equal'}
   def __call__(self,fig:Figure|SubFigure,nrows:int=1,ncols:int=1,sharex:str|bool=False,sharey:str|bool=False,gridspec_kw:Mapping|None=None,view_cfg:Mapping[str,dict]|None=None,gridlines:bool=True,**ka)->Callable[[Any],None]:

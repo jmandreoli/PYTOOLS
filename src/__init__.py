@@ -58,30 +58,21 @@ Keys in the reference are turned into attributes of the proxy. If *__ref__* is :
   def __repr__(self): return repr(self.__ref__)
 
 #==================================================================================================
-class _forward:
+def import_module_from_file(modname:str,filename:str,init_globals:dict[str,Any]|None=None):
   r"""
-This object allows to name callable members of module/packages without loading them. They are loaded only on actual call. Example::
+:param modname: the name of the module to import
+:param filename: the name of the file to import from
+:param init_globals: the global variables to initialize the module with (if not :const:`None`)
 
-   from sys import modules
-   array = forward.numpy.array
-   assert 'numpy' not in modules # numpy is not loaded
-   x = array((1,2,3))
-   assert 'numpy' in modules and x.shape == (3,) # now numpy is loaded and x is computed
+Similar to :func:`run_path` in module :func:`runpy`, but declares the created module explicitly.
   """
-#==================================================================================================
-  __slot__ = '__spec__','__value__'
-  def __init__(self,s=()): self.__spec__ = s; self.__value__ = None
-  def __getattr__(self,a): return _forward(self.__spec__+(a,))
-  def __call__(self,*a,**ka):
-    from importlib import import_module
-    f = self.__value__
-    if f is None:
-      self.__value__ = f = getattr(import_module('.'.join(self.__spec__[:-1])),self.__spec__[-1])
-    return f(*a,**ka)
-  def __getstate__(self): return self.__spec__
-  def __setstate__(self,s): self.__spec__ = s; self.__value__ = None
-  def __repr__(self): return 'forward<{}{}>'.format('.'.join(self.__spec__),('' if self.__value__ is None else ':incarnated'))
-forward = _forward()
+  from importlib.util import spec_from_file_location,module_from_spec
+  spec = spec_from_file_location(modname,filename)
+  mod = module_from_spec(spec)
+  import sys; sys.modules[modname] = mod
+  if init_globals is not None: mod.__dict__.update(init_globals)
+  spec.loader.exec_module(mod)
+  return mod
 
 #==================================================================================================
 def namedtuple(*a,**ka):

@@ -32,12 +32,12 @@ def trellis(recurs=False):
   if recurs: n.succ.append(nabc)
   return nabc
 
-p_html = RUN.path('.html'); p_html.write_text(repr_html(trellis()))
+p = RUN.path('.html'); p.write_text(repr_html(trellis()))
 
 print(f'''
 **Tabular representation of a trellis graph**
 (hover over pointers to highlight their mapped HTML representation)
 
 .. raw:: html
-   :file: {p_html.name}
+   :file: {p.name}
 ''')

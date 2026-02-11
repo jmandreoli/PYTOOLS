@@ -1,7 +1,7 @@
 :mod:`PYTOOLS.cache` --- A persistent cache mechanism
 =====================================================
 
-This module provides basic persistent cache functionalities.
+This module provides basic persistent cache functionalities. Persistence means that cached values are stored and retrieved outside the main memory, hence can live longer than the python process where they are declared (in contrast with what function :func:`functools.cache` already provides). A default implementation of a persistent cache store is provided using the local file system. A protocol,
 
 An example
 ----------
@@ -23,7 +23,7 @@ To illustrate the cross-process capability of the cache, function :func:`demo` r
 
 * Function :func:`proc` builds a closed symbolic expression (instance of :class:`Expr`) which implements the following workflow based on the two cached functions :func:`stepI` and :func:`stepK`.
 
-  .. image:: _resource/mod_cache-workflow.png
+  .. image:: _build/resource/mod_cache-workflow.png
      :scale: 65%
      :alt: workflow representation of function :func:`proc`
 
@@ -36,14 +36,14 @@ To illustrate the cross-process capability of the cache, function :func:`demo` r
 
   Of course, cacheing such simple operations is not very interesting, but the purpose of the example is to illustrate cacheing in the presence of dependencies between arbitrary tasks which could be much more complex (and computationaly heavy). The logged trace of the computation illustrated in the diagram below shows how the evaluation mechanism of symbolic expressions (called incarnation) in class :class:`MapExpr` and that of map chaining in class :class:`collections.ChainMap` interact with persistent cacheing to provide a flexible workflow implementation.
 
-  .. figure:: _resource/mod_cache-timeline.png
+  .. figure:: _build/resource/mod_cache-timeline.png
      :scale: 65%
 
   Note that this diagram assumes a full garbage collection before each demo, otherwise, some cache accesses are skipped. Indeed, within a process, a persistent cache keeps weak references to all its past accesses (when their values are amenable to weak reference) and reuses them as long as they are not collected.
 
-Typical output:
+.. topic:: Typical output:
 
-.. literalinclude:: _resource/mod_cache.out
+   .. literalinclude:: _build/resource/mod_cache.out
 
 Discussion
 ----------
@@ -70,6 +70,14 @@ In both cases, the same key-value pairs are returned. There is an important diff
 
 * In the first solution, *E* is recursively incarnated by its conversion to a dict, so the cached value contains all the key-value pairs already typically assigned by the previous tasks, to which the new key-value pairs from *D* are appended. The advantage of that solution is that a single cache lookup gives access to the computed results of all the tasks up to the current one. On the other hand, the drawback is that this cached value is mostly redundant with the cached values of the previous tasks, and these may be very large.
 * In the second solution, the cached value essentially holds the new key-value pairs of *D* together with the configuration of *E*, not its recursive incarnation, and the former is usually much smaller than the latter. The price to pay is that access to the results of previous tasks now requires re-incarnating *E* hence re-accessing the cache, but that overhead is often small and worth the economy in overall cache redundancy.
+
+Database schema
+---------------
+
+.. automodule:: PYTOOLS.cache_v1
+   :members:
+   :member-order: bysource
+   :show-inheritance:
 
 Available types and functions
 -----------------------------

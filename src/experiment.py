@@ -5,7 +5,8 @@
 # Purpose:              Some utilities for pytorch experiments
 #
 
-from __future__ import annotations
+__all__ = 'Monitor', 'Run', 'Net', 'SupervisedNet', 'Measure', 'ZeroOneMeasure', 'RunListener', 'BaseRunListener', 'RunMlflowListener', 'RunAimListener', 'ClassificationDatasource'
+
 import logging; logger = logging.getLogger(__name__)
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence, MutableSequence, IO, NamedTuple
 

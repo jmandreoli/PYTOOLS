@@ -5,8 +5,7 @@
 # Purpose:              Utilities for animations
 #
 
-from __future__ import annotations
-import logging;logger = logging.getLogger(__name__)
+import logging; logger = logging.getLogger(__name__)
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 from enum import Enum
@@ -193,6 +192,7 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
     self.main = main = figure(figsize=figsize_,**fig_kw)
     r = tbsize[1],figsize[1]
     toolbar,self.board = main.subfigures(nrows=2,height_ratios=r)
+    for a in 'get_size_inches','set_size_inches','savefig': setattr(self.board,a,getattr(main,a))  # very ugly trick because board is a subfigure
     r = tbsize[0]
     r['track_manager'] += figsize_[0]-tbsize_
     g = {'width_ratios':r.values(),'wspace':0.,'bottom':0.,'top':1.,'left':0.,'right':1.}
@@ -239,18 +239,21 @@ Instances of this class are players for :mod:`matplotlib` animations, controlled
           if n>=self.track[0] and n<self.track[1]: self.jump_to(n,False)
           return
       elif ev.inaxes is clock.axes:
-        if key=='enter':
-          try: v_ = float(edit_value)
-          except: return
-          ev_ = edit_value; edit_value = ''
-          if not self.jump_to(int(v_*self.frame_per_stu),True): edit_value = ev_
-          return
-        elif key=='escape': edit_value = ''; v,c = f'{track_manager.val/self.frame_per_stu:.2f}','k'
-        elif key=='backspace' and len(edit_value)>1:
-          edit_value = edit_value[:-1]; v,c = edit_value,'b'
-        elif key in '0123456789' or (key=='.' and '.' not in edit_value):
-          edit_value += key; v,c = edit_value,'b'
-        else: return
+        match key:
+          case 'enter':
+            try: v_ = float(edit_value)
+            except: return
+            ev_ = edit_value; edit_value = ''
+            if not self.jump_to(int(v_*self.frame_per_stu),True): edit_value = ev_
+            return
+          case 'escape': edit_value = ''; v,c = f'{track_manager.val/self.frame_per_stu:.2f}','k'
+          case 'backspace':
+            if len(edit_value)>1: edit_value = edit_value[:-1]; v,c = edit_value,'b'
+            else: return
+          case _:
+            if key in '0123456789' or (key=='.' and '.' not in edit_value):
+              edit_value += key; v,c = edit_value,'b'
+            else: return
         clock.set(text=v,color=c)
         toolbar.canvas.draw_idle()
     toolbar.canvas.mpl_connect('button_press_event',on_button_press)
@@ -332,7 +335,8 @@ Prepares the board for display, and returns a callable which takes as input a fr
         ax.grid(gridlines)
       return ax
     get_view_cfg:Callable[[str],dict] = (lambda view: {}) if view_cfg is None else view_cfg.get
-    display_list = [self.setup,*(D(_get(*pos),**kw) for pos,L in self.displayers.items() for view,D in L if (kw:=get_view_cfg(view)) is not None)]
+    display_list = [D(_get(*pos),**kw) for pos,L in self.displayers.items() for view,D in L if (kw:=get_view_cfg(view)) is not None]
+    if self.setup is not None: display_list.insert(0,self.setup)
     def display(frm):
       for f in display_list: f(frm)
     return display

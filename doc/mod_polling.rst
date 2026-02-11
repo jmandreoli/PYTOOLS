@@ -13,9 +13,9 @@ The following piece of code illustrates the use of this module:
    :language: python
    :tab-width: 2
 
-Typical output:
+.. topic:: Typical output:
 
-.. literalinclude:: _resource/mod_polling.out
+   .. literalinclude:: _build/resource/mod_polling.out
 
 Available types and functions
 -----------------------------

@@ -5,12 +5,10 @@
 # Purpose:              Some utilities in Python
 #
 
-from __future__ import annotations
 import logging; logger = logging.getLogger(__name__)
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence, Iterator
 
 import re, collections
-if False: import ast,imaplib,pickle,datetime,matplotlib,simpy # tricks mypy to import these modules
 
 #==================================================================================================
 class owrap:
@@ -33,7 +31,7 @@ Keys in the reference are turned into attributes of the proxy. If *__ref__* is :
   __slot__ = '__ref__',
   __ref__:Mapping[str,Any]
   r"""The proxy object"""
-  def __init__(self,__ref__:Mapping[str,Any]=None,**ka):
+  def __init__(self,__ref__:Mapping[str,Any]|None=None,**ka):
     if __ref__ is None: r = dict(ka)
     else:
       r:Mapping[str,Any] = __ref__
@@ -64,7 +62,7 @@ def import_module_from_file(modname:str,filename:str,init_globals:dict[str,Any]|
 :param filename: the name of the file to import from
 :param init_globals: the global variables to initialize the module with (if not :const:`None`)
 
-Similar to :func:`run_path` in module :func:`runpy`, but declares the created module explicitly.
+Similar to the standard library function :func:`runpy.run_path`, but declares the created module explicitly.
   """
   from importlib.util import spec_from_file_location,module_from_spec
   spec = spec_from_file_location(modname,filename)
@@ -114,7 +112,7 @@ Returns the content of the XDG resource named *rsc* or *dflt* if the resource is
   with open(p) as u: return u.read()
 
 #==================================================================================================
-def config_env(name:str,dflt:str=None,asfile:bool=False)->str|None:
+def config_env(name:str,dflt:str|None=None,asfile:bool=False)->str|None:
   r"""
 :param name: the name of an environment variable
 :param dflt: a default value
@@ -343,7 +341,7 @@ Use the ``GIT_PYTHON_GIT_EXECUTABLE`` environment variable to set the Git execut
   return 'stale',*d
 
 #==================================================================================================
-def gitcheck_package(pkgname:str,update=False):
+def gitcheck_package(pkgname:str,update:bool=False):
   r"""
 :param pkgname: full name of a package
 :param update: whether to update (git pull) if stale
@@ -583,7 +581,7 @@ A decorator which interprets the target function as a PDF converter.
 :param mimetypes: list of mimetypes
   """
 #==================================================================================================
-  def assign(self,*mimetypes:Sequence[str]):
+  def assign(self,*mimetypes:str):
     def t(f:Callable[[Any],bytes]): self.update({mtype:f for mtype in mimetypes}); return f
     return t
 PDFConverter = _PDFConverter()

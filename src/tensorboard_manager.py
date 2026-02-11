@@ -5,9 +5,8 @@
 # Purpose:              A server of tensorboard servers
 #
 
-from __future__ import annotations
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 import logging; logger = logging.getLogger(__name__)
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 import falcon,time,psutil,sys,shutil,json
 from pathlib import Path

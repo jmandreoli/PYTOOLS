@@ -17,7 +17,7 @@ Here, a compound object with recursive structure represents a graph as an instan
 
 .. topic:: Typical output
 
-   .. include:: _resource/mod_html.out
+   .. include:: _build/resource/mod_html.out
 
 Available types and functions
 -----------------------------

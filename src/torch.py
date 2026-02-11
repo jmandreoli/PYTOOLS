@@ -5,12 +5,12 @@
 # Purpose:              Some utilities for pytorch
 #
 
-from __future__ import annotations
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 import logging; logger = logging.getLogger(__name__)
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
-import re
-import torch
+__all__ = 'GeneralisedConvolution', 'GeneralisedMultiHeadAttention', 'MultiHeadAttention', 'MultiHeadMixedAttention', 'MultiHeadMixedAttentionAlt1', 'MultiHeadMixedAttentionAlt2', 'Einsum'
+
+import re, torch
 
 #==================================================================================================
 class GeneralisedConvolution(torch.nn.Module):

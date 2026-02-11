@@ -5,9 +5,8 @@
 # Purpose:              a thread which polls code at regular intervals
 #
 
-from __future__ import annotations
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 import logging; logger = logging.getLogger(__name__)
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 import os,socket,sqlite3,time,threading,traceback
 from datetime import datetime

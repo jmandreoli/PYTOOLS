@@ -27,23 +27,22 @@ help:
 #
 .PHONY: help Makefile
 #
-rsc: $(addprefix _resource/mod_,cache.out cache-timeline.png cache-workflow.png polling.out html.out) ;
+RSCDIR = $(BUILDDIR)/resource
+rsc: $(addprefix $(RSCDIR)/mod_,cache.out cache-timeline.png cache-workflow.png polling.out html.out) ;
 #
-rsc-clean:
-	@echo Removing everything under _resource ...
-	@rm -rf _resource/*
-#
-_resource/%.out:: %.py
+$(RSCDIR)/%.out:: %.py
 	@echo Generating $@
+	@mkdir -p $(RSCDIR)
 	@export PYTHONPATH=$(realpath ../.pythonpath):$(PYTHONPATH); ${RSCMAKE} $< $@
 #
-_resource/%.png:: %.odg
+$(RSCDIR)/%.png:: %.odg
 	@echo Generating $@ ...
-	@${SOFFICE} --headless --convert-to png --outdir _resource $<
+	@mkdir -p $(RSCDIR)
+	@${SOFFICE} --headless --convert-to png --outdir $(RSCDIR) $<
 #
-MAKEFILE:: Makefile # local
-	@echo Generating $@ ... # local
-	@sed 's/^.*\# local$$//g' $< | sed '/^$$/d' > $@ # local
+MAKEFILE:: Makefile                                # local
+	@echo Generating $@ ...                          # local
+	@sed -e 's/^.*\# local$$//g' -e '/^$$/d' $< > $@ # local
 
 # Catch-all target: route all unknown targets to Sphinx using the new
 # "make mode" option.  $(O) is meant as a shortcut for $(SPHINXOPTS).

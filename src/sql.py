@@ -5,7 +5,6 @@
 # Purpose:              Some SQL utilities based on sqlalchemy
 #
 
-from __future__ import annotations
 import logging; logger = logging.getLogger(__name__)
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
@@ -30,11 +29,11 @@ def SQLinit(engine:str|Engine,meta:MetaData)->Engine:
   from sqlalchemy.types import DateTime, Text, Integer
   from sqlalchemy.sql import select, insert, update, delete, and_
   if isinstance(engine,str): engine = create_engine(engine)
-  if engine.driver == 'pysqlite':
-    # fixes a bug in the pysqlite driver; to be removed if fixed
-    # see https://docs.sqlalchemy.org/en/20/dialects/sqlite.html#transactions-with-sqlite-and-the-sqlite3-driver
-    def do_connect(conn,rec): conn.autocommit = False
-    event.listen(engine,'connect',do_connect)
+  # if engine.driver == 'pysqlite':
+  #   # fixes a bug in the pysqlite driver; to be removed if fixed
+  #   # see https://docs.sqlalchemy.org/en/20/dialects/sqlite.html#transactions-with-sqlite-and-the-sqlite3-driver
+  #   def do_connect(conn,rec): conn.autocommit = False
+  #   event.listen(engine,'connect',do_connect)
   meta_ = MetaData()
   meta_.reflect(bind=engine)
   if meta_.tables: # engine has some tables

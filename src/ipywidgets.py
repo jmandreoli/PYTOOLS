@@ -5,9 +5,8 @@
 # Purpose:              Utilities for ipywidgets
 #
 
-from __future__ import annotations
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 import logging; logger = logging.getLogger(__name__)
+from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
 import traitlets
 from contextlib import contextmanager

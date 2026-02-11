@@ -5,95 +5,48 @@
 # Purpose:              Persistent cache management
 #
 
-from __future__ import annotations
 import logging; logger = logging.getLogger(__name__)
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
-import os, sqlite3, pickle, inspect, threading, abc
+import pickle, inspect, threading, abc
 from pathlib import Path
 from functools import update_wrapper
-from itertools import islice, chain
+from itertools import islice
 from collections import namedtuple
-from collections.abc import MutableMapping
 from weakref import WeakValueDictionary
-from time import time
-from . import SQliteNew, size_fmt, time_fmt, pickleclass
+from datetime import datetime, timezone
+from sqlalchemy import select, func
+from .cache_v1 import get_sessionmaker, Block, Cell
+from . import size_fmt, time_fmt, pickleclass
 
-SCHEMA = '''
-CREATE TABLE Block (
-  oid INTEGER PRIMARY KEY AUTOINCREMENT,
-  functor PICKLE NOT NULL
-  );
+__all__ = 'CacheDB', 'CacheBlock', 'AbstractFunctor', 'Functor', 'AbstractStorage', 'FileStorage', 'DefaultStorage'
 
-CREATE TABLE Cell (
-  oid INTEGER PRIMARY KEY AUTOINCREMENT,
-  block REFERENCES Block(oid) NOT NULL,
-  ckey BLOB NOT NULL,
-  tstamp TIMESTAMP DEFAULT ( datetime('now') ),
-  hits INTEGER DEFAULT 0,
-  size INTEGER DEFAULT 0,
-  duration REAL
-  );
-
-CREATE UNIQUE INDEX BlockIndex ON Block (functor);
-CREATE UNIQUE INDEX CellIndex ON Cell (block, ckey);
-CREATE INDEX CellIndex2 ON Cell (tstamp);
-
-CREATE TRIGGER BlockDeleteTrigger AFTER DELETE ON Block
-  BEGIN DELETE FROM Cell WHERE block=OLD.oid; END;
-
-CREATE TRIGGER CellDeleteTrigger AFTER DELETE ON Cell
-  BEGIN SELECT cellrm(OLD.oid,OLD.size); END;
-'''
-
-sqlite3.register_converter('PICKLE',pickle.loads)
-sqlite3.enable_callback_tracebacks(True)
-
+NOW = lambda tz=timezone.utc: datetime.now(tz=tz) # shorthand for timestamping
 BlockInfo = namedtuple('BlockInfo','hits ncell ncell_error ncell_pending')
 
 #==================================================================================================
-class CacheDB (MutableMapping):
+class CacheDB:
   r"""
-Instances of this class manage cache repositories. There is at most one instance of this class in a process for each normalised repository specification path. A cache repository contains cells, each cell corresponding to one cached value produced by a unique call, and possibly reused by later calls. Cells are clustered into blocks, each block grouping cells produced by the same call type, called a functor (of class :class:`AbstractFunctor`). Meta-information about blocks and cells are stored in an index in a sqlite3 database. The values themselves are persistently stored by a dedicated storage object (of class :class:`AbstractStorage`).
+Instances of this class manage cache repositories. There is at most one instance of this class in a process for each normalised repository specification path. A cache repository contains cells, each cell corresponding to one cached value produced by a unique call, and possibly reused by later calls. Cells are clustered into blocks, each block grouping cells produced by the same call type, called a functor (of class :class:`AbstractFunctor`). Meta-information about blocks and cells are stored in an index database accessed through :mod:`sqlalchemy`. The values themselves are persistently stored by a dedicated storage object (of class :class:`AbstractStorage`).
 
-The index entry attached to a block describes the common functor of all the calls which produced its cells. A ``Block`` entry has the following field:
-
-- ``oid``: a unique integer identifier of the block;
-- ``functor``: the functor producing all the cells in the block; each functor is assumed to have a deterministic pickle byte-string which uniquely identifies it.
-
-The index entry attached to a cell describes the call event which produced it. A ``Cell`` entry has the following fields:
-
-- ``oid``: a unique integer identifier of the cell; also used to retrieve the value attached to the cell;
-- ``block``: reference to the ``Block`` entry holding the functor of the call event which produced the cell;
-- ``ckey``: the key of the call event which produced the cell;
-- ``tstamp``: date of creation, last update or last reuse, of the cell;
-- ``hits``: number of hits (reuse) since creation;
-- ``size``: either 0 if the value is still being computed, or the size in bytes of the computed value, with a negative sign if that value is an exception;
-- ``duration``: duration (in float sec) of its computation.
-
-A :class:`CacheDB` instance acts as a mapping object, where the keys are block identifiers (:class:`int`) and values are :class:`CacheBlock` objects for the corresponding blocks.
-
-Finally, :class:`CacheDB` instances have an HTML ipython display.
-
-.. automethod:: __new__
+:class:`CacheDB` instances have an HTML ipython display.
   """
 #==================================================================================================
 
   path:Path
-  r"""the normalised path of this instance"""
-  dbpath:str
-  r"""the path to the sqlite database holding the index"""
-  storage:AbstractStorage
-  r"""the object managing the actual storage of the values"""
+  url:str
+  r"""the sqlalchemy url of the database"""
+  session_maker:Callable[[],Any]
+  r"""the sqlalchemy session maker for manipulation of this database"""
   timeout:float = 120.
 
   def __new__(cls,spec:CacheDB|Path|str,listing={},lock=threading.Lock()):
     r"""
+:param spec: cache specification
+
 Generates a :class:`CacheDB` object.
 
-:param spec: specification of the cache folder
-
-* If *spec* is a :class:`CacheDB` instance, that instance is returned
+* If *spec* is already a :class:`CacheDB` instance, that instance is returned
 * If *spec* is a path to a directory, returns a :class:`CacheDB` instance whose storage is an instance of :class:`DefaultStorage` pointing to that directory
 * Otherwise, *spec* must be a path to a file, returns a :class:`CacheDB` instance whose storage is unpickled from the file at *spec*.
 
@@ -107,15 +60,15 @@ Note that this constructor is locally cached on the resolved path *spec*.
     with lock:
       self = listing.get(path)
       if self is None:
+        storage:AbstractStorage
         if path.is_dir(): storage = DefaultStorage(path)
         elif path.is_file():
-          with path.open('rb') as u: storage = pickle.load(u)
+          with path.open('rb') as u: storage = pickle.load(u); assert isinstance(storage,AbstractStorage)
         else: raise ValueError('Cache repository specification path must be directory or file')
-        dbpath = str(storage.dbpath)
-        SQliteNew(dbpath,SCHEMA)
         self = super().__new__(cls)
         self.path = path
-        self.dbpath = dbpath
+        self.url = url = storage.db_url
+        self.session_maker = get_sessionmaker(url)
         self.storage = storage
         listing[path] = self
     return self
@@ -125,74 +78,26 @@ Note that this constructor is locally cached on the resolved path *spec*.
   def __hash__(self): return hash(self.path)
   # no need to define '__eq__': default 'is' behaviour works due to '__new__' constructor
 
-  def connect(self,**ka):
-    conn = sqlite3.connect(self.dbpath,timeout=self.timeout,**ka)
-    conn.create_function('cellrm',2,self.storage.remove)
-    return conn
-
-  def getblock(self,functor):
-    p = pickle.dumps(functor)
-    with self.connect() as conn:
-      conn.execute('BEGIN IMMEDIATE TRANSACTION')
-      row = conn.execute('SELECT oid FROM Block WHERE functor=?',(p,)).fetchone()
-      if row is None:
-        return conn.execute('INSERT INTO Block (functor) VALUES (?)',(p,)).lastrowid
-      else:
-        return row[0]
-
-  def clear_obsolete(self,strict,dry_run=False):
+  def clear_obsolete(self,strict:bool,dry_run=False):
     r"""
 Clears all the blocks which are obsolete.
     """
     assert isinstance(strict,bool)
-    strictf = bool if strict else (lambda o: o is not None)
-    L = [k for k,c in list(self.items()) if strictf(c.functor.obsolete())]
-    # this may load modules which add new (non obsolete) entries, hence out of transaction
-    if dry_run: return L
-    if not L: return 0
-    with self.connect() as conn:
-      conn.create_function('obsolete',1,(lambda cell: cell in L))
-      conn.execute('DELETE FROM Block WHERE obsolete(oid)')
-      deleted = conn.total_changes
-    if deleted>0: logger.info('%s DELETED(%s)',self,deleted)
-    return deleted
+    def obsolete(block,strictf=(bool if strict else (lambda o: o is not None)))->bool:
+      return strictf(pickle.loads(block.functor).obsolete()) is True
+    return self.clear((lambda L: [block for block in L if obsolete(block)]),dry_run)
+    # this may load modules which add new (non obsolete) entries which must not be included in the list
 
-#--------------------------------------------------------------------------------------------------
-# Methods defining the Mapping behaviour
-#--------------------------------------------------------------------------------------------------
-
-  def __getitem__(self,block):
-    with self.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
-      r = conn.execute('SELECT functor FROM Block WHERE oid=?',(block,)).fetchone()
-    if r is None: raise KeyError(block)
-    return CacheBlock(db=self,functor=r[0],block=block)
-
-  def __delitem__(self,block):
-    with self.connect() as conn:
-      conn.execute('DELETE FROM Block WHERE oid=?',(block,))
-      if not conn.total_changes: raise KeyError(block)
-
-  def __setitem__(self,block:str,v:Any):
-    raise Exception('Direct create/update not permitted on Block')
-
-  def __iter__(self):
-    with self.connect() as conn:
-      for block, in conn.execute('SELECT oid FROM Block'): yield block
-
-  def __len__(self):
-    with self.connect() as conn:
-      return conn.execute('SELECT count(*) FROM Block').fetchone()[0]
-
-  def items(self):
-    r"""Returns a view on this instance's blocks."""
-    with self.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
-      for block,functor in conn.execute('SELECT oid,functor FROM Block'):
-        yield block, CacheBlock(db=self,functor=functor,block=block)
-
-  def clear(self):
-    r"""Removes all blocks from this instance."""
-    with self.connect() as conn:
-      conn.execute('DELETE FROM Block')
+  def clear(self,f:Callable[[Sequence[Block]],Sequence[Block]]=(lambda L: L),dry_run:bool=False):
+    r"""Deletes blocks from this instance."""
+    with self.session_maker() as session:
+      L,L_ = f([block for block, in session.execute(select(Block))]),[]
+      if dry_run is True: return L
+      if (n:=len(L))>0:
+        for block in L: session.delete(block); L_.extend(cell.oid for cell in block.cells)
+        session.commit(); logger.info('%s DELETED %s',self,n)
+    self.storage.remove(L_)
+    return n
 
 #--------------------------------------------------------------------------------------------------
 # Representation methods
@@ -200,16 +105,23 @@ Clears all the blocks which are obsolete.
 
   def _repr_html_(self): from .html import repr_html; return repr_html(self)
   _html_limit = 50
-  def as_html(self,_):
+  def as_html(self,_:Callable[[Any],None]):
     from .html import html_table
-    n = len(self)-self._html_limit
-    L = self.items(); closing = None
-    if n>0: L = islice(L,self._html_limit); closing = f'{n} more'
-    return html_table(sorted((k,(v,)) for k,v in L),fmts=((lambda x: x.as_html(_)),),opening=repr(self),closing=closing)
-  def __repr__(self): return f'Cache<{self.path}>'
+    n_max = self._html_limit
+    with self.session_maker() as session:
+      L = [CacheBlock(self,pickle.loads(block.functor),block.oid) for block, in session.execute(select(Block).order_by(Block.oid).limit(n_max))]
+      n = session.execute(select(func.count(Block.oid))).scalar()-len(L)
+    closing = f'{n} more' if n>0 else None
+    return html_table(
+      sorted((c.oid,(c,)) for c in L),
+      fmts=((lambda x: x.as_html(_,session=session)),),
+      opening=repr(self),
+      closing=closing
+    )
+  def __repr__(self): return f'{self.__class__.__name__}<{self.path})>'
 
 #==================================================================================================
-class CacheBlock (MutableMapping):
+class CacheBlock:
   r"""
 Instances of this class implements blocks of cells sharing the same functor.
 
@@ -227,59 +139,73 @@ Finally, :class:`CacheBlock` instances have an HTML ipython display.
   """
 #==================================================================================================
 
-  db: CacheDB
+  db:CacheDB
   r"""the :class:`CacheDB` instance this block belongs to"""
-  functor:'AbstractFunctor'
+  functor:AbstractFunctor
   r"""the functor for this block (field ``functor`` in the ``Block`` table of the index is the functor's pickle)"""
-  block:int
+  oid:int
   r"""the identifier of this block (field ``oid`` in the ``Block`` table of the index)"""
   cacheonly:bool
   r"""whether cell creation is disabled"""
-  memory: WeakValueDictionary
+  memory:WeakValueDictionary
   r"""a local cache of calls within the current process"""
 
-  def __init__(self,db:CacheDB|Path|str='',functor:'AbstractFunctor'=None,block:int=None,cacheonly:bool=False):
+  def __init__(self,db:CacheDB|Path|str='',functor:AbstractFunctor|None=None,oid:int=None,cacheonly:bool=False):
     self.db = db = CacheDB(db)
     self.functor = functor
-    self.block = db.getblock(functor) if block is None else block
+    if oid is None:
+      p = pickle.dumps(functor)
+      with db.session_maker() as session:
+        oid = session.execute(select(Block.oid).where(Block.functor==p)).scalar()
+        if oid is None:
+          session.add(block:=Block(functor=p)); session.flush(); oid = block.oid; session.commit()
+          logger.info('%s F-MISS(%s)',self,oid)
+        else: logger.info('%s F-HIT(%s)',self,oid)
+    self.oid = oid
     self.cacheonly = cacheonly
     self.memory = WeakValueDictionary()
+  def getblock(self,session)->Block: return session.get(Block,self.oid)
 
-  def __hash__(self): return hash((self.db,self.block))
-  def __eq__(self,other): return isinstance(other,CacheBlock) and self.db is other.db and self.block == other.block
+  def __hash__(self): return hash((self.db,self.oid))
+  def __eq__(self,other): return isinstance(other,CacheBlock) and self.db == other.db and self.oid == other.oid
 
   def clear_error(self,dry_run:bool=False):
     r"""
 Clears all the cells from this block which cache an exception.
     """
-    with self.db.connect() as conn:
-      if dry_run: return [cell for cell, in conn.execute('SELECT oid FROM Cell WHERE block=? AND size<0',(self.block,))]
-      conn.execute('DELETE FROM Cell WHERE block=? AND size<0',(self.block,))
-      deleted = conn.total_changes
-    if deleted>0: logger.info('%s DELETED(%s)',self,deleted)
-    return deleted
+    return self.clear((lambda L: [cell for cell in L if cell.size<0]),dry_run)
 
   def clear_overflow(self,n:int,dry_run:bool=False):
     r"""
 Clears all the cells from this block except the *n* most recent (lru policy).
     """
     assert isinstance(n,int) and n>=1
-    with self.db.connect() as conn:
-      if dry_run: return [cell for cell, in conn.execute('SELECT oid FROM Cell WHERE block=? AND size>0 ORDER BY tstamp DESC, oid DESC LIMIT -1 OFFSET ?',(self.block,n))]
-      conn.execute('DELETE FROM Cell WHERE oid IN (SELECT oid FROM Cell WHERE block=? AND size>0 ORDER BY tstamp DESC, oid DESC LIMIT -1 OFFSET ?)',(self.block,n))
-      deleted = conn.total_changes
-    if deleted>0: logger.info('%s DELETED(%s)',self,deleted)
-    return deleted
+    return self.clear((lambda L: sorted((cell for cell in L if cell.size>0),key=(lambda cell: cell.tstamp),reverse=True)[n:]),dry_run)
+
+  def clear(self,f:Callable[[Sequence[Cell]],Sequence[Cell]]=(lambda L:L),dry_run:bool=False):
+    r"""Deletes cells from this instance."""
+    with self.db.session_maker() as session:
+      L = f(self.getblock(session).cells)
+      if dry_run: return L
+      L_ = [cell.oid for cell in L]
+      if (n:=len(L))>0:
+        for cell in L: session.delete(cell)
+        session.commit();logger.info('%s DELETED %s',self,n)
+    self.db.storage.remove(L_)
+    return n
 
   def info(self):
     r"""
 Returns information about this block. Available attributes:
 :attr:`hits`, :attr:`ncell`, :attr:`ncell_error`, :attr:`ncell_pending`
     """
-    with self.db.connect(detect_types=sqlite3.PARSE_DECLTYPES) as conn:
-      ncell = dict(conn.execute('SELECT CASE WHEN size ISNULL THEN \'pending\' WHEN size<0 THEN \'error\' ELSE \'\' END AS status, count(*) FROM Cell WHERE block=? GROUP BY status',(self.block,)))
-      hits, = conn.execute('SELECT sum(hits) FROM Cell WHERE block=?',(self.block,)).fetchone()
-    return BlockInfo((hits or 0),sum(ncell.values()),ncell.get('error',0),ncell.get('pending',0))
+    hits = n = n_error = n_pending = 0
+    with self.db.session_maker() as session:
+      for cell in self.getblock(session).cells:
+        n += 1; hits += cell.hits
+        if cell.size==0: n_pending += 1
+        elif cell.size<0: n_error += 1
+    return BlockInfo(hits,n,n_error,n_pending)
 
 #--------------------------------------------------------------------------------------------------
   def __call__(self,arg:Any):
@@ -300,81 +226,42 @@ Implements cacheing as follows:
     """
 #--------------------------------------------------------------------------------------------------
     ckey = self.functor.getkey(arg)
-    cval = self.memory.get(ckey)
-    if cval is not None: return cval
-    with self.db.connect() as conn:
-      conn.execute('BEGIN IMMEDIATE TRANSACTION')
-      row = conn.execute('SELECT oid,size FROM Cell WHERE block=? AND ckey=?',(self.block,ckey)).fetchone()
-      if row is None:
+    if (cval:=self.memory.get(ckey,self)) is not self: return cval # self is unlikely to be a stored value
+    with self.db.session_maker() as session:
+      q = select(Cell).where((Cell.block_oid==self.oid)&(Cell.ckey==ckey))
+      cell = session.execute(q).scalar()
+      newcell = cell is None
+      if newcell is True:
         if self.cacheonly: raise Exception('Cache cell creation disallowed')
-        cell = conn.execute('INSERT INTO Cell (block,ckey) VALUES (?,?)',(self.block,ckey)).lastrowid
-        setval = self.db.storage.insert(cell)
+        cell = Cell(block_oid=self.oid,ckey=ckey,tstamp=NOW())
+        session.add(cell); session.flush(); oid = cell.oid
+        session.commit()
       else:
-        cell,size = row
-        getval = self.db.storage.lookup(cell,size==0)
-    if row is None:
-      logger.info('%s MISS(%s)',self,cell)
-      tm = time()
+        oid,wait = cell.oid,cell.size==0
+    if newcell is True:
+      logger.info('%s MISS(%s)', self, oid)
+      start = NOW()
       try: cval = self.functor.getval(arg)
       except BaseException as e: cval = e; size = -1
       else: size = 1
-      tm = time()-tm
-      try: size *= setval(cval)
-      except:
-        with self.db.connect() as conn:
-          conn.execute('DELETE FROM Cell WHERE oid=?',(cell,))
-        raise
-      with self.db.connect() as conn:
-        conn.execute('UPDATE Cell SET size=?, duration=?, tstamp=datetime(\'now\') WHERE oid=?',(size,tm,cell))
-        if not conn.total_changes: logger.info('%s LOST(%s)',self,cell)
+      duration = (NOW()-start).total_seconds()
+      size *= self.db.storage.setval(oid,cval)
+      with self.db.session_maker() as session:
+        cell = session.get(Cell,oid)
+        if cell is None: raise Exception(f'Lost cell {oid}')
+        cell.size,cell.duration,cell.tstamp = size,duration,NOW()
+        session.commit()
       if size<0: raise cval
     else:
-      if size==0: logger.info('%s WAIT(%s)',self,cell)
-      cval = getval()
-      logger.info('%s HIT(%s)',self,cell)
-      with self.db.connect() as conn:
-        conn.execute('UPDATE Cell SET hits=hits+1, tstamp=datetime(\'now\') WHERE oid=?',(cell,))
+      if wait is True: logger.info('%s WAIT(%s)',self,oid)
+      cval = self.db.storage.getval(oid,wait)
+      logger.info('%s HIT(%s)',self,oid)
+      with self.db.session_maker() as session:
+        cell = session.get(Cell,oid); cell.hits += 1; cell.tstamp = NOW(); session.commit()
       if isinstance(cval,BaseException): raise cval
     try: self.memory[ckey] = cval
     except: pass
     return cval
-
-#--------------------------------------------------------------------------------------------------
-# Methods defining the Mapping behaviour
-#--------------------------------------------------------------------------------------------------
-
-  def __getitem__(self,cell):
-    with self.db.connect() as conn:
-      r = conn.execute('SELECT ckey, tstamp, hits, size, duration FROM Cell WHERE oid=?',(cell,)).fetchone()
-    if r is None: raise KeyError(cell)
-    return r
-
-  def __delitem__(self,cell):
-    with self.db.connect() as conn:
-      conn.execute('DELETE FROM Cell WHERE oid=?',(cell,))
-      if not conn.total_changes: raise KeyError(cell)
-
-  def __setitem__(self,cell,v):
-    raise Exception('Direct create/update not permitted on Cell')
-
-  def __iter__(self):
-    with self.db.connect() as conn:
-      for cell, in conn.execute('SELECT oid FROM Cell WHERE block=?',(self.block,)): yield cell
-
-  def __len__(self):
-    with self.db.connect() as conn:
-      return conn.execute('SELECT count(*) FROM Cell WHERE block=?',(self.block,)).fetchone()[0]
-
-  def items(self):
-    r"""Returns a view on this instance's cells."""
-    with self.db.connect() as conn:
-      for row in conn.execute('SELECT oid, ckey, tstamp, hits, size, duration FROM Cell WHERE block=?',(self.block,)):
-        yield row[0],row[1:]
-
-  def clear(self):
-    r"""Removes all cells from this instance."""
-    with self.db.connect() as conn:
-      conn.execute('DELETE FROM Cell WHERE block=?',(self.block,))
 
 #--------------------------------------------------------------------------------------------------
 # Representation methods
@@ -382,13 +269,22 @@ Implements cacheing as follows:
 
   def _repr_html_(self): from .html import repr_html; return repr_html(self)
   _html_limit = 50
-  def as_html(self,_,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz)),time_fmt_=(lambda t: '' if t is None else time_fmt(t))):
+  def as_html(self,_,session=None,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz)),time_fmt_=(lambda t: '' if t is None else time_fmt(t))):
     from .html import html_table
-    n = len(self)-self._html_limit
-    L = self.items(); closing = None
-    if n>0: L = islice(L,self._html_limit); closing = f'{n} more'
-    return html_table(sorted(L),hdrs=('ckey','tstamp','hits','size','duration'),fmts=((lambda ckey,h=self.functor.html: h(ckey,_)),str,str,size_fmt_,time_fmt_),opening=repr(self),closing=closing)
-  def __repr__(self): return f'Cache<{repr(self.functor)}>'
+    if session is None: session = self.db.session_maker()
+    with session:
+      L = sorted([cell for cell, in islice(session.execute(select(Cell).where(Cell.block_oid==self.oid)),self._html_limit)],key=(lambda cell: cell.tstamp))
+      n = session.execute(select(func.count(Cell.oid)).where(Cell.block_oid==self.oid)).scalar()-self._html_limit
+      closing = f'{n} more' if n>0 else None
+      return html_table(
+        [(cell.oid,(cell.ckey,cell.tstamp,cell.hits,cell.size,cell.duration)) for cell in L],
+        hdrs=('ckey','tstamp','hits','size','duration'),
+        fmts=((lambda ckey,h=self.functor.html: h(ckey,_)),str,str,size_fmt_,time_fmt_),
+        opening=repr(self),
+        closing=closing
+      )
+
+  def __repr__(self): return f'{self.__class__.__name__}<{self.functor!r}>'
 
 #==================================================================================================
 class AbstractFunctor (metaclass=abc.ABCMeta):
@@ -398,7 +294,7 @@ An instance of this class defines a type of (single argument) call to be cached.
 #==================================================================================================
 
   @abc.abstractmethod
-  def getkey(self,arg):
+  def getkey(self,arg:Any):
     r"""
 :param arg: an arbitrary python object.
 
@@ -407,7 +303,7 @@ Returns a byte string which represents *arg* uniquely.
     raise NotImplementedError()
 
   @abc.abstractmethod
-  def getval(self,arg):
+  def getval(self,arg:Any):
     r"""
 :param arg: an arbitrary python object.
 
@@ -431,32 +327,34 @@ An instance of this class stores cached values on a persistent support.
   """
 #==================================================================================================
 
-  @abc.abstractmethod
-  def insert(self,cell:int)->Callable[[Any],int]:
-    r"""
-:param cell: the identifier of a cell
+  db_url:str
+  r"""sqlalchemy url of the index database"""
 
-Returns the function to call to set a cell value. This method is called inside the transaction which inserts a new cell into a cache index, hence exactly once overall for a given cell. The returned function is then called, but outside the transaction. It is passed the computed value and must return the size in bytes of its storage. The cell may have disappeared from the cache when called, or may disappear while executing, so the assignment may have to later be rolled back.
+  @abc.abstractmethod
+  def setval(self,oid:int,val:Any)->int:
+    r"""
+:param oid: the identifier of a cell
+
+Stores the cell value. This method is called inside the transaction which inserts a new cell into a cache index, hence exactly once overall for a given cell.
     """
     raise NotImplementedError()
 
   @abc.abstractmethod
-  def lookup(self,cell:int,wait:bool)->Callable[[],Any]:
+  def getval(self,oid:int,wait:bool)->Any:
     r"""
-:param cell: the identifier of a cell
+:param oid: the identifier of a cell
 :param wait: whether the cell value is currently being computed by a concurrent thread/process
 
-Returns the function to call to get a cell value. This method is called inside the transaction which looks up a cell from a cache index, which may happens multiple times in possibly concurrent threads/processes for a given cell. The returned function is then called, but outside the transaction.
+Retrieves the cell value, possibly waiting for it to be stored. This method is called inside the transaction which looks up a cell from a cache index, which may happens multiple times in possibly concurrent threads/processes for a given cell.
     """
     raise NotImplementedError()
 
   @abc.abstractmethod
-  def remove(self,cell:int,size:int):
+  def remove(self,L:Iterable[int]):
     r"""
-:param cell: the identifier of a cell
-:param size: size of the cell
+:param L: an iterable of cell identifiers
 
-Frees the storage resources associated with a cell. This method is called inside the transaction which deletes a cell from a cache index.
+Frees the storage resources associated with the cells.
     """
     raise NotImplementedError()
 
@@ -475,7 +373,7 @@ An instance of this class defines a functor attached to a python top-level versi
   r"""the versioned function characterizing this functor"""
   sig:inspect.Signature
   r"""signature of this functor"""
-  config:tuple['Shadow',Any]
+  config:tuple[Shadow,Any]
   r"""configuration of this functor"""
 
   def __new__(cls,spec,fromfunc:bool=True):
@@ -541,7 +439,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
   def obsolete(self): return self.config[0].obsolete()
 
 def sig_dump(sig): return tuple((p.name,p.kind,p.default) for p in sig.parameters.values())
-def sig_load(x): return inspect.Signature(inspect.Parameter(name,kind,default=default) for name,kind,default in x)
+def sig_load(x): return inspect.Signature([inspect.Parameter(name,kind,default=default) for name,kind,default in x])
 
 #==================================================================================================
 class FileStorage (AbstractStorage):
@@ -555,121 +453,116 @@ The storage for a cell consists of a content file which contains the value of th
 #==================================================================================================
 
   path:Path
-  r"""Directory where values are stored"""
-
+  r"""directory where values are stored"""
+  gate: Mapping
+  r"""dictionary of threading events"""
+  from watchdog.events import FileSystemEventHandler
+  class MyEventHandler(FileSystemEventHandler):
+    r"""Watchdog event for new value files."""
+    def __init__(self):
+      gate = {}
+      lock = threading.Lock()
+      def notify(p):
+        with lock:
+          if (ev:=gate.get(p)) is not None: ev.set(); del gate[p]
+      self.notify = notify
+      def wait(p):
+        with lock:
+          if p.exists(): return
+          if (ev:=gate.get(p)) is None: ev = gate[p] = threading.Event()
+        ev.wait()
+      self.wait = wait
+      def remove(L):
+        with lock:
+          for p in L:
+            if gate.get(p) is not None: del gate[p]
+      self.remove = remove
+      super().__init__()
+    def on_moved(self,event):
+      r""""""
+      p = Path(event.dest_path)
+      if p.suffix == '.pck': self.notify(p)
+  del FileSystemEventHandler
   def __init__(self,path:Path):
+    from watchdog.observers import Observer
     self.path = path
-    self.mode = path.stat().st_mode
+    self.monitor = monitor = self.MyEventHandler()
+    observer = Observer()
+    observer.schedule(monitor,path,recursive=True)
+    observer.start()
 
 #--------------------------------------------------------------------------------------------------
-  def insert(self,cell:int)->Callable[[Any],int]:
+  def setval(self,oid:int,val:Any)->int:
     r"""
-Opens the content file path for *cell* in write mode, acquires the corresponding synch lock, then returns a setter function which pickle-dumps its argument into the content file, closes it and releases the synch lock.
+Dumps (pickle) *val* into some temporary file and renames it to the content path for *oid*. Renaming will trigger a :mod:`watchdog` event for other processes.
     """
 #--------------------------------------------------------------------------------------------------
-    def setval(val):
-      try: pickle.dump(val,vfile)
-      except Exception as e: vfile.seek(0); vfile.truncate(); pickle.dump(e,vfile)
-      s = vfile.tell()
-      vfile.close()
-      synch_close()
-      return s
-    vpath = self.getpath(cell)
-    vfile = vpath.open('wb')
-    vpath.chmod(self.mode&0o666)
-    synch_close = self.insert_synch(vpath)
-    try: os.sync()
-    except: pass
-    return setval
+    vpath = self.getpath(oid)
+    p = vpath.with_suffix('.tmp')
+    with p.open('wb') as v:
+      try: pickle.dump(val,v)
+      except Exception as e: v.seek(0); v.truncate(); pickle.dump(e,v)
+    p.rename(vpath)
+    return vpath.stat().st_size
 
 #--------------------------------------------------------------------------------------------------
-  def lookup(self,cell:int,wait:bool)->Callable[[],Any]:
+  def getval(self,oid:int,wait:bool)->Any:
     r"""
-Opens the content file path for *cell* in read mode, then returns a getter function which waits for the corresponding synch lock to be released (if *wait* is True), then pickle-loads the content file and returns the obtained value.
+If *wait*, waits for the content file for *oid* to appear. Then loads (pickle) from that file and return the value.
     """
 #--------------------------------------------------------------------------------------------------
-    vpath = self.getpath(cell)
-    vfile = vpath.open('rb')
-    wait_ = self.lookup_synch(vpath) if wait else lambda: None
-    def getval():
-      wait_()
-      try: return pickle.load(vfile)
-      finally: vfile.close()
-    return getval
+    vpath = self.getpath(oid)
+    if wait: self.monitor.wait(vpath)
+    with vpath.open('rb') as u: return pickle.load(u)
 
 #--------------------------------------------------------------------------------------------------
-  def remove(self,cell:int,size:int):
+  def remove(self,L:Iterable[int]):
     r"""
-Removes the content file path for *cell* as well as the corresponding synch lock.
+Removes the content file path for oids in L.
     """
 #--------------------------------------------------------------------------------------------------
-    vpath = self.getpath(cell)
-    try: vpath.unlink(); self.remove_synch(vpath)
-    except: pass
+    def rm_vpath(oid):
+      vpath = self.getpath(oid)
+      try: vpath.unlink()
+      except FileNotFoundError: logger.warning('%s unable to remove content file path: %s for oid: %s',self,vpath,oid)
+      return vpath
+    self.monitor.remove([rm_vpath(oid) for oid in L])
 
 #--------------------------------------------------------------------------------------------------
-  def getpath(self,cell:int,masks=tuple((n,31<<n) for n in range(20,-5,-5))):
+  def clear(self):
     r"""
-Returns the content file path (as a :class:`pathlib.Path` instance) associated to *cell* (of type :class:`int`). It is composed of two parts (a directory name and a file name), joined to the main :attr:`path` attribute. The directory is created if it does not already exist. The concatenation of the directory name (without its prefix ``X``) and the file name (without its suffix ``.pck``) is the representation of *cell* in base 32 (digits are 0-9A-V). This mapping of cells to paths ensures that no sub-directory holds more than 1024 cells. It assumes that cells are created sequentially (which is what AUTOINCREMENT in sqlite3 does), so the number of sub-directories grows slowly.
+Clears all storage.
     """
 #--------------------------------------------------------------------------------------------------
-    s = ''.join('0123456789ABCDEFGHIJKLMNOPQRSTUV'[(cell&m)>>n] for n,m in masks)
+    from shutil import rmtree
+    for f in self.path.iterdir():
+      if f.is_dir(): rmtree(f)
+      else: f.unlink()
+
+#--------------------------------------------------------------------------------------------------
+  def getpath(self,oid:int,masks=tuple((n,31<<n) for n in range(20,-5,-5))):
+    r"""
+Returns the content file path (as a :class:`pathlib.Path` instance) associated to *oid* (of type :class:`int`). It is composed of two parts (a directory name and a file name), joined to the main :attr:`path` attribute. The directory is created if it does not already exist. The concatenation of the directory name (without its prefix ``X``) and the file name (without its suffix ``.pck``) is the representation of *oid* in base 32 (digits are 0-9A-V). This mapping of oids to paths ensures that no sub-directory holds more than 1024 oids. It assumes that oids are created sequentially (which is what AUTOINCREMENT in databases does), so the number of sub-directories grows slowly.
+    """
+#--------------------------------------------------------------------------------------------------
+    s = ''.join('0123456789ABCDEFGHIJKLMNOPQRSTUV'[(oid&m)>>n] for n,m in masks)
     p = self.path/('X'+s[:3])
-    if not p.exists(): p.mkdir(exist_ok=True); p.chmod(self.mode)
+    if not p.exists(): p.mkdir(exist_ok=True)
     return (p/s[3:]).with_suffix('.pck')
 
-#--------------------------------------------------------------------------------------------------
-# Synchronisation mechanism based on sqlite (for portability: could probably be simplified)
-#--------------------------------------------------------------------------------------------------
-
-  @staticmethod
-  def insert_synch(vpath:Path)->Callable[[],None]:
-    tpath = vpath.with_suffix('.tmp')
-    tpath.touch()
-    tpath.chmod(vpath.stat().st_mode)
-    synch = sqlite3.connect(str(tpath))
-    synch.execute('BEGIN EXCLUSIVE TRANSACTION')
-    return synch.close
-
-  @staticmethod
-  def lookup_synch(vpath:Path,timeout:float=600.)->Callable[[],None]:
-    tpath = vpath.with_suffix('.tmp')
-    synch = sqlite3.connect(str(tpath),timeout=timeout)
-    def wait():
-      while True:
-        if not tpath.exists(): synch.close(); raise Exception('synch file lost!')
-        try: synch.execute('BEGIN IMMEDIATE TRANSACTION')
-        except sqlite3.OperationalError as e:
-          if e.args[0] != 'database is locked': synch.close(); raise
-          continue
-        break
-      synch.close()
-    return wait
-
-  @staticmethod
-  def remove_synch(vpath:Path):
-    tpath = vpath.with_suffix('.tmp')
-    tpath.unlink()
+  def __repr__(self): return f'{self.__class__.__name__}<{self.path}>'
 
 #==================================================================================================
 class DefaultStorage (FileStorage):
   r"""
-The default storage class for a cache repository. Stores the index database in the same directory as the values, with name ``index.db``.
-
-Attributes:
-
-.. attribute:: dbpath
-
-   The :class:`pathlib.Path` to the sqlite database holding the index
+The default storage class for a cache repository. Stores the index as a sqlite3 database in the same directory as the values, with name ``index.db``.
   """
 #==================================================================================================
   def __init__(self,path:Path):
     super().__init__(path)
-    self.dbpath = path/'index.db'
-    if not self.dbpath.exists():
-      if any(path.iterdir()): raise Exception('Cannot create new index in non empty directory')
-      self.dbpath.touch(exist_ok=True)
-      self.dbpath.chmod(self.mode&0o666)
+    dbpath = path/'index.db'
+    if not dbpath.exists() and any(path.iterdir()): raise Exception('Cannot create new index in non empty directory')
+    self.db_url = f'sqlite+pysqlite:///{dbpath}'
 
 #==================================================================================================
 # Utilities

@@ -1,4 +1,4 @@
-# File:                 demo/demo_cache.py
+# File:                 demo/mod_cache.py
 # Contributors:         Jean-Marc Andreoli
 # Language:             python
 # Purpose:              Illustration of the cache module
@@ -19,7 +19,7 @@ if __name__ == '__main__':
   from PYTOOLS.cache import CacheDB
   import subprocess
   source,dbpath = RUN.source,RUN.path('.dir')
-  CacheDB(dbpath).clear()
+  CacheDB(dbpath).storage.clear()
   modname = 'example' # __name__ of module loaded in spawned processes (must be the same for all for cacheing to work)
   source,dbpath = map(str,(source,dbpath))
   def spawn(key,runid):
@@ -67,7 +67,7 @@ else:
 
   def demo(key,runid):
     import logging
-    logging.basicConfig(level=logging.INFO,format=f'[{runid}@%(asctime)s] %(message)s',datefmt='%S')
+    logging.basicConfig(level=logging.INFO,stream=sys.stdout,format=f'[{runid}@%(asctime)s] %(message)s',datefmt='%S')
     logger = logging.getLogger()
     for expr in DEMOS[key]:
       logger.info('??? %s%s',key,expr)

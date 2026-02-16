@@ -25,34 +25,25 @@ def SQLinit(engine:str|Engine,meta:MetaData)->Engine:
 * When the database is not empty, it must contain a ``Metainfo`` table with a single row matching exactly the :attr:`info` attribute of *meta*, otherwise an exception is raised.
   """
 #==================================================================================================
+  import json
   from sqlalchemy import Table, Column, event
   from sqlalchemy.types import DateTime, Text, Integer
   from sqlalchemy.sql import select, insert, update, delete, and_
   if isinstance(engine,str): engine = create_engine(engine)
-  # if engine.driver == 'pysqlite':
-  #   # fixes a bug in the pysqlite driver; to be removed if fixed
-  #   # see https://docs.sqlalchemy.org/en/20/dialects/sqlite.html#transactions-with-sqlite-and-the-sqlite3-driver
-  #   def do_connect(conn,rec): conn.autocommit = False
-  #   event.listen(engine,'connect',do_connect)
   meta_ = MetaData()
   meta_.reflect(bind=engine)
   if meta_.tables: # engine has some tables
     try:
       with engine.connect() as conn: metainfo, = conn.execute(select(meta_.tables['Metainfo'])).mappings()
-      metainfo = dict(metainfo); del metainfo['created']
+      metainfo = dict(metainfo); del metainfo['created']; data = json.loads(metainfo.pop('data'))
     except: raise SQLinit.MetainfoException('Metainfo table not found or wrong format')
-    for k,v in meta.info.items():
-      if (v_:=metainfo.get(k)) != str(v):
-        raise SQLinit.MetainfoException(f'Metainfo field mismatch {k}[expected:{v},found:{v_}]')
-    # assumes that this is sufficient to entail that meta is entirely contained in meta_
+    if metainfo: raise SQLinit.MetainfoException(f'Unexpected fields in Metainfo table: {metainfo}')
+    if data != meta.info:
+      raise SQLinit.MetainfoException(f'Metainfo data mismatch [expected:{meta.info},found:{data}]')
   else: # engine is empty
-    metainfo_table = Table(
-      'Metainfo',meta_,
-      Column('created',DateTime()),
-      *(Column(key,Text()) for key in meta.info)
-    )
+    metainfo_table = Table('Metainfo',meta_,Column('created',DateTime()),Column('data',Text()))
     meta_.create_all(bind=engine) # creates just the Metainfo table
-    with engine.begin() as conn: conn.execute(insert(metainfo_table).values(created=datetime.now(),**meta.info))
+    with engine.begin() as conn: conn.execute(insert(metainfo_table).values(created=datetime.now(),data=json.dumps(meta.info)))
     meta.create_all(bind=engine) # creates all the other tables defined in meta
   return engine
 SQLinit.MetainfoException = type('MetainfoException',(Exception,),{})

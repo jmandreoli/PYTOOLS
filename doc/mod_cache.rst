@@ -19,7 +19,7 @@ To illustrate the cross-process capability of the cache, function :func:`demo` r
 
 * Function :func:`longfunc` is also turned into a persistent cache. Unlike :func:`simplefunc`, it takes some time to complete and may raise an exception. The second run hits the same cache cell before the first run has finished to compute it. In that case, the former waits until the latter completes to reuse the cached value. In one demo, that value is an exception, which is raised in both runs (whether waiting occured or not).
 
-* Function :func:`vfunc` is assigned a version (here the process id, just to show the behaviour when the version changes). Therefore, the persistent cache creates distinct cache blocks for the distinct versions, and there is no reuse of the cached values from one run to the other.
+* Function :func:`vfunc` is assigned a version (just to show the behaviour when the version changes). The persistent cache creates distinct cache blocks for the distinct versions, and there is no reuse of the cached values from one run to the other.
 
 * Function :func:`proc` builds a closed symbolic expression (instance of :class:`Expr`) which implements the following workflow based on the two cached functions :func:`stepI` and :func:`stepK`.
 
@@ -63,16 +63,16 @@ In a typical workflow task executor (see e.g. function :func:`stepK` in the exam
 
    def task_exec(E,...):
      ... # compute some update dictionary D from E and the other arguments
-     return dict(E,**D) # first solution
-     return ChainMap(E,**D) # second solution
+     return E|D # first solution
+     return ChainMap(D,E) # second solution
 
 In both cases, the same key-value pairs are returned. There is an important difference though.
 
 * In the first solution, *E* is recursively incarnated by its conversion to a dict, so the cached value contains all the key-value pairs already typically assigned by the previous tasks, to which the new key-value pairs from *D* are appended. The advantage of that solution is that a single cache lookup gives access to the computed results of all the tasks up to the current one. On the other hand, the drawback is that this cached value is mostly redundant with the cached values of the previous tasks, and these may be very large.
 * In the second solution, the cached value essentially holds the new key-value pairs of *D* together with the configuration of *E*, not its recursive incarnation, and the former is usually much smaller than the latter. The price to pay is that access to the results of previous tasks now requires re-incarnating *E* hence re-accessing the cache, but that overhead is often small and worth the economy in overall cache redundancy.
 
-Database schema
----------------
+Database schema and abstract classes
+------------------------------------
 
 .. automodule:: PYTOOLS.cache_v1
    :members:

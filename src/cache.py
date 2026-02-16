@@ -8,7 +8,7 @@
 import logging; logger = logging.getLogger(__name__)
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-import pickle, inspect, threading, abc
+import pickle, inspect, threading
 from pathlib import Path
 from functools import update_wrapper
 from itertools import islice
@@ -16,10 +16,11 @@ from collections import namedtuple
 from weakref import WeakValueDictionary
 from datetime import datetime, timezone
 from sqlalchemy import select, func
-from .cache_v1 import get_sessionmaker, Block, Cell
+from sqlalchemy.exc import IntegrityError
+from .cache_v1 import get_sessionmaker, Block, Cell, AbstractFunctor, AbstractStorage
 from . import size_fmt, time_fmt, pickleclass
 
-__all__ = 'CacheDB', 'CacheBlock', 'AbstractFunctor', 'Functor', 'AbstractStorage', 'FileStorage', 'DefaultStorage'
+__all__ = 'CacheDB', 'CacheBlock', 'Functor', 'FileStorage', 'DefaultStorage', 'Shadow'
 
 NOW = lambda tz=timezone.utc: datetime.now(tz=tz) # shorthand for timestamping
 BlockInfo = namedtuple('BlockInfo','hits ncell ncell_error ncell_pending')
@@ -38,7 +39,6 @@ Instances of this class manage cache repositories. There is at most one instance
   r"""the sqlalchemy url of the database"""
   session_maker:Callable[[],Any]
   r"""the sqlalchemy session maker for manipulation of this database"""
-  timeout:float = 120.
 
   def __new__(cls,spec:CacheDB|Path|str,listing={},lock=threading.Lock()):
     r"""
@@ -78,14 +78,12 @@ Note that this constructor is locally cached on the resolved path *spec*.
   def __hash__(self): return hash(self.path)
   # no need to define '__eq__': default 'is' behaviour works due to '__new__' constructor
 
-  def clear_obsolete(self,strict:bool,dry_run=False):
+  def clear_obsolete(self,tol,dry_run:bool=False):
     r"""
-Clears all the blocks which are obsolete.
+Clears all the blocks which are obsolete with tolerance *tol* of non-obsolescence. If *dry_run*, only return the list of obsolete blocks.
     """
-    assert isinstance(strict,bool)
-    def obsolete(block,strictf=(bool if strict else (lambda o: o is not None)))->bool:
-      return strictf(pickle.loads(block.functor).obsolete()) is True
-    return self.clear((lambda L: [block for block in L if obsolete(block)]),dry_run)
+    assert isinstance(dry_run,bool)
+    return self.clear((lambda L: [block for block in L if pickle.loads(block.functor).obsolete(tol) is True]),dry_run)
     # this may load modules which add new (non obsolete) entries which must not be included in the list
 
   def clear(self,f:Callable[[Sequence[Block]],Sequence[Block]]=(lambda L: L),dry_run:bool=False):
@@ -131,9 +129,7 @@ Instances of this class implements blocks of cells sharing the same functor.
 
 A :class:`CacheBlock` instance is callable, and calls take a single argument. Method :meth:`__call__` implements the cross-process cacheing mechanism which produces and reuses cache cells. It also implements a weak cache for local calls (within its process).
 
-Furthermore, a :class:`CacheBlock` instance acts as a mapping where the keys are cell identifiers (:class:`int`) and values are tuples of meta-information about the cells (i.e. not the values of the cells: these are only accessible through calling).
-
-Finally, :class:`CacheBlock` instances have an HTML ipython display.
+:class:`CacheBlock` instances have an HTML ipython display.
 
 .. automethod:: __call__
   """
@@ -155,12 +151,13 @@ Finally, :class:`CacheBlock` instances have an HTML ipython display.
     self.functor = functor
     if oid is None:
       p = pickle.dumps(functor)
-      with db.session_maker() as session:
+      created = False
+      with db.session_maker(expire_on_commit=False) as session:
         oid = session.execute(select(Block.oid).where(Block.functor==p)).scalar()
         if oid is None:
-          session.add(block:=Block(functor=p)); session.flush(); oid = block.oid; session.commit()
-          logger.info('%s F-MISS(%s)',self,oid)
-        else: logger.info('%s F-HIT(%s)',self,oid)
+          session.add(block:=Block(functor=p)); session.commit()
+          oid = block.oid; created = True
+      logger.info('%s F-%s(%s)',self,('MISS' if created is True else 'HIT'),oid)
     self.oid = oid
     self.cacheonly = cacheonly
     self.memory = WeakValueDictionary()
@@ -216,30 +213,27 @@ Implements cacheing as follows:
 
 - Method :meth:`getkey` of the functor is invoked with argument *arg* to obtain a ``ckey``.
 - If that ``ckey`` is present in the (local) memory mapping of this block, its associated value is returned.
-- Otherwise, a transaction is begun on the index database.
-
-  - If there already exists a cell with the same ``ckey``, method :meth:`lookup` of the storage is invoked to obtain a getter for that cell, then the transaction is terminated and the result is extracted, using the obtained getter. The cell's hit count is incremented.
-  - If there does not exist a cell with the same ``ckey``, a cell with that ``ckey`` is created, and method :meth:`insert` of the storage is invoked to obtain a setter for that cell, then the transaction is terminated. Then, method :meth:`getval` of the functor is invoked with argument *arg* and its result is stored, even if it is an exception, using the obtained setter.
-
-- If the result is an exception, it is raised.
-- Otherwise, the memory mapping of this block is updated at key ``ckey`` with the result (if possible), and the result is returned.
+- Otherwise, if there already exists a cell with the same ``ckey`` in the database, its value is retrieved using method :meth:`getval` of the storage with the cell oid. The cell's hit count is incremented.
+- Otherwise, a cell with that ``ckey`` is created, its value is computed and stored using method :meth:`setval` of the storage with the cell oid.
+- The result can be an exception, in which case, after being stored, it is raised (as well as after each subsequent hits).
     """
 #--------------------------------------------------------------------------------------------------
     ckey = self.functor.getkey(arg)
     if (cval:=self.memory.get(ckey,self)) is not self: return cval # self is unlikely to be a stored value
-    with self.db.session_maker() as session:
-      q = select(Cell).where((Cell.block_oid==self.oid)&(Cell.ckey==ckey))
-      cell = session.execute(q).scalar()
-      newcell = cell is None
-      if newcell is True:
+    lookup = select(Cell).where((Cell.block_oid==self.oid)&(Cell.ckey==ckey))
+    created:bool = False
+    with self.db.session_maker(expire_on_commit=False) as session:
+      cell = session.execute(lookup).scalar()
+      if cell is None:
         if self.cacheonly: raise Exception('Cache cell creation disallowed')
-        cell = Cell(block_oid=self.oid,ckey=ckey,tstamp=NOW())
-        session.add(cell); session.flush(); oid = cell.oid
-        session.commit()
-      else:
-        oid,wait = cell.oid,cell.size==0
-    if newcell is True:
-      logger.info('%s MISS(%s)', self, oid)
+        cell = Cell(block_oid=self.oid,ckey=ckey,tstamp=NOW()); session.add(cell)
+        try: session.commit(); created = True
+        except IntegrityError: # just in case another thread/process created the cell during the session
+          session.rollback()
+          cell = session.execute(lookup).scalar_one()
+      oid,wait = cell.oid,cell.size==0
+    if created is True:
+      logger.info('%s MISS(%s)',self,oid)
       start = NOW()
       try: cval = self.functor.getval(arg)
       except BaseException as e: cval = e; size = -1
@@ -251,16 +245,17 @@ Implements cacheing as follows:
         if cell is None: raise Exception(f'Lost cell {oid}')
         cell.size,cell.duration,cell.tstamp = size,duration,NOW()
         session.commit()
-      if size<0: raise cval
     else:
       if wait is True: logger.info('%s WAIT(%s)',self,oid)
       cval = self.db.storage.getval(oid,wait)
       logger.info('%s HIT(%s)',self,oid)
       with self.db.session_maker() as session:
-        cell = session.get(Cell,oid); cell.hits += 1; cell.tstamp = NOW(); session.commit()
-      if isinstance(cval,BaseException): raise cval
+        cell = session.get(Cell,oid)
+        if cell is None: raise Exception(f'Lost cell {oid}')
+        cell.hits += 1; cell.tstamp = NOW(); session.commit()
     try: self.memory[ckey] = cval
     except: pass
+    if isinstance(cval,BaseException): raise cval
     return cval
 
 #--------------------------------------------------------------------------------------------------
@@ -287,118 +282,43 @@ Implements cacheing as follows:
   def __repr__(self): return f'{self.__class__.__name__}<{self.functor!r}>'
 
 #==================================================================================================
-class AbstractFunctor (metaclass=abc.ABCMeta):
-  r"""
-An instance of this class defines a type of (single argument) call to be cached.
-  """
-#==================================================================================================
-
-  @abc.abstractmethod
-  def getkey(self,arg:Any):
-    r"""
-:param arg: an arbitrary python object.
-
-Returns a byte string which represents *arg* uniquely.
-    """
-    raise NotImplementedError()
-
-  @abc.abstractmethod
-  def getval(self,arg:Any):
-    r"""
-:param arg: an arbitrary python object.
-
-Returns the result of calling this functor with argument *arg*.
-    """
-    raise NotImplementedError()
-
-  @abc.abstractmethod
-  def html(self,ckey:bytes,_):
-    r"""
-:param ckey: a byte string as returned by invocation of method :meth:`getkey`
-
-Returns an HTML formatted representation of the argument of that invocation.
-    """
-    raise NotImplementedError()
-
-#==================================================================================================
-class AbstractStorage (metaclass=abc.ABCMeta):
-  r"""
-An instance of this class stores cached values on a persistent support.
-  """
-#==================================================================================================
-
-  db_url:str
-  r"""sqlalchemy url of the index database"""
-
-  @abc.abstractmethod
-  def setval(self,oid:int,val:Any)->int:
-    r"""
-:param oid: the identifier of a cell
-
-Stores the cell value. This method is called inside the transaction which inserts a new cell into a cache index, hence exactly once overall for a given cell.
-    """
-    raise NotImplementedError()
-
-  @abc.abstractmethod
-  def getval(self,oid:int,wait:bool)->Any:
-    r"""
-:param oid: the identifier of a cell
-:param wait: whether the cell value is currently being computed by a concurrent thread/process
-
-Retrieves the cell value, possibly waiting for it to be stored. This method is called inside the transaction which looks up a cell from a cache index, which may happens multiple times in possibly concurrent threads/processes for a given cell.
-    """
-    raise NotImplementedError()
-
-  @abc.abstractmethod
-  def remove(self,L:Iterable[int]):
-    r"""
-:param L: an iterable of cell identifiers
-
-Frees the storage resources associated with the cells.
-    """
-    raise NotImplementedError()
-
-#==================================================================================================
 class Functor (AbstractFunctor):
   r"""
-An instance of this class defines a functor attached to a python top-level versioned function. The functor is entirely defined by the name of the function, that of its module, its version and its signature. These components are saved on pickling and restored on unpickling, even if the function has disappeared or changed. This is not checked on unpickling, and method :meth:`getval` is disabled.
+An instance of this class defines a functor attached to a python top-level versioned function. The functor is entirely defined by the name of the function, that of its module, its version and its signature (without annotations). These components are saved on pickling and restored on unpickling, even if the function has disappeared or changed. This is not checked on unpickling, but method :meth:`getval` is disabled.
 
 .. automethod:: __new__
   """
 #===================================================================================================
 
-  __slots__ = 'config', 'sig', 'func'
+  __slots__ = 'func', 'sig', 'shadow'
 
   func:Callable
   r"""the versioned function characterizing this functor"""
   sig:inspect.Signature
   r"""signature of this functor"""
-  config:tuple[Shadow,Any]
-  r"""configuration of this functor"""
 
-  def __new__(cls,spec,fromfunc:bool=True):
+  def __new__(cls,func:Callable,sig:inspect.Signature|None=None)->Functor:
     r"""
-Generates a functor.
+:param func: a versioned function, defined at the top-level of its module (hence pickable)
+:param sig: only used on unpickling
 
-:param spec: a versioned function, defined at the top-level of its module (hence pickable)
+Generates a functor associated with the function *func*.
     """
+    if sig is None:
+      shadow = Shadow(func)
+      sig = inspect.Signature([inspect.Parameter(p.name,p.kind,default=p.default) for p in inspect.signature(func).parameters.values()]) # just removes annotations
+    else: assert isinstance(func,Shadow); shadow = func
     self = super().__new__(cls)
-    if fromfunc:
-      self.func = spec
-      self.sig = sig = inspect.signature(spec)
-      self.config = Shadow(spec),sig_dump(sig)
-    else:
-      self.sig = sig_load(spec[-1])
-      self.config = spec
+    self.func,self.sig,self.shadow = func,sig,shadow
     return self
 
-  def __getnewargs__(self): return self.config,False
+  def __getnewargs__(self): return self.shadow,self.sig
   def __getstate__(self): return
-  def __hash__(self): return hash(self.config)
-  def __eq__(self,other): return isinstance(other,Functor) and self.config==other.config
-  def __repr__(self): return f'{self.config[0]}{self.sig}'
+  def __hash__(self): return hash(self.shadow)
+  def __eq__(self,other): return isinstance(other,Functor) and self.shadow==other.shadow
+  def __repr__(self): return f'{self.shadow!r}{self.sig}'
 
-  class fpickle (pickleclass):
+  class _fpickle (pickleclass):
     class Pickler (pickle.Pickler):
       def persistent_id(self,obj):
         if inspect.isfunction(obj) and hasattr(obj,'version'): return Shadow(obj)
@@ -412,7 +332,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
     """
 #--------------------------------------------------------------------------------------------------
     a,ka = self.norm(arg)
-    return self.fpickle.dumps((a,sorted(ka.items())))
+    return self._fpickle.dumps((a,sorted(ka.items())))
 
   def getval(self,arg:tuple[Iterable[Any],Mapping[str,Any]]):
 #--------------------------------------------------------------------------------------------------
@@ -427,7 +347,7 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
   def html(self,ckey:bytes,_):
 #--------------------------------------------------------------------------------------------------
     from .html import html_parlist
-    a,ka = self.fpickle.loads(ckey)
+    a,ka = self._fpickle.loads(ckey)
     return html_parlist(_,a,ka)
 
   def norm(self,arg:tuple[Iterable[Any],Mapping[str,Any]]):
@@ -436,10 +356,11 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
     b.apply_defaults()
     return b.args, b.kwargs
 
-  def obsolete(self): return self.config[0].obsolete()
-
-def sig_dump(sig): return tuple((p.name,p.kind,p.default) for p in sig.parameters.values())
-def sig_load(x): return inspect.Signature([inspect.Parameter(name,kind,default=default) for name,kind,default in x])
+  def obsolete(self,tol)->bool:
+    r"""
+Returns whether this functor is obsolete. This concerns only unpickled functors, and obsolescence is determined by the unpickled attribute :attr:`func`.
+    """
+    return self.shadow.obsolete(tol) if self.func is self.shadow else False
 
 #==================================================================================================
 class FileStorage (AbstractStorage):
@@ -462,7 +383,7 @@ The storage for a cell consists of a content file which contains the value of th
     def __init__(self):
       gate = {}
       lock = threading.Lock()
-      def notify(p):
+      def notify(p): # here p.exists() must be true so there can be no future calls gate[p].wait()
         with lock:
           if (ev:=gate.get(p)) is not None: ev.set(); del gate[p]
       self.notify = notify
@@ -524,7 +445,7 @@ Removes the content file path for oids in L.
     def rm_vpath(oid):
       vpath = self.getpath(oid)
       try: vpath.unlink()
-      except FileNotFoundError: logger.warning('%s unable to remove content file path: %s for oid: %s',self,vpath,oid)
+      except FileNotFoundError: logger.warning('%s unable to remove content file for oid: %s at path: %s',self,oid,vpath)
       return vpath
     self.monitor.remove([rm_vpath(oid) for oid in L])
 
@@ -584,16 +505,22 @@ A decorator which makes a function persistently cached. The cached function beha
 #--------------------------------------------------------------------------------------------------
 class Shadow:
   r"""
-Instances of this class are defined from versioned functions (ie. functions defined at the toplevel of their module, and with an attribute :attr:`version` defined). Their state is composed of the name, the module name and the version of the original function. They can be arbitrarily pickled and unpickled and produce a string representation close to that of their origin. However, unpickling does not restore the calling capacity of their origin.
+Instances of this class are defined from versioned functions (ie. functions defined at the toplevel of their module, and with an attribute :attr:`version` defined). Their state is composed of the name, the module name and the version of the original function. They can be arbitrarily pickled and unpickled and produce a string representation close to that of their origin. However, unpickling may fail to restore the calling capacity of their origin.
   """
 #--------------------------------------------------------------------------------------------------
 
-  __slots__ = 'config',
+  __slots__ = 'config', 'func', '_origin'
+  class VersionMismatchException (Exception): pass
 
   def __new__(cls,spec,fromfunc=True):
     self = super().__new__(cls)
-    if fromfunc: spec = spec.__module__,spec.__name__,spec.version
-    self.config = spec
+    if fromfunc:
+      assert inspect.isfunction(spec)
+      self.func = self._origin = func = spec
+      self.config = func.__module__,func.__name__,func.version
+    else:
+      self.config = spec
+      self._origin = None
     return self
   def __getnewargs__(self): return self.config,False
   def __getstate__(self): return
@@ -602,23 +529,38 @@ Instances of this class are defined from versioned functions (ie. functions defi
   def __repr__(self):
     module,name,version = self.config
     return f'{module}.{name}{'' if version is None else f'{{{version}}}'}'
-  def obsolete(self):
+  @property
+  def origin(self)->Callable|Exception:
     r"""
-Returns :const:`None` if this instance is up-to-date. It may be obsolete for two reasons:
-
-* the function it refers to (by module name and function name) cannot be imported or is not a versioned function: in that case the empty tuple is returned;
-* it can be imported as a versioned function, but has a different version from that of this instance: in that case, the pair of the current version of the imported function and the version of this instance is returned.
-
-Note that this method may import modules which in turn may create cache entries (for new versions of functions). It should therefore not be called in a cache transaction.
+  Returns the function which was originally shadowed with the same version, if possible, otherwise an exception (returned, not raised).
     """
-    from importlib import import_module
-    module,name,version = self.config
-    try:
-      f = getattr(import_module(module),name)
-      if inspect.isfunction(f) and f.__module__==module and f.__name__==name:
-        return None if f.version==version else (f.version,version)
-    except: pass
-    return ()
+    o: Callable|Exception|None = self._origin
+    if o is None:
+      from importlib import import_module
+      module,name,version = self.config
+      try:
+        o = getattr(import_module(module),name)
+        if not inspect.isfunction(o) or o.__module__!=module or o.__name__!=name or not hasattr(o,'version'): raise Exception(f'Failed to import matching function.')
+        if o.version!=version: raise Shadow.VersionMismatchException(o.version,version)
+      except Exception as exc: o = exc
+      self._origin = o
+    return o
+
+  def obsolete(self,tol:int)->bool:
+    r"""
+:param tol: must be :const:`0` or :const:`1` (the latter indicates that a version mismatch does not yield obsolescence)
+
+Returns :const:`True` if attribute :attr:`origin` is an exception, i.e. the originally shadowed function could not be reconstructed, and *tol* is null or the exception is not a version mismatch. Otherwise, returns :const:`False`.
+    """
+    assert isinstance(tol,int) and tol in (0,1)
+    match self.origin:
+      case Shadow.VersionMismatchException(): return tol==0
+      case Exception(): return True
+      case _: return False
+
+  def __call__(self,*a,**ka):
+    if isinstance((o:=self.origin),Exception): raise o
+    return o(*a,**ka)
 
 #--------------------------------------------------------------------------------------------------
 def manage(*paths,ivname='db'):

@@ -18,18 +18,21 @@ if __name__ == '__main__':
   #   * wait for them both to complete
   from PYTOOLS.cache import CacheDB
   import subprocess
-  source,dbpath = RUN.source,RUN.path('.dir')
+  def spawn(key,runid): # dynamically imports this file as a module and launches demo in separate process
+    config = {'_dbpath':dbpath,'_version':runid}
+    loglevel,demo = ('INFO','') if key is None else ('WARNING',f'.demo({key!r})')
+    instr = f'''import logging,sys
+logging.basicConfig(level=logging.{loglevel},stream=sys.stdout,format="[{runid}@%(asctime)s] %(message)s",datefmt="%S")
+from PYTOOLS import import_module_from_file
+import_module_from_file({modname!r},{source!r},{config!r}){demo}'''
+    return subprocess.Popen([sys.executable,'-c',instr])
+  source,dbpath = str(RUN.source),str(RUN.path('.dir'))
   CacheDB(dbpath).storage.clear()
   modname = 'example' # __name__ of module loaded in spawned processes (must be the same for all for cacheing to work)
-  source,dbpath = map(str,(source,dbpath))
-  def spawn(key,runid):
-    # instruction to dynamically import this file as a module and launch demo; must be a standard module (not exec-dict or runpy)
-    instr = f'from PYTOOLS import import_module_from_file; import_module_from_file({modname!r},{source!r},dict(_dbpath={dbpath!r},_version={runid!r})).demo({key!r},{runid!r})'
-    return subprocess.Popen([sys.executable,'-c',instr])
-  for key in DEMOS.keys():
+  for key in (None,*DEMOS.keys()):
     print(80*'-',flush=True)
     wA = spawn(key,'A'); time.sleep(2); wB = spawn(key,'B')
-    if any(rc:=(wA.wait(),wB.wait())): raise Exception(f'rc:{rc}')
+    assert not any(rc:=(wA.wait(),wB.wait())), f'rc:{rc}'
 else:
   # Spawned process. The cache is shared (persistent) across all spawned processes
   from collections import ChainMap
@@ -65,13 +68,12 @@ else:
     P_abc = MapExpr(stepK,MapExpr(ChainMap,P_ab,P_bc),fr=('ab','bc'),to='abc',r=rabc)
     return P_abc
 
-  def demo(key,runid):
-    import logging
-    logging.basicConfig(level=logging.INFO,stream=sys.stdout,format=f'[{runid}@%(asctime)s] %(message)s',datefmt='%S')
-    logger = logging.getLogger()
+  def demo(key):
+    import logging; (logger:=logging.getLogger()).setLevel(logging.INFO)
     for expr in DEMOS[key]:
-      logger.info('??? %s%s',key,expr)
-      try: val = eval(key+expr)
+      expr = key+expr
+      logger.info('??? %s',expr)
+      try: val = eval(expr)
       except Exception as exc: val = f'raised[{exc}]'
-      logger.info('>>> %s%s = %s',key,expr,val)
+      logger.info('>>> %s = %s',expr,val)
       time.sleep(.1)

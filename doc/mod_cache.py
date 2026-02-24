@@ -35,8 +35,7 @@ import_module_from_file({modname!r},{source!r},{config!r}){demo}'''
     assert not any(rc:=(wA.wait(),wB.wait())), f'rc:{rc}'
 else:
   # Spawned process. The cache is shared (persistent) across all spawned processes
-  from collections import ChainMap
-  from PYTOOLS import MapExpr, versioned
+  from PYTOOLS import symbolic, versioned
   from PYTOOLS.cache import persistent_cache
   import functools; persistent_cache = functools.partial(persistent_cache,db=_dbpath)
 
@@ -53,19 +52,21 @@ else:
   @versioned(_version)
   def vfunc(x): return x*x
 
+  @symbolic
   @persistent_cache
   def stepI(d,**ini): return {k:f'I({v}{d})' for k,v in ini.items()}
 
+  @symbolic
   @persistent_cache
   def stepK(E,fr=None,to=None,r=None):
     p,q = fr
-    return ChainMap({to:f'K({E[p]},{E[q]},{r})'},E)
+    return E|{to:f'K({E[p]},{E[q]},{r})'}
 
   def proc(rab='ab',rbc='bc',rabc='abc',d='*'):
-    P_ini = MapExpr(stepI,d,a='a',b='b',c='c')
-    P_ab = MapExpr(stepK,P_ini,fr=('a','b'),to='ab',r=rab)
-    P_bc = MapExpr(stepK,P_ini,fr=('b','c'),to='bc',r=rbc)
-    P_abc = MapExpr(stepK,MapExpr(ChainMap,P_ab,P_bc),fr=('ab','bc'),to='abc',r=rabc)
+    P_ini = stepI.symbolic(d,a='a',b='b',c='c')
+    P_ab = stepK.symbolic(P_ini,fr=('a','b'),to='ab',r=rab)
+    P_bc = stepK.symbolic(P_ini,fr=('b','c'),to='bc',r=rbc)
+    P_abc = stepK.symbolic(P_ab|P_bc,fr=('ab','bc'),to='abc',r=rabc)
     return P_abc
 
   def demo(key):

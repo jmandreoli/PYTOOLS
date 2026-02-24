@@ -24,11 +24,11 @@ Objects of this class are python contexts which can be used to encapsulate any p
 Each field descriptor is either a value or a dictionary of a value (key: `value`), its SQL type (key: `type`), and optionally a callable to use in case of error (key: `error`). The field is dynamic if the value is callable (with no argument) or static otherwise. The SQL type, if not specified, is inferred either from the value for a static field or from a single call to the value otherwise.
   """
   def __init__(self,path:str|Path,_interval:float=1.,_maxerror:int=3,**fields):
+    r""""""
     def run_():
       try: self.open_()
       except Exception as exc: logger.warning('Unable to open status file %s (giving up): %s',path,exc); return
       error = 0
-      lasterr = None
       ongoing = True
       while ongoing:
         ongoing = not self.stop_requested.wait(_interval)

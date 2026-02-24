@@ -8,20 +8,17 @@ from PYTOOLS.html import repr_html
 class Node: # class of nodes in a (possibly cyclic) directed graph
 
   tag:str
-  succ:list['Node']
+  succ:list[Node]
 
-  def __init__(self,tag:str,*succ:'Node'):
+  def __init__(self,tag:str,*succ:Node):
     self.tag,self.succ = tag,list(succ)
 
-  def as_html(self,_):
-    # returns a tabular representation of the graph
-    from lxml.html.builder import E
-    succ = (y for x in self.succ for y in (_(x),'|'))
-    return E.div(E.b(self.tag),'[|',*succ,']')
-
-  def __repr_html__(self):
+  def _repr_html_(self,tail=None):
     # for use with IPython smart display
-    return repr_html(self)
+    from lxml.html.builder import E
+    if tail is None: return repr_html(self)
+    succ = (y for x in self.succ for y in (tail(x),'|'))
+    return E.div(E.b(self.tag),'[|',*succ,']')
 
 # A trellis graph
 def trellis(recurs=False):

@@ -6,18 +6,14 @@
 #
 
 import logging; logger = logging.getLogger(__name__)
-from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence, Iterator
+from typing import Any, Callable, Iterable, Mapping, Iterator
 
 import re, collections
 
 #==================================================================================================
 class owrap:
   r"""
-Objects of this class present an attribute oriented proxy interface to an underlying mapping object.
-
-:param __ref__: a reference to a (possibly mutable) mapping object, of which this instance is to be a proxy
-
-Keys in the reference are turned into attributes of the proxy. If *__ref__* is :const:`None`, the reference is a new empty dictionary, otherwise *__ref__* must be a mapping object, and *__ref__* (or its own reference if it is itself of class :class:`owrap`) is taken as reference. The reference is first updated with the keyword arguments *ka*. Example::
+Objects of this class present an attribute oriented proxy interface to an underlying mapping object. Example::
 
    r = dict(a=3,b=6); x = owrap(r)
    assert x.a == 3
@@ -32,6 +28,11 @@ Keys in the reference are turned into attributes of the proxy. If *__ref__* is :
   __ref__:Mapping[str,Any]
   r"""The proxy object"""
   def __init__(self,__ref__:Mapping[str,Any]|None=None,**ka):
+    r"""
+:param __ref__: a reference to a (possibly mutable) mapping object, of which this instance is to be a proxy
+
+Keys in the reference are turned into attributes of the proxy. If *__ref__* is :const:`None`, the reference is a new empty dictionary, otherwise *__ref__* must be a mapping object, and *__ref__* (or its own reference if it is itself of class :class:`owrap`) is taken as reference. The reference is first updated with the keyword arguments *ka*.
+    """
     if __ref__ is None: r = dict(ka)
     else:
       r:Mapping[str,Any] = __ref__
@@ -77,17 +78,17 @@ def namedtuple(*a,**ka):
   r"""
 Returns a class of tuples with named fields. It is identical to :func:`collections.namedtuple`, with only two additions:
 
-* The returned class has an attribute :attr:`_field_index` which is an instance of that class where each field is set to its index in the field list. e.g.::
+* The returned class has an attribute :attr:`_field_index` which is an instance of that class where each field is set to its index in the field list. Example::
 
    c = namedtuple('c','u v')
    assert isinstance(c._field_index,c) and c._field_index.u == 0 and c._field_index.v == 1
 
-* Furthermore, if *f* and *x* are instances of the returned class *c*, then calling *f* with argument *x* returns a new instance of class *c* in which each field is set to the result of applying the corresponding field in *f* (which must be a callable) to the corresponding field in *x*. Additional keyword arguments can be passed to the calls. E.g.::
+* Furthermore, if *f* and *x* are instances of the returned class *c*, then calling *f* with argument *x* returns a new instance of class *c* in which each field is set to the result of applying the corresponding field in *f* (which must be a callable) to the corresponding field in *x*. Additional keyword arguments can be passed to the calls. Example::
 
    c = namedtuple('c','u v')
    f = c(u=(lambda z,r=0.: 2.*z+r),v=(lambda z,r=0.: 3.*z+5.*r))
    x = c(u=3,v=5)
-   k = dict(r=42)
+   k = {'r':42}
    assert f(x,**k) == c(u=f.u(x.u,**k),v=f.v(x.v,**k))
   """
 #==================================================================================================
@@ -146,12 +147,10 @@ Returns an object obtained from an environment variable whose name is derived fr
 #==================================================================================================
 def secret_tool(attr_list:Iterable[dict[str,str]])->Iterator[Iterable[tuple[dict[str,str],bytes]]]:
   r"""
-Retrieves a (possibly empty) stream of attribute-secret pair(s) for each of a list of dictionaries. Each input dictionary is looked up in the *default* keyring, and the corresponding stream consists of the attribute-secret pair of matching items. The attribute in each pair is the dictionary associated with the keyring item, and, by construction, contains the input dictionary.
-
 :param attr_list: a list of dictionaries
 :returns: an iterable of streams of attribute-secret pairs
 
-Example::
+Retrieves a (possibly empty) stream of attribute-secret pair(s) for each of a list of dictionaries. Each input dictionary is looked up in the default keyring, and the corresponding stream consists of the attribute-secret pair of matching items. The attribute in each pair is the dictionary associated with the keyring item, and, by construction, contains the input dictionary. Example::
 
    L = {'a':'x'},{'b':'y','c':'z'}
    for d,stream in zip(L,secret_tool(L)):
@@ -165,150 +164,144 @@ Example::
     for attr in attr_list: yield ((item.get_attributes(),item.get_secret()) for item in coll.search_items(attr))
   finally: conn.close()
 
+class SymbolicOperator:
+  __slots__ = 'name','op','covariant','mark'
+  @staticmethod
+  def lookup(n:str,pat=re.compile(r'Same as a (\S+) b')):
+    import operator
+    op = getattr(operator,f'__{n}__')
+    mark = pat.match(op.__doc__).group(1)
+    yield SymbolicOperator(n,op,slice(None),mark)
+    if hasattr(operator,f'__i{n}__'): yield SymbolicOperator(f'r{n}',op,slice(None,None,-1),mark)
+  def __new__(cls,name,op=None,covariant=None,mark=None,listing={}):
+    if (self:=listing.get(name)) is None:
+      self = super().__new__(cls)
+      self.name,self.op,self.covariant,self.mark = name,op,covariant,mark
+      listing[name] = self
+    return self
+  def __call__(self,x,y): return self.op(*(x.__ref__.value,(y.__ref__.value if isinstance(y,Symbolic) else y))[self.covariant])
+  def __hash__(self): return hash(self.name)
+  # no need to define '__eq__': default 'is' behaviour works because '__new__' is cacheing
+  def __getnewargs__(self): return self.name,
+  def __getstate__(self): pass
+  def __str__(self): return self.mark
+
 #==================================================================================================
-class Expr:
+class Symbolic:
   r"""
-Instances of this class implement closed symbolic expressions.
+Instances of this class implement closed symbolic expressions. Upon invocation of specific triggers, the value of the expression is computed and stored, and the instance subsequently behaves as a proxy to that value. The proxy is not saved on pickling, hence lost on unpickling, but can of course be restored using any of the triggers. Thus, when unpickling a foreign :class:`Symbolic` instance, a process can decide whether it wants to access its value or only inspect its expression. If recomputing the value is costly, one can use a persistent cache (see module :mod:`.cache`).
 
 :param func: the function of the symbolic expression
 :param a: list of positional arguments of the symbolic expression
 :param ka: dictionary of keyword arguments of the symbolic expression
 
-The triple *func*, *a*, *ka* forms the configuration of the :class:`Expr` instance. Its value is defined as the result of calling function *func* with positional and keyword arguments *a* and *ka*. The value is actually computed only once (and cached), and only when method :meth:`incarnate` is invoked. Subclasses should define automatic triggers of incarnation (see e.g. classes :class:`MapExpr` and :class:`CallExpr`). The incarnation cache can be reset by invoking method :meth:`reset`.
+The triple *func*, *a*, *ka* forms the configuration of the :class:`Symbolic` instance. Its value is defined as the result of calling function *func* with positional arguments *a* and keyword arguments *ka*. See code for a list of triggers. Normally, direct access to the value or configuration should not be needed, since the instance is a proxy for it. If required, it is done through attribute :attr:`__ref__` as follows:
 
-Initially, a :class:`Expr` instance is mutable, and its configuration can be changed. It becomes immutable (frozen) after any of the following operations: incarnation (even after it is reset), hashing, and pickling. Incarnation is not saved on pickling, hence lost on unpickling, but can of course be restored using method :meth:`incarnate`. Thus, when receiving a foreign :class:`Expr` instance, a process can decide whether it wants to access its value or only inspect its configuration. If recomputing the value is costly, use a persistent cache for *func*.
+* ``x.__ref__.config`` returns the configuration of symbolic expression *x*, in which the third component is converted to a tuple of key-value pairs to be hashable.
+* ``x.__ref__.value`` returns the value of symbolic expression *x*, computing it if it has not been computed yet (so this is a trigger).
+* ``x.__ref__.check()`` indicates whether the value of symbolic expression *x* has already been computed by a trigger (this is not a trigger).
 
-Caveat: function *func* should be defined at the top-level of its module, and the values in *a* and *ka* should be deterministically picklable and hashable (in particular: no dicts nor lists). Hence, any :class:`Expr` instance is itself deterministically picklable and hashable, and can thus be used as argument in the configuration of another :class:`Expr` instance.
+Caveat: the configuration should be deterministically picklable and hashable (in particular: no dicts nor lists are allowed in the components). Hence, any :class:`Symbolic` instance is itself deterministically picklable and hashable, and can thus be used as argument in the configuration of another :class:`Symbolic` instance.
   """
 #==================================================================================================
 
-  incarnated: bool
-  value: Any
+  __slots__ = '__ref__',
 
-  def __init__(self,func:Callable,*a,**ka):
+  def __init__(self,func,*a,**ka):
     assert callable(func)
-    self.reset()
-    self.config = [func,a,ka]
-    self.key = None
+    from inspect import signature
+    signature(func).bind(*a,**ka) # just ensures the signature matches
+    super().__setattr__('__ref__',_Symbolic((func,a,tuple(sorted(ka.items())))))
 
-  def rearg(self,*a,**ka):
-    r"""
-Updates the config arguments of this instance: *a* is appended to the list of positional arguments and *ka* is updated into the dictionary of keyword arguments. Raises an error if the instance is frozen.
-    """
-    assert self.key is None, 'attempt to update a frozen Expr instance'
-    self.config[1] += a
-    self.config[2].update(ka)
+  # non triggers
+  def __getstate__(self): return self.__ref__.config
+  def __setstate__(self,config): super().__setattr__('__ref__',_Symbolic(config))
+  def __hash__(self): return hash(self.__ref__.config)
+  def __eq__(self,other): return isinstance(other,Symbolic) and self.__ref__.config == other.__ref__.config
 
-  def refunc(self,f:Callable):
-    r"""
-Set *f* as the config function of this instance. Raises an error if the instance is frozen.
-    """
-    assert self.key is None, 'attempt to update a frozen Expr instance'
-    self.config[0] = f
+  # triggers:
+  def __getattr__(self,k): return getattr(self.__ref__.value,k)
+  def __setattr__(self,k,v): return setattr(self.__ref__.value,k,v)
+  def __delattr__(self,k): return delattr(self.__ref__.value,k)
+  def __getitem__(self,k): return self.__ref__.value[k]
+  def __setitem__(self,k,v): self.__ref__.value[k] = v
+  def __delitem__(self,k): del self.__ref__.value[k]
+  def __contains__(self,k): return k in self.__ref__.value
+  def __len__(self): return len(self.__ref__.value)
+  def __iter__(self): return iter(self.__ref__.value)
+  def __call__(self,*a,**ka): return self.__ref__.value(*a,**ka)
+  def __bool__(self): return bool(self.__ref__.value)
+  def __int__(self): return int(self.__ref__.value)
+  def __float__(self): return float(self.__ref__.value)
+  def __complex__(self): return complex(self.__ref__.value)
 
-  def incarnate(self):
-    if self.incarnated: return
-    self.incarnated = True
-    self.freeze()
-    func,a,ka = self.config
-    self.value = func(*a,**ka)
+  # supported operators (non triggers)
+  exec('\n'.join(
+    f'def __{sop.name}__(self,other,sop=SymbolicOperator({sop.name!r})): return Symbolic(sop,self,other)'
+    for n in 'add sub mul matmul truediv floordiv mod pow lshift rshift and xor or ne lt le gt ge'.split() # NOT eq
+    for sop in SymbolicOperator.lookup(n)
+  ))
 
-  def reset(self):
-    self.incarnated = False
-    self.value = None
+  # representation methods (non triggers)
+  def __repr__(self): return repr(self.__ref__)
+  def _repr_html_(self,tail=None): return self.__ref__._repr_html_(tail)
 
-  def freeze(self):
-    k = self.key
-    if k is None:
+#==================================================================================================
+def symbolic(f):
+  r"""
+A decorator which adds to its target *f* an attribute :attr:`symbolic` pointing to a symbolic variant of the target.
+Example::
+
+   def heavy(*a): from time import sleep; sleep(1); return a # simulates some long computation
+   @symbolic
+   def f(E,x): return E|{'a':heavy(x)}
+   @symbolic
+   def g(E,x): return E|{'b':heavy(E['a'],x)}
+
+Note that standard operators, like ``|`` above, are directly interpreted as symbolic calls when at least one of their arguments is a :class:`Symbolic` instance. One exception is operator ``==`` which returns :const:`True` if both arguments are :class:`Symbolic` instances and are equal, and :const:`False` otherwise. Then we have::
+
+   E = g(f({},42),7) # long
+   E_symbolic = g.symbolic(f.symbolic({},42),7) # immediate
+   assert E.get('u') is None # immediate
+   assert E_symbolic.get('u') is None # long
+   assert not E != E_symbolic # immediate; use of == is prohibited
+  """
+#==================================================================================================
+  f.symbolic = lambda *a,**ka:Symbolic(f,*a,**ka); return f
+
+#==================================================================================================
+class _Symbolic:
+#==================================================================================================
+  __slots__ = 'config', '_value'
+
+  config: tuple[Callable,tuple[Any,...],tuple[tuple[str,Any],...]]
+  _value: Any
+  empty = object() # used as dummy, always different from _value
+
+  def __init__(self,config): self.config,self._value = config,_Symbolic.empty
+  def check(self): return self._value is not _Symbolic.empty
+  @property
+  def value(self):
+    if (v:=self._value) is _Symbolic.empty:
       func,a,ka = self.config
-      self.key = k = func,a,tuple(sorted(ka.items()))
-    return k
+      self._value = v = func(*a,**dict(ka))
+    return v
 
-  def __getstate__(self): return self.freeze()
-  def __setstate__(self,key):
-    self.reset()
-    func,a,ka = self.key = key
-    self.config = [func,a,dict(ka)]
-  def __hash__(self): return hash(self.freeze())
-  def __eq__(self,other): return isinstance(other,Expr) and self.config == other.config
+  # representation methods
   def __repr__(self):
-    if self.incarnated: return repr(self.value)
     func,a,ka = self.config
+    if isinstance(func,SymbolicOperator): x,y = a[func.covariant]; return f'({x!r} {func} {y!r})'
     sep = ',' if (a and ka) else ''
-    a = ','.join(repr(v) for v in a)
-    ka = ','.join(f'{k}={repr(v)}' for k,v in sorted(ka.items()))
+    a,ka = ','.join(repr(v) for v in a) , ','.join(f'{k}={v!r}' for k,v in ka)
     return f'{func}({a}{sep}{ka})'
-  def _repr_html_(self):
-    from .html import repr_html
-    return repr_html(self)
-  def as_html(self,_):
-    from .html import html_parlist, E
+  def _repr_html_(self,tail=None):
+    from .html import repr_html, html_parlist, E
+    if tail is None: return repr_html(self)
     func,a,ka = self.config
-    opn,clo = ((E.span if self.incarnated else E.em)(str(func),style='padding:5px;'),E.b('['),), (E.b(']'),)
-    return html_parlist(_,a,sorted(ka.items()),opening=opn,closing=clo)
-
-#--------------------------------------------------------------------------------------------------
-class MapExpr (Expr,collections.abc.Mapping):
-  r"""
-Symbolic expressions of this class are also (read-only) mappings and trigger incarnation on all the mapping operations, then delegate such operations to their value (expected to be a mapping).
-  """
-#--------------------------------------------------------------------------------------------------
-  def __getitem__(self,k): self.incarnate(); return self.value[k]
-  def __len__(self): self.incarnate(); return len(self.value)
-  def __iter__(self): self.incarnate(); return iter(self.value)
-
-#--------------------------------------------------------------------------------------------------
-class CallExpr (Expr):
-  r"""
-Symbolic expressions of this class are also callables, and trigger incarnation on invocation, then delegate the invocation to their value (expected to be a callable).
-  """
-#--------------------------------------------------------------------------------------------------
-  def __call__(self,*a,**ka): self.incarnate(); return self.value(*a,**ka)
-
-#==================================================================================================
-class SQliteStack:
-  r"""
-Objects of this class are aggregation functions which simply collect results in a list, for use with a SQlite database. Example::
-
-   with sqlite3.connect('/path/to/db') as conn:
-     rstack = SQliteStack.setup(conn,'stack',2)
-     for school,x in conn.execute('SELECT school,stack(age,height) FROM PupilsTable GROUP BY school'):
-       print(school,rstack(x))
-
-prints pairs *school*, *L* where *L* is a list of pairs *age*, *height*.
-  """
-#==================================================================================================
-  contents:dict[int,Any] = {}
-  def __init__(self): self.content = []
-  def step(self,*a): self.content.append(a)
-  def finalize(self): n = id(self.content); self.contents[n] = self.content; return n
-  @staticmethod
-  def setup(conn,name,n):
-    conn.create_aggregate(name,n,SQliteStack)
-    return SQliteStack.contents.pop
-
-#==================================================================================================
-def SQliteNew(path:str,schema:str):
-  r"""
-:param path: a path to an sqlite database
-:param schema: the schema specification
-
-Makes sure the file at *path* is a SQlite3 database with schema exactly equal to *schema*.
-  """
-#==================================================================================================
-  import sqlite3
-  from string import whitespace
-  sep = whitespace+';'
-  with sqlite3.connect(path,isolation_level='EXCLUSIVE') as conn:
-    S = [sql for sql, in conn.execute('SELECT sql FROM sqlite_master WHERE name NOT LIKE \'sqlite%\'')]
-    if S:
-      schema = schema.strip()
-      for sql in S:
-        if not schema.startswith(sql): raise Exception('database has a version conflict')
-        schema = schema[len(sql):].lstrip(sep)
-      else:
-        if schema.lstrip(sep): raise Exception('database has a version conflict')
-    else: conn.executescript(schema)
+    mark = E.span(str(func),style='padding:5px;')
+    if isinstance(func,SymbolicOperator): x,y = a[func.covariant]; return E.span(E.b('('),tail(x),mark,tail(y),E.b(')'))
+    a,ka = (tail(v) for v in a) , ((k,tail(v)) for k,v in ka)
+    return html_parlist(a,ka,opening=(mark,E.b('('),),closing=(E.b(')'),))
 
 #==================================================================================================
 def gitcheck(path:str,update:bool=False):
@@ -361,58 +354,20 @@ Assumes that *pkgname* is the name of a python regular (non namespace) package a
   return c
 
 #==================================================================================================
-class spark:
-  r"""
-If a resource ``spark/pyspark.py`` exists in an XDG configuration file, that resource is executed (locally) and should define a function :func:`init` used as class method :meth:`init` and meant to initialise Spark. The initialisation must assign a :class:`dict` (even an empty one) to attribute :attr:`conf`.
-  """
-#==================================================================================================
-  conf = None
-
-  @classmethod
-  def display_monitor_link(cls,sc):
-    r"""
-Displays a link to the monitor of :class:`pyspark.SparkContext` *sc*. Recall that the monitor is active only between the creation of *sc* and its termination (when method :meth:`stop` is invoked).
-    """
-    from IPython.display import display_html
-    display_html(f'<a target="_blank" href="{sc.uiWebUrl}">SparkMonitor[{sc.appName}@{sc.master}]</a>', raw=True)
-
-  @classmethod
-  def SparkContext(cls,display=True,debug=False,conf={},**ka):
-    r"""
-Returns an instance of :class:`pyspark.SparkContext` created with the predefined configuration held in attribute :attr:`conf` of this class, updated by *conf* (its value must then be a :class:`dict` of :class:`str`). If *debug* is :const:`True`, prints the exact configuration used. If *display* is :const:`True`, displays a link to the monitor of the created context.
-    """
-    cls._init()
-    from pyspark import SparkContext, SparkConf
-    cfg = SparkConf().setAll(cls.conf.items()).setAll(conf.items())
-    if debug: print(cfg.toDebugString())
-    sc = SparkContext(conf=cfg,**ka)
-    if display: cls.display_monitor_link(sc)
-    return sc
-
-  @classmethod
-  def _init(cls):
-    if cls.conf is None:
-      cls.init()
-      assert isinstance(cls.conf,dict) and all((isinstance(k,str) and isinstance(v,str)) for k,v in cls.conf.items()), f'Class method {cls.__module__}.{cls.__name__}.init must assign a str-str dictionary to class attribute \'conf\''
-
-  init = config_xdg('spark/pyspark.py')
-  if init is None: init = classmethod(lambda cls,**ka: None)
-  else:
-    D = {}
-    exec(init,D)
-    init = classmethod(D['init'])
-    del D
-
-#==================================================================================================
 class ImapFolder:
   r"""
-An instance of this class is an iterable enumerating the unread messages in a folder of an IMAP server. On calling method :meth:`commit`, the messages which have been enumerated since the last commit or rollback (triggered by method :meth:`rollback`) are marked as read. The total number of messages in the folder is held in attribute :attr:`total`, and the number of unread message is given by function :func:`len`.
-
-:param server: the IMAP server
-:param folder: the folder to scan
+An instance of this class is an iterable enumerating the unread messages in a folder of an IMAP server.
   """
 # ==================================================================================================
+#--------------------------------------------------------------------------------------------------
   def __init__(self,server:imaplib.IMAP4,folder:str):
+    r"""
+:param server: the IMAP server
+:param folder: the folder to scan
+
+On calling method :meth:`commit`, the messages which have been enumerated since the last commit or rollback (triggered by method :meth:`rollback`) are marked as read. The total number of messages in the folder is held in attribute :attr:`total`, and the number of unread message is given by function :func:`len`.
+    """
+#--------------------------------------------------------------------------------------------------
     from email import message_from_bytes
     from email.message import EmailMessage
     from email.policy import default as DefaultEmailPolicy
@@ -444,19 +399,24 @@ An instance of this class is an iterable enumerating the unread messages in a fo
 class ResettableSimpyEnvironment:
   r"""
 An instance of this class wraps a :class:`simpy.Environment` instance, allowing calls to method :meth:`run` to violate the chronological order. When a violation occurs, the wrapped environment is reset and reconfigured before being advanced to the new time. For reconfiguration to work, updates to the wrapped object should not be done directly, but only by invoking method:`add_config` on the wrapper. For stochastic environments, to ensure predictable outcome, make sure to add a configuration which resets the seed to a fixed value.
-
-:param init_t: the initial time of the environment
   """
 #==================================================================================================
   configs:list[Callable[[simpy.Environment],None]]
+#--------------------------------------------------------------------------------------------------
   def add_config(self,*C:Callable[[simpy.Environment],None]):
     r"""
-Adds a configuration to the environment. It is applied to the proxy each time it is reset.
-
 :param C: the list of configurations to add
+
+Adds configurations to the environment. It is applied to the proxy each time it is reset.
     """
+#--------------------------------------------------------------------------------------------------
     self.configs.extend(C)
+#--------------------------------------------------------------------------------------------------
   def __init__(self,init_t:float=0.):
+    r"""
+:param init_t: the initial time of the environment
+    """
+#--------------------------------------------------------------------------------------------------
     from simpy import Environment
     self.configs = []
     def reset(v:float):
@@ -476,13 +436,14 @@ Adds a configuration to the environment. It is applied to the proxy each time it
 class basic_stats:
   r"""
 Instances of this class maintain basic statistics about a group of values.
-
-:param weight: total weight of the group
-:param avg: weighted average of the group
-:param var: weighted variance of the group
   """
 #==================================================================================================
   def __init__(self,weight:int|float|complex=1.,avg:int|float|complex=0.,var:int|float|complex=0.):
+    r"""
+:param weight: total weight of the group
+:param avg: weighted average of the group
+:param var: weighted variance of the group
+    """
     self.weight = weight; self.avg = avg; self.var = var
   def __add__(self,other):
     w,a,v = (other.weight,other.avg,other.var) if isinstance(other,basic_stats) else (1.,other,0.)
@@ -493,7 +454,7 @@ Instances of this class maintain basic statistics about a group of values.
     self.weight += w; r = w/self.weight; d = a-self.avg
     self.avg += r*d; self.var += r*(v-self.var+(1-r)*d*d)
     return self
-  def __repr__(self): return f'basic_stats<weight:{repr(self.weight)},avg:{repr(self.avg)},var:{repr(self.var)}>'
+  def __repr__(self): return f'basic_stats<weight:{self.weight!r},avg:{self.avg!r},var:{self.var!r}>'
   @property
   def std(self):
     r"""standard deviation of the group"""
@@ -505,7 +466,7 @@ def iso2date(iso:tuple[int,int,int])->datetime.date:
   r"""
 :param iso: triple as returned by :meth:`datetime.date.isocalendar`
 
-Returns the :class:`datetime.date` instance for which the :meth:`datetime.date.isocalendar` method returns *iso*::
+Returns the :class:`datetime.date` instance for which the :meth:`datetime.date.isocalendar` method returns *iso*. Example::
 
    from datetime import datetime
    d = datetime.now().date(); assert iso2date(d.isocalendar()) == d
@@ -518,48 +479,73 @@ Returns the :class:`datetime.date` instance for which the :meth:`datetime.date.i
   return iso1+timedelta(days=isoday-1,weeks=isoweek-1)
 
 #==================================================================================================
-def size_fmt(size:int|float,binary:bool=True,precision:int=4,suffix:str='B')->str:
+def qty_format(val:int|float,precision:int=3,unit:str='iB')->str:
   r"""
-:param size: a positive number representing a size
-:param binary: whether to use IEC binary or decimal convention
-:param precision: number of digits displayed (at least 4)
+:param val: a positive number representing an amount of *unit*
+:param precision: number of digits displayed
+:param unit: the unit of the measure
 
-Returns the representation of *size* with IEC prefix. Each prefix is *K* times the previous one for some constant *K* which depends on the convention: *K* =1024 with the binary convention (marked with an ``i`` after the prefix); *K* =1000 with the decimal convention. Example::
+Returns the representation of *val* in **IEC binary** format when *unit* is :const:`'iB'` (the default, for bytes), or in **IEC decimal** format when *unit* is :const:`'B'`, or in **SI** format in all other cases. The table below gives for each prefix its name, letter and exponent. Each prefix represents a multiplier equal to the base (constant 1000 or 1024, see below) to the power of the exponent.
 
-   print(size_fmt(2**30), size_fmt(5300), size_fmt(5300,binary=False), size_fmt(42897.3,binary=False,suffix='m'))
-   #> 1GiB 5.176KiB 5.3KB 42.9Km
++-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+--------+
+| yocto | zepto | atto  | femto | pico  | nano  | micro | milli | kilo  | Mega  | Giga  | Tera  | Peta  | Exa   | Zetta | Yotta  |
++=======+=======+=======+=======+=======+=======+=======+=======+=======+=======+=======+=======+=======+=======+=======+========+
+| ``y`` | ``z`` | ``a`` | ``f`` | ``p`` | ``n`` | ``μ`` | ``m`` | ``k`` | ``M`` | ``G`` | ``T`` | ``P`` | ``E`` | ``Z`` | ``Y``  |
++-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+--------+
+| -8    | -7    | -6    | -5    | -4    | -3    | -2    | -1    | 1     | 2     | 3     | 4     | 5     | 6     | 7     | 8      |
++-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+--------+
+| * `SI`_ (all units except :const:`'B'` and :const:`'iB'`): all prefixes are available, base is 1000                            |
+| * `IEC`_ decimal (:const:`'B'`): as SI, but the negative exponents are unavailable & prefix ``k`` (kilo) is uppercased to ``K``|
+| * `IEC`_ binary (:const:`'iB'`): as IEC decimal, but base is 1024 instead of 1000                                              |
++-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+-------+--------+
+
+.. _IEC: https://en.wikipedia.org/wiki/Binary_prefix
+.. _SI: https://en.wikipedia.org/wiki/Metric_prefix
+
+Example::
+
+   test = [ (2**30,{},'1GiB'), (5300,{},'5.18KiB'), (5300,{'unit':'B'},'5.3KB'), (42897.3,{'unit':'m'},'42.9km') ]
+   assert all(qty_format(x,**ka)==v for x,ka,v in test)
   """
 #==================================================================================================
-  thr,mark = (1024.,'i') if binary else (1000.,'')
-  if size<thr: return f'{size}{suffix}'
-  fmt = f'{{:.{precision}g}}{{}}{mark}{suffix}'.format
-  size_:float = size/thr
-  for prefix in 'KMGTPEZ':
-    if size_ < thr: return fmt(size_,prefix)
-    size_ /= thr
-  return fmt(size_,'Y') # :-)
+  from math import log
+  match unit:
+    case 'iB': assert val>=1; base = 1024; unit = 'B'; P = qty_format.P_IEC
+    case 'B': assert val>=1; base = 1000; P = qty_format.P_IEC10
+    case _: assert val>0; base = 1000; P = qty_format.P_SI
+  fmt = f'{{:.{precision}g}}{{}}{unit}'.format
+  n,v = divmod(log(val,base),1.); n = round(n)+8
+  if 0<=n<=16: return fmt(base**v,P[n]) # most likely...
+  d = 0 if n<0 else 16; return fmt(base**(v+n-d),P[d])
+def _config__(f):
+  f.P_IEC = (*9*('',),*(x+'i' for x in 'KMGTPEZY'))
+  f.P_IEC10 = (*9*('',),*'KMGTPEZY')
+  f.P_SI = (*reversed('mμnpfazy'),'',*'kMGTPEZY')
+_config__(qty_format); del _config__
 
 #==================================================================================================
-def time_fmt(time:int|float,precision:int=2)->str:
+def time_format(val:int|float,precision:int=3)->str:
   r"""
-:param time: a number representing a time in seconds
+:param val: a number representing a time in seconds
 :param precision: number of digits displayed
 
-Returns the representation of *time* in one of days,hours,minutes,seconds,milli-seconds (depending on magnitude). Example::
+Returns the representation of *time* in one of day,hr,min,sec,msec,μsec depending on magnitude. Example::
 
-   print(time_fmt(100000,4),time_fmt(4238.45),time_fmt(5.35,0),time_fmt(.932476))
-   #> 1.1574day 1.18hr 5sec 932msec
+   test = [ (100000,{'precision':4},'1.157day'), (4238.45,{},'1.18hr'), (5.35,{'precision':1},'5sec'), (.932476,{},'932msec') ]
+   assert all(time_format(x,**ka)==v for x,ka,v in test)
   """
 #==================================================================================================
-  fmt = f'{{:.{precision}f}}'.format
-  if time < 1.: return f'{1000 * time:3.3g}msec'
-  if time < 60.: return f'{fmt(time)}sec'
-  time_:float = time/60.
-  if time_ < 60.: return f'{fmt(time_)}min'
-  time_ /= 60.
-  if time_ < 24.: return f'{fmt(time_)}hr'
-  time_ /= 24.
-  return f'{fmt(time_)}day'
+  fmt = f'{{:.{precision}g}}'.format
+  if val < 1.e-6: return '<1μsec'
+  if val < 1.e-3: return f'{fmt(1.e6*val)}μsec'
+  if val < 1.: return f'{fmt(1e3*val)}msec'
+  if val < 60.: return f'{fmt(val)}sec'
+  val_:float = val/60.
+  if val_ < 60.: return f'{fmt(val_)}min'
+  val_ /= 60.
+  if val_ < 24.: return f'{fmt(val_)}hr'
+  val_ /= 24.
+  return f'{fmt(val_)}day'
 
 #==================================================================================================
 def versioned(v)->Callable[[Callable],Callable]:
@@ -576,20 +562,18 @@ A decorator which assigns attribute :attr:`version` of the target function to *v
 #==================================================================================================
 class _PDFConverter (dict):
   r"""
-A decorator which interprets the target function as a PDF converter.
-
-:param mimetypes: list of mimetypes
+The single instance of this class is a dictionary mapping mimetypes to PDF converters. To declare a new converter, which must be of type :class:`bytes`↦:class:`bytes`, decorate it with an invocation of this instance with the list of mimetypes accepted by the converter as positional arguments.
   """
 #==================================================================================================
-  def assign(self,*mimetypes:str):
-    def t(f:Callable[[Any],bytes]): self.update({mtype:f for mtype in mimetypes}); return f
-    return t
+  def __call__(self,*mimetypes:str):
+    def transform(f:Callable[[Any],bytes]): assert f.__name__.startswith('pdf_from'); self.update({mtype:f for mtype in mimetypes}); return f
+    return transform
 PDFConverter = _PDFConverter()
 
-@PDFConverter.assign('application/pdf')
+@PDFConverter('application/pdf')
 def pdf_frompdf(content:bytes): return content
 
-@PDFConverter.assign(
+@PDFConverter(
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/msword',
   'application/vnd.oasis.opendocument.text')
@@ -604,7 +588,7 @@ def pdf_fromodf(content:bytes):
       return path_.read_bytes()
     finally: path_.unlink(missing_ok=True)
 
-@PDFConverter.assign('image/svg+xml')
+@PDFConverter('image/svg+xml')
 def pdf_fromsvg(content:str):
   import subprocess
   return subprocess.run(['rsvg-convert','-f','pdf'],check=True,capture_output=True,input=content.encode()).stdout

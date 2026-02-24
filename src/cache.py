@@ -10,7 +10,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import pickle, inspect, threading
 from pathlib import Path
-from functools import update_wrapper
+from functools import partial, update_wrapper
 from itertools import islice
 from collections import namedtuple
 from weakref import WeakValueDictionary
@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from .cache_v1 import get_sessionmaker, Block, Cell, AbstractFunctor, AbstractStorage
-from . import size_fmt, time_fmt, pickleclass
+from . import qty_format, time_format, pickleclass
 
 __all__ = 'CacheDB', 'CacheBlock', 'Functor', 'FileStorage', 'DefaultStorage', 'Shadow'
 
@@ -31,6 +31,8 @@ class CacheDB:
 Instances of this class manage cache repositories. There is at most one instance of this class in a process for each normalised repository specification path. A cache repository contains cells, each cell corresponding to one cached value produced by a unique call, and possibly reused by later calls. Cells are clustered into blocks, each block grouping cells produced by the same call type, called a functor (of class :class:`AbstractFunctor`). Meta-information about blocks and cells are stored in an index database accessed through :mod:`sqlalchemy`. The values themselves are persistently stored by a dedicated storage object (of class :class:`AbstractStorage`).
 
 :class:`CacheDB` instances have an HTML ipython display.
+
+.. automethod:: __new__
   """
 #==================================================================================================
 
@@ -40,7 +42,7 @@ Instances of this class manage cache repositories. There is at most one instance
   session_maker:Callable[[],Any]
   r"""the sqlalchemy session maker for manipulation of this database"""
 
-  def __new__(cls,spec:CacheDB|Path|str,listing={},lock=threading.Lock()):
+  def __new__(cls,spec:CacheDB|Path|str,listing={},lock=threading.Lock())->CacheDB:
     r"""
 :param spec: cache specification
 
@@ -58,8 +60,7 @@ Note that this constructor is locally cached on the resolved path *spec*.
     else: raise TypeError(f'Expected: {CacheDB}|{str}|{Path}; Found: {type(spec)}')
     path = path.resolve()
     with lock:
-      self = listing.get(path)
-      if self is None:
+      if (self:=listing.get(path)) is None:
         storage:AbstractStorage
         if path.is_dir(): storage = DefaultStorage(path)
         elif path.is_file():
@@ -76,7 +77,7 @@ Note that this constructor is locally cached on the resolved path *spec*.
   def __getnewargs__(self): return self.path,
   def __getstate__(self): return
   def __hash__(self): return hash(self.path)
-  # no need to define '__eq__': default 'is' behaviour works due to '__new__' constructor
+  # no need to define '__eq__': default 'is' behaviour works because '__new__' is cacheing
 
   def clear_obsolete(self,tol,dry_run:bool=False):
     r"""
@@ -101,18 +102,18 @@ Clears all the blocks which are obsolete with tolerance *tol* of non-obsolescenc
 # Representation methods
 #--------------------------------------------------------------------------------------------------
 
-  def _repr_html_(self): from .html import repr_html; return repr_html(self)
   _html_limit = 50
-  def as_html(self,_:Callable[[Any],None]):
-    from .html import html_table
+  def _repr_html_(self,tail=None):
+    from .html import repr_html, html_table
+    if tail is None: return repr_html(self)
     n_max = self._html_limit
     with self.session_maker() as session:
       L = [CacheBlock(self,pickle.loads(block.functor),block.oid) for block, in session.execute(select(Block).order_by(Block.oid).limit(n_max))]
       n = session.execute(select(func.count(Block.oid))).scalar()-len(L)
     closing = f'{n} more' if n>0 else None
     return html_table(
-      sorted((c.oid,(c,)) for c in L),
-      fmts=((lambda x: x.as_html(_,session=session)),),
+      ((str(c.oid),c._repr_html_(tail=tail,session=session)) for c in L),
+      hdrs = ('block',),
       opening=repr(self),
       closing=closing
     )
@@ -142,7 +143,7 @@ A :class:`CacheBlock` instance is callable, and calls take a single argument. Me
   oid:int
   r"""the identifier of this block (field ``oid`` in the ``Block`` table of the index)"""
   cacheonly:bool
-  r"""whether cell creation is disabled"""
+  r"""whether cell creation is disabled by this instance"""
   memory:WeakValueDictionary
   r"""a local cache of calls within the current process"""
 
@@ -211,11 +212,12 @@ Returns information about this block. Available attributes:
 
 Implements cacheing as follows:
 
-- Method :meth:`getkey` of the functor is invoked with argument *arg* to obtain a ``ckey``.
-- If that ``ckey`` is present in the (local) memory mapping of this block, its associated value is returned.
-- Otherwise, if there already exists a cell with the same ``ckey`` in the database, its value is retrieved using method :meth:`getval` of the storage with the cell oid. The cell's hit count is incremented.
-- Otherwise, a cell with that ``ckey`` is created, its value is computed and stored using method :meth:`setval` of the storage with the cell oid.
-- The result can be an exception, in which case, after being stored, it is raised (as well as after each subsequent hits).
+- Method :meth:`getkey` of the functor is invoked with argument *arg* to obtain a *ckey*.
+- If that *ckey* is present in the (local) memory mapping of this block, its associated value is returned.
+- Otherwise, if there already exists a cell with the same *ckey* in the database, its value is retrieved using method :meth:`getval` of the storage with the cell oid. The cell's hit count is incremented.
+- Otherwise, a cell with that *ckey* is created, its value is computed and stored using method :meth:`setval` of the storage with the cell oid.
+
+The result can be an exception (stored on miss and reused on hits), in which case it is raised.
     """
 #--------------------------------------------------------------------------------------------------
     ckey = self.functor.getkey(arg)
@@ -223,7 +225,7 @@ Implements cacheing as follows:
     lookup = select(Cell).where((Cell.block_oid==self.oid)&(Cell.ckey==ckey))
     created:bool = False
     with self.db.session_maker(expire_on_commit=False) as session:
-      cell = session.execute(lookup).scalar()
+      cell:Cell = session.execute(lookup).scalar()
       if cell is None:
         if self.cacheonly: raise Exception('Cache cell creation disallowed')
         cell = Cell(block_oid=self.oid,ckey=ckey,tstamp=NOW()); session.add(cell)
@@ -234,10 +236,9 @@ Implements cacheing as follows:
       oid,wait = cell.oid,cell.size==0
     if created is True:
       logger.info('%s MISS(%s)',self,oid)
-      start = NOW()
+      start = NOW(); size = 1
       try: cval = self.functor.getval(arg)
       except BaseException as e: cval = e; size = -1
-      else: size = 1
       duration = (NOW()-start).total_seconds()
       size *= self.db.storage.setval(oid,cval)
       with self.db.session_maker() as session:
@@ -254,7 +255,7 @@ Implements cacheing as follows:
         if cell is None: raise Exception(f'Lost cell {oid}')
         cell.hits += 1; cell.tstamp = NOW(); session.commit()
     try: self.memory[ckey] = cval
-    except: pass
+    except: pass # in case cval does not support weak references
     if isinstance(cval,BaseException): raise cval
     return cval
 
@@ -262,19 +263,18 @@ Implements cacheing as follows:
 # Representation methods
 #--------------------------------------------------------------------------------------------------
 
-  def _repr_html_(self): from .html import repr_html; return repr_html(self)
   _html_limit = 50
-  def as_html(self,_,session=None,size_fmt_=(lambda sz: '*'+size_fmt(-sz) if sz<0 else size_fmt(sz)),time_fmt_=(lambda t: '' if t is None else time_fmt(t))):
-    from .html import html_table
+  def _repr_html_(self,tail=None,session=None,size_fmt=(lambda sz: '*'+qty_format(-sz) if sz<0 else qty_format(sz) if sz>0 else ''),time_fmt=(lambda t: '' if t is None else time_format(t))):
+    from .html import repr_html, html_table
+    if tail is None: return repr_html(self)
     if session is None: session = self.db.session_maker()
     with session:
-      L = sorted([cell for cell, in islice(session.execute(select(Cell).where(Cell.block_oid==self.oid)),self._html_limit)],key=(lambda cell: cell.tstamp))
+      L = sorted([cell for cell, in islice(session.execute(select(Cell).where(Cell.block_oid==self.oid)),self._html_limit)],key=(lambda cell: cell.tstamp),reverse=True)
       n = session.execute(select(func.count(Cell.oid)).where(Cell.block_oid==self.oid)).scalar()-self._html_limit
       closing = f'{n} more' if n>0 else None
       return html_table(
-        [(cell.oid,(cell.ckey,cell.tstamp,cell.hits,cell.size,cell.duration)) for cell in L],
+        [(str(cell.oid),self.functor.html(cell.ckey,tail=tail),str(cell.tstamp),str(cell.hits),size_fmt(cell.size),time_fmt(cell.duration)) for cell in L],
         hdrs=('ckey','tstamp','hits','size','duration'),
-        fmts=((lambda ckey,h=self.functor.html: h(ckey,_)),str,str,size_fmt_,time_fmt_),
         opening=repr(self),
         closing=closing
       )
@@ -325,17 +325,17 @@ Generates a functor associated with the function *func*.
     class Unpickler (pickle.Unpickler):
       def persistent_load(self,pid): return pid
 
-  def getkey(self,arg:tuple[Iterable[Any],Mapping[str,Any]]):
 #--------------------------------------------------------------------------------------------------
+  def getkey(self,arg:tuple[Iterable[Any],Mapping[str,Any]]):
     r"""
 Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. They are normalised against the signature of the functor and the pickled value of the result is returned. The pickling of versioned function objects is modified to embed their version.
     """
 #--------------------------------------------------------------------------------------------------
-    a,ka = self.norm(arg)
+    a,ka = self.normalise(arg)
     return self._fpickle.dumps((a,sorted(ka.items())))
 
-  def getval(self,arg:tuple[Iterable[Any],Mapping[str,Any]]):
 #--------------------------------------------------------------------------------------------------
+  def getval(self,arg:tuple[Iterable[Any],Mapping[str,Any]]):
     r"""
 Argument *arg* must be a pair of a list of positional arguments and a dict of keyword arguments. Returns the value of calling attribute :attr:`func` with that positional argument list and keyword argument dict.
     """
@@ -344,22 +344,26 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
     return self.func(*a,**ka)
 
 #--------------------------------------------------------------------------------------------------
-  def html(self,ckey:bytes,_):
+  def html(self,ckey:bytes,tail):
 #--------------------------------------------------------------------------------------------------
     from .html import html_parlist
     a,ka = self._fpickle.loads(ckey)
-    return html_parlist(_,a,ka)
+    return html_parlist((),((k,tail(v)) for k,v in self.sig.bind(*a,**dict(ka)).arguments.items()))
 
-  def norm(self,arg:tuple[Iterable[Any],Mapping[str,Any]]):
+#--------------------------------------------------------------------------------------------------
+  def normalise(self,arg:tuple[Iterable[Any],Mapping[str,Any]]):
+#--------------------------------------------------------------------------------------------------
     a,ka = arg
     b = self.sig.bind(*a,**ka)
     b.apply_defaults()
     return b.args, b.kwargs
 
+#--------------------------------------------------------------------------------------------------
   def obsolete(self,tol)->bool:
     r"""
 Returns whether this functor is obsolete. This concerns only unpickled functors, and obsolescence is determined by the unpickled attribute :attr:`func`.
     """
+#--------------------------------------------------------------------------------------------------
     return self.shadow.obsolete(tol) if self.func is self.shadow else False
 
 #==================================================================================================
@@ -378,12 +382,12 @@ The storage for a cell consists of a content file which contains the value of th
   gate: Mapping
   r"""dictionary of threading events"""
   from watchdog.events import FileSystemEventHandler
-  class MyEventHandler(FileSystemEventHandler):
+  class GatingEventHandler(FileSystemEventHandler):
     r"""Watchdog event for new value files."""
     def __init__(self):
       gate = {}
       lock = threading.Lock()
-      def notify(p): # here p.exists() must be true so there can be no future calls gate[p].wait()
+      def notify(p): # here p.exists() in wait(p) must be true so gate[p] can be deleted
         with lock:
           if (ev:=gate.get(p)) is not None: ev.set(); del gate[p]
       self.notify = notify
@@ -407,7 +411,7 @@ The storage for a cell consists of a content file which contains the value of th
   def __init__(self,path:Path):
     from watchdog.observers import Observer
     self.path = path
-    self.monitor = monitor = self.MyEventHandler()
+    self.monitor = monitor = self.GatingEventHandler()
     observer = Observer()
     observer.schedule(monitor,path,recursive=True)
     observer.start()
@@ -415,7 +419,7 @@ The storage for a cell consists of a content file which contains the value of th
 #--------------------------------------------------------------------------------------------------
   def setval(self,oid:int,val:Any)->int:
     r"""
-Dumps (pickle) *val* into some temporary file and renames it to the content path for *oid*. Renaming will trigger a :mod:`watchdog` event for other processes.
+Dumps (pickle) *val* into some temporary file and renames it to the content path for *oid*. Renaming will trigger a :mod:`watchdog` event in other processes.
     """
 #--------------------------------------------------------------------------------------------------
     vpath = self.getpath(oid)
@@ -476,6 +480,8 @@ Returns the content file path (as a :class:`pathlib.Path` instance) associated t
 #==================================================================================================
 class DefaultStorage (FileStorage):
   r"""
+:param path: path to an existing directory, which must be either empty or contain a sqlite file `index.db` conforming to :mod:`cache_v1`
+
 The default storage class for a cache repository. Stores the index as a sqlite3 database in the same directory as the values, with name ``index.db``.
   """
 #==================================================================================================
@@ -505,7 +511,7 @@ A decorator which makes a function persistently cached. The cached function beha
 #--------------------------------------------------------------------------------------------------
 class Shadow:
   r"""
-Instances of this class are defined from versioned functions (ie. functions defined at the toplevel of their module, and with an attribute :attr:`version` defined). Their state is composed of the name, the module name and the version of the original function. They can be arbitrarily pickled and unpickled and produce a string representation close to that of their origin. However, unpickling may fail to restore the calling capacity of their origin.
+Instances of this class are defined from versioned functions (ie. functions defined at the toplevel of their module, and with an attribute :attr:`version` defined). Their state is composed of the name, the module name and the version of the original function. They can be arbitrarily pickled and unpickled and produce a string representation close to that of their origin. However, unpickling may fail to restore the calling capacity of the original function, if it cannot be imported with the same version.
   """
 #--------------------------------------------------------------------------------------------------
 

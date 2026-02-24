@@ -15,7 +15,7 @@ The following piece of code illustrates the use of this module:
 
 .. topic:: Typical output:
 
-   .. literalinclude:: _build/resource/mod_polling.out
+   .. include:: _build/resource/mod_polling.out
 
 Available types and functions
 -----------------------------

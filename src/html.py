@@ -7,9 +7,10 @@
 
 import logging; logger = logging.getLogger(__name__)
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
+from functools import partial
 import lxml
 from lxml.html.builder import E
-from lxml.html import tostring
+from lxml.html import tostring, fromstring
 from . import unid
 
 #==================================================================================================
@@ -40,25 +41,40 @@ def repr_html(obj:Any)->str:
 :param obj: object to display (represent in html)
 :returns: a HTML ``table`` element whose head row is the base HTML representation of *obj* (including its pointers), and whose body rows map each pointer name to the base HTML representation of its referenced object (possibly containing pointers itself, recursively)
 
-Produces an HTML representation of *obj* formatted as a string. The representation is by default simply the string representation of *obj* enclosed in a ``span`` element, but can be customised if *obj* supports method :meth:`as_html`.
+Produces an HTML representation of *obj* formatted as a string. The representation is by default simply the string representation of *obj* enclosed in a ``span`` element, but can be customised if *obj* supports method :meth:`_repr_html_` with parameter *tail*.
 
-Method :meth:`as_html` should only be defined for hashable objects. It must take as input a function *_* and return the base HTML representation of its invoking object (as understood by module :mod:`lxml.html`). If invoked on a compound object, it should not recursively invoke method :meth:`as_html` on its components to obtain their HTML representations, because that would be liable to unmanageable repetitions (if two components share a common sub-component) or infinite recursions. Instead, the representation of a component object should be obtained by invoking function *_* with that object as sole argument. It returns a "pointer" in the form of a string ``?``\ *n* (within a ``span`` element) where *n* is a unique reference number. The scope of such pointers is the toplevel call of function :func:`repr_html`, which guarantees that two occurrences of equal objects will have the same pointer.
+Method :meth:`_repr_html_` with parameter *tail* should only be defined for hashable objects. It should always have the following implementation::
+
+   def _repr_html_(self,tail=None):
+     if tail is None: return repr_html(self) # return type: str
+     ...
+     return ... # return type must be lxml.html.Element
+
+The returned value when *tail* is not :const:`None` must be the base HTML representation (as understood by module :mod:`lxml.html`) of the invoking object *self*. If that object is compound, the representation of each component object should be obtained by invoking function *tail* on it. This avoids unmanageable repetitions (if two components share a common sub-component) or infinite recursions. The *tail* function always returns a "pointer" in the form of a string ``?``\ *n* (within a ``span`` element) where *n* is a unique reference number. The scope of such pointers is the toplevel call of function :func:`repr_html`, which guarantees that two occurrences of equal objects will have the same pointer.
   """
 #==================================================================================================
-  def _(v):
-    try: k = ctx.get(v)
-    except TypeError: return E.span(repr(v)) # for unhashable objects
-    if k is None:
-      if (tail:=getattr(v,'as_html',None)) is None: return E.span(repr(v))
-      ctx[v] = k = len(ptab); ptab.append(lambda: tail(_))
-    return ref(k)
+  from inspect import signature
+  def tail(v):
+    try:
+      k = ctx.get(v)
+      if k is None:
+        f = v._repr_html_
+        if signature(f).parameters.get('tail') is None: return fromstring(f())
+        f = partial(robust,f,v)
+        ctx[v] = k = len(ptab); ptab.append(f)
+    except: return E.span(repr(v))
+    else: return ref(k)
+  def robust(f,v):
+    try: h = f(tail); assert isinstance(h,lxml.html.HtmlElement)
+    except: return E.span(repr(v))
+    else: return h
   def ref(k,point=True)->lxml.html.HtmlElement:
     attr = { 'class': 'pointer' }
     if point:
       tref = f'document.getElementById(\'{tid}\').rows[{k}]'
       attr |= {'onmouseenter':f'{tref}.style.outline=\'thick solid red\'','onmouseleave':f'{tref}.style.outline=\'\'','onclick':f'{tref}.scrollIntoView()'}
     return E.span(f'_{k}',**attr)
-  tid = unid('_repr_html'); ctx = {}; ptab = []; html = _(obj)
+  tid = unid('_repr_html'); ctx = {}; ptab = []; html = tail(obj)
   if ptab:
     (ref0,top),*L = ((ref(k,False),f()) for k,f in enumerate(ptab)) # invocation f() can add new items in ptab
     html = repr_html.style(E.table(E.thead(E.tr(E.td(top,colspan='2'))),E.tbody(*(E.tr(E.td(k),E.td(v)) for k,v in L)),id=tid))
@@ -72,49 +88,41 @@ Method :meth:`as_html` should only be defined for hashable objects. It must take
   #toplevel > tfoot > tr > td { background-color: #f0f0f0; color: navy; }
 ''').bind
 def html_table(
-    irows:Iterable[tuple[Any,tuple[Any,...]]],fmts:tuple[Callable[[Any],str],...],
-    hdrs:tuple[str,...]=None,opening:Iterable[lxml.html.Element]=(),closing:Iterable[lxml.html.Element]=(),
+    irows:Iterable[tuple[str,lxml.html.Element,...]],hdrs:tuple[str,...],
+    opening:Iterable[lxml.html.Element]=(),closing:Iterable[lxml.html.Element]=(),
     encoding:type|str=None
   )->str|lxml.html.HtmlElement:
   r"""
 :param irows: a generator of pairs of an object (key) and a tuple of objects (value)
-:param fmts: a tuple of format functions matching the length of the value tuples
 :param hdrs: a tuple of strings matching the length of the value tuples
 :param opening: list of HTML elements used as head of table
 :param closing: list of HTML elements used as foot of table
 :param encoding: encoding of the result
 
-Returns an HTML table object (as understood by :mod:`lxml`) with one row for each pair generated from *irows*. The key of each pair is in a column of its own with no header, and the value must be a tuple whose length matches the number of columns. The format functions in *fmts*, one for each column, are expected to return HTML objects. *hdrs* may specify headers as a tuple of strings, one for each column. If *encoding* is :const:`None` (default), the result is returned as an :mod:`lxml.html` object, otherwise it is returned as a string with the specified encoding.
+Returns an HTML table object (as understood by :mod:`lxml`) with one row for each pair generated from *irows*. The key of each pair is in a column of its own with no header, and the value must be a tuple whose length matches that of *hdrs*, which specify headers as a tuple of strings, one for each column. If *encoding* is :const:`None` (default), the result is returned as an :mod:`lxml.html` object, otherwise it is returned as a string with the specified encoding.
   """
 #==================================================================================================
-  def thead():
-    if opening is not None: yield E.tr(E.td(opening,colspan=str(1+len(fmts))))
-    if hdrs is not None: yield E.tr(E.td(),*(E.th(hdr) for hdr in hdrs))
-  def tbody():
-    for ind,row in irows:
-      yield E.tr(E.th(str(ind)),*(E.td(fmt(v)) for fmt,v in zip(fmts,row)))
-  def tfoot():
-    if closing is not None: yield E.tr(E.td(),E.td(closing,colspan=str(len(fmts))))
-  t = html_table.style(E.table(E.thead(*thead()),E.tbody(*tbody()),E.tfoot(*tfoot())))
+  n = str(1+len(hdrs))
+  thead = () if opening is None else (E.tr(E.td(opening,colspan=n)),)
+  thead = *thead,E.tr(E.td(),*(E.th(hdr) for hdr in hdrs))
+  tbody = (E.tr(E.th(ind),*(E.td(v) for v in row)) for ind,*row in irows)
+  tfoot = () if closing is None else (E.tr(E.td(),E.td(closing)),)
+  t = html_table.style(E.table(E.thead(*thead),E.tbody(*tbody),E.tfoot(*tfoot)))
   return t if encoding is None else tostring(t,encoding=encoding)
 
 #==================================================================================================
 def html_parlist(
-  html:Callable[[Any],lxml.html.Element],La:Iterable[Any],Lka:Iterable[tuple[str,Any]],
+  La:Iterable[lxml.html.Element],Lka:Iterable[tuple[str,lxml.html.Element]],
   opening:Iterable[lxml.html.Element]=(),closing:Iterable[lxml.html.Element]=(),style:str='padding: 5px',encoding:type|str=None
   )->str|lxml.html.HtmlElement:
   r"""
-:param html: callable to use on components to get their HTML representation
 :param La: anonymous components
 :param Lka: named components
-:param opening: list of HTML elements used as prolog
-:param closing: list of HTML elements used as epilog
+:param opening: list of HTML elements used as opening
+:param closing: list of HTML elements used as closing
 
 Returns a default HTML representation of a compound object, where *La,Lka* are the lists of unnamed and named components.The representation consists of the HTML elements in *opening* followed by the representation of the components in *La* and *Lka* (the latter are prefixed with their names in bold), followed by the HTML elements in *closing*. If *encoding* is :const:`None` (default), the result is returned as an :mod:`lxml.html` object, otherwise it is returned as a string with the specified encoding.
   """
 #==================================================================================================
-  def content():
-    for v in La: yield E.span(html(v),style=style)
-    for k,v in Lka: yield E.span(E.b(str(k)),'=',html(v),style=style)
-  t = E.div(*opening,*content(),*closing,style='padding:0')
+  t = E.div(*opening,*(E.span(v,style=style) for v in La),*(E.span(E.b(str(k)),'=',v,style=style) for k,v in Lka),*closing,style='padding:0')
   return t if encoding is None else tostring(t,encoding=encoding)

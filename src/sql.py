@@ -303,15 +303,15 @@ Example of use (assuming :func:`sessionmaker` as above has been imported)::
 
   def __repr__(self): return f'{self.__class__.__name__}<{self.base.__name__}>'
 
-  def _repr_html_(self): from .html import repr_html; return repr_html(self)
   _html_limit = 50
-  def as_html(self,_):
-    from .html import html_table
+  def _repr_html_(self,tail=None):
+    from .html import repr_html, html_table
     from itertools import islice
+    if tail is None: return repr_html(self)
     n = len(self)-self._html_limit
     L = self.items(); closing = None
     if n>0: L = islice(L,self._html_limit); closing = f'{n} more'
-    return html_table(sorted((k,(v,)) for k,v in L),fmts=(repr,),opening=repr(self),closing=closing)
+    return html_table(sorted((k,repr(v)) for k,v in L),opening=repr(self),closing=closing)
 
   cache = {}
   @classmethod

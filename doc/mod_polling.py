@@ -3,27 +3,30 @@
 # Language:             python
 # Purpose:              Illustration of the polling module
 
-import time
-from PYTOOLS.polling import PollingThread, status
-DB = RUN.path('.db')
-
-def report(final=False,start=time.time()):
-  # displays the current monitored status
-  try: s = '\n  '.join(f'{d:12s}: {v}' for d,v in status(DB).items())
-  except: s = '.'
-  print(f'--- {time.time()-start:.2f}{' (final)' if final else ''} ---\n  {s}')
-
-# calls to report (each on a *daemon* thread), one every 400msec up to 9 times
-for t in range(1,10): RUN.schedule(t*.4,report)
-
-value = 0
-with PollingThread(DB,
-  value=(lambda: value),
-  #generate_an_error={'type':'FLOAT','value':(lambda: 1/0)}),
-  fortytwo=42,
-  _interval=.2, # monitors every 200msec (on a *daemon* thread)
-):
-  for i in range(1,61):
-    value += 1
-    time.sleep(.05) # state update happens ca. every 50msec up to ca. 3sec
-report(final=True)
+import time, subprocess, sys
+if __name__ == '__main__':
+  # Master process: spawn a test process and report
+  from PYTOOLS.polling import status
+  dbpath,source = str(RUN.path('.db')),str(RUN.source); config = {'_dbpath':dbpath}; modname = 'example'
+  instr = f'from runpy import run_path; run_path({source!r},{config!r},{modname!r})'
+  w = subprocess.Popen([sys.executable,'-c',instr])
+  ts = time.time(); time.sleep(.1); ongoing = True
+  print('.. list-table::\n   :header-rows: 1\n')
+  print('   * -',*(f'     - {x}' for x in status(dbpath)),sep='\n')
+  while ongoing: # REPORTING: db lookup every 450msec until end of spawned process
+    time.sleep(.45); ongoing = w.poll() is None; flag = '' if ongoing else ' !'
+    try: L = status(dbpath).values()
+    except: pass
+    else: print(f'   * - {time.time()-ts:.2f}{flag}',*(f'     - {x}' for x in L),sep='\n')
+else:
+  # Spawned process: executes some code monitored by PollingThread
+  from PYTOOLS.polling import PollingThread
+  value = 0
+  with PollingThread(_dbpath,
+    value=(lambda: value),
+    fortytwo=42,
+    _interval=.2, # MONITORING: db update every 200msec (on a *daemon* thread)
+  ):
+    for i in range(300): # PROGRESSING: state update every 10msec for ca. 3sec
+      value += 1
+      time.sleep(.01)

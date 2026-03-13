@@ -51,18 +51,7 @@ SQLinit.MetainfoException = type('MetainfoException',(Exception,),{})
 #==================================================================================================
 class SQLupgrade:
   r"""
-:param modules: schema modules for the new and old database
-:param urls: urls for the new and old database
-:param name_to_old_name: a renaming of the new db into the old db (see below)
-
-An instance of this class is a context which helps transfer some database from an old schema to a new (created) one. A schema module must have at least the following members:
-
-  * ``__version__``: the version of the schema as an :class:`int`
-  * ``Base``: a subclass of class :class:`sqlalchemy.orm.DeclarativeBase`
-  * ``get_sessionmaker``: a callable which takes one input (typically a url) and returns a session maker (typically obtained by calling function :func:`sqlalchemy.orm.sessionmaker` on an engine bound to that url)
-  * all the mapped tables, as subclasses of ``Base``
-
-Each key in *name_to_old_name* should be a table name of the new db, and its value should be either a table name in the old db, or a dictionary mapping new column names in the new table to old ones in the old table (or a pair thereof). By default, tables in the new db map to old tables with the same name (if any), and columns of the new table map to columns in the old table if they have the same name and python type (or, in the case of :class:`Enum` types, strictly equivalent ones).
+An instance of this class is a context which helps transfer some database from an old schema to a new (created) one.
   """
 #==================================================================================================
   session:sqlalchemy.orm.Session
@@ -74,7 +63,23 @@ Each key in *name_to_old_name* should be a table name of the new db, and its val
   register: Callable[[str,str,Callable[[Any],None]],None]
   r"""Registers an entry in the converter (the arguments are a table and column name of the new db)"""
 
+#--------------------------------------------------------------------------------------------------
   def __init__(self,modules,urls,*,versions=None,name_to_old_name:Mapping[str,str|dict[str,str]|tuple[str,dict[str,str]]]|None=None):
+    r"""
+:param modules: schema modules for the new and old database
+:param urls: urls for the new and old database
+:param name_to_old_name: a renaming of the new db into the old db (see below)
+
+A schema module must have at least the following members:
+
+  * ``__version__``: the version of the schema as an :class:`int`
+  * ``Base``: a subclass of class :class:`sqlalchemy.orm.DeclarativeBase`
+  * ``get_sessionmaker``: a callable which takes one input (typically a url) and returns a session maker (typically obtained by calling function :func:`sqlalchemy.orm.sessionmaker` on an engine bound to that url)
+  * all the mapped tables, as subclasses of ``Base``
+
+Each key in *name_to_old_name* should be a table name of the new db, and its value should be either a table name in the old db, or a dictionary mapping new column names in the new table to old ones in the old table (or a pair thereof). By default, tables in the new db map to old tables with the same name (if any), and columns of the new table map to columns in the old table if they have the same name and python type (or, in the case of :class:`Enum` types, strictly equivalent ones).
+    """
+#--------------------------------------------------------------------------------------------------
     assert len(modules) == 2
     assert len(urls)==2 and all(isinstance(url,str) for url in urls)
     if versions is not None: assert len(versions)==2 and all((v is None or mod.__version__==v) for mod,v in zip(modules,versions))
@@ -151,13 +156,16 @@ def translate(m:Mapping[Any,Any],doc:str|None=None)->Callable[[Any],Any]:
 #==================================================================================================
 class SQLHandler (logging.Handler):
   r"""
-:param engine: a sqlalchemy engine (or its url)
-:param label: a text label
-
 A logging handler class which writes the log messages into a database.
   """
 #==================================================================================================
+#--------------------------------------------------------------------------------------------------
   def __init__(self,engine:str|sqlalchemy.Engine,label:str,*a,**ka):
+    r"""
+:param engine: a sqlalchemy engine (or its url)
+:param label: a text label
+    """
+#--------------------------------------------------------------------------------------------------
     from datetime import datetime
     from sqlalchemy.sql import select, insert, update, delete, and_
     meta = self.metadata()

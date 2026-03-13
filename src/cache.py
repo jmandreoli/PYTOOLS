@@ -11,7 +11,6 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 import pickle, inspect, threading
 from pathlib import Path
 from functools import partial, update_wrapper
-from itertools import islice
 from collections import namedtuple
 from weakref import WeakValueDictionary
 from datetime import datetime, timezone
@@ -28,11 +27,7 @@ BlockInfo = namedtuple('BlockInfo','hits ncell ncell_error ncell_pending')
 #==================================================================================================
 class CacheDB:
   r"""
-Instances of this class manage cache repositories. There is at most one instance of this class in a process for each normalised repository specification path. A cache repository contains cells, each cell corresponding to one cached value produced by a unique call, and possibly reused by later calls. Cells are clustered into blocks, each block grouping cells produced by the same call type, called a functor (of class :class:`AbstractFunctor`). Meta-information about blocks and cells are stored in an index database accessed through :mod:`sqlalchemy`. The values themselves are persistently stored by a dedicated storage object (of class :class:`AbstractStorage`).
-
-:class:`CacheDB` instances have an HTML ipython display.
-
-.. automethod:: __new__
+Instances of this class manage cache repositories. A cache repository contains cells, each cell corresponding to one cached value produced by a unique call, and possibly reused by later calls. Cells are clustered into blocks, each block grouping cells produced by the same call type, called a functor (of class :class:`AbstractFunctor`). Meta-information about blocks and cells are stored in an index database accessed through :mod:`sqlalchemy`. The values themselves are persistently stored by a dedicated storage object (of class :class:`AbstractStorage`). Instances of :class:`CacheDB` have an HTML ipython display.
   """
 #==================================================================================================
 
@@ -42,18 +37,18 @@ Instances of this class manage cache repositories. There is at most one instance
   session_maker:Callable[[],Any]
   r"""the sqlalchemy session maker for manipulation of this database"""
 
+#--------------------------------------------------------------------------------------------------
   def __new__(cls,spec:CacheDB|Path|str,listing={},lock=threading.Lock())->CacheDB:
     r"""
 :param spec: cache specification
 
-Generates a :class:`CacheDB` object.
+Generates a :class:`CacheDB` instance so that there is at most one instance of this class in a process for each normalised repository specification path:
 
 * If *spec* is already a :class:`CacheDB` instance, that instance is returned
 * If *spec* is a path to a directory, returns a :class:`CacheDB` instance whose storage is an instance of :class:`DefaultStorage` pointing to that directory
 * Otherwise, *spec* must be a path to a file, returns a :class:`CacheDB` instance whose storage is unpickled from the file at *spec*.
-
-Note that this constructor is locally cached on the resolved path *spec*.
     """
+#--------------------------------------------------------------------------------------------------
     if isinstance(spec,CacheDB): return spec
     if isinstance(spec,str): path = Path(spec)
     elif isinstance(spec,Path): path = spec
@@ -79,16 +74,20 @@ Note that this constructor is locally cached on the resolved path *spec*.
   def __hash__(self): return hash(self.path)
   # no need to define '__eq__': default 'is' behaviour works because '__new__' is cacheing
 
+#--------------------------------------------------------------------------------------------------
   def clear_obsolete(self,tol,dry_run:bool=False):
     r"""
 Clears all the blocks which are obsolete with tolerance *tol* of non-obsolescence. If *dry_run*, only return the list of obsolete blocks.
     """
+#--------------------------------------------------------------------------------------------------
     assert isinstance(dry_run,bool)
     return self.clear((lambda L: [block for block in L if pickle.loads(block.functor).obsolete(tol) is True]),dry_run)
     # this may load modules which add new (non obsolete) entries which must not be included in the list
 
+#--------------------------------------------------------------------------------------------------
   def clear(self,f:Callable[[Sequence[Block]],Sequence[Block]]=(lambda L: L),dry_run:bool=False):
     r"""Deletes blocks from this instance."""
+#--------------------------------------------------------------------------------------------------
     with self.session_maker() as session:
       L,L_ = f([block for block, in session.execute(select(Block))]),[]
       if dry_run is True: return L
@@ -109,30 +108,19 @@ Clears all the blocks which are obsolete with tolerance *tol* of non-obsolescenc
     n_max = self._html_limit
     with self.session_maker() as session:
       L = [CacheBlock(self,pickle.loads(block.functor),block.oid) for block, in session.execute(select(Block).order_by(Block.oid).limit(n_max))]
-      n = session.execute(select(func.count(Block.oid))).scalar()-len(L)
-    closing = f'{n} more' if n>0 else None
+      n = session.execute(select(func.count(Block.oid))).scalar()-n_max
     return html_table(
       ((str(c.oid),c._repr_html_(tail=tail,session=session)) for c in L),
       hdrs = ('block',),
-      opening=repr(self),
-      closing=closing
+      opening=(repr(self),),
+      closing=((f'{n} more',) if n>0 else ()),
     )
   def __repr__(self): return f'{self.__class__.__name__}<{self.path})>'
 
 #==================================================================================================
 class CacheBlock:
   r"""
-Instances of this class implements blocks of cells sharing the same functor.
-
-:param db: specification of the cache repository where the block resides
-:param functor: functor of the block
-:param cacheonly: if :const:`True`, cell creation is disallowed
-
-A :class:`CacheBlock` instance is callable, and calls take a single argument. Method :meth:`__call__` implements the cross-process cacheing mechanism which produces and reuses cache cells. It also implements a weak cache for local calls (within its process).
-
-:class:`CacheBlock` instances have an HTML ipython display.
-
-.. automethod:: __call__
+Instances of this class implements blocks of cells sharing the same functor. They have an HTML ipython display.
   """
 #==================================================================================================
 
@@ -147,7 +135,16 @@ A :class:`CacheBlock` instance is callable, and calls take a single argument. Me
   memory:WeakValueDictionary
   r"""a local cache of calls within the current process"""
 
+#--------------------------------------------------------------------------------------------------
   def __init__(self,db:CacheDB|Path|str='',functor:AbstractFunctor|None=None,oid:int=None,cacheonly:bool=False):
+    r"""
+:param db: specification of the cache repository where the block resides
+:param functor: functor of the block
+:param cacheonly: if :const:`True`, cell creation is disallowed
+
+A :class:`CacheBlock` instance is callable, and calls take a single argument. Method :meth:`__call__` implements the cross-process cacheing mechanism which produces and reuses cache cells. It also implements a weak cache for local calls (within its process).
+    """
+#--------------------------------------------------------------------------------------------------
     self.db = db = CacheDB(db)
     self.functor = functor
     if oid is None:
@@ -167,21 +164,27 @@ A :class:`CacheBlock` instance is callable, and calls take a single argument. Me
   def __hash__(self): return hash((self.db,self.oid))
   def __eq__(self,other): return isinstance(other,CacheBlock) and self.db == other.db and self.oid == other.oid
 
+#--------------------------------------------------------------------------------------------------
   def clear_error(self,dry_run:bool=False):
     r"""
 Clears all the cells from this block which cache an exception.
     """
+#--------------------------------------------------------------------------------------------------
     return self.clear((lambda L: [cell for cell in L if cell.size<0]),dry_run)
 
+#--------------------------------------------------------------------------------------------------
   def clear_overflow(self,n:int,dry_run:bool=False):
     r"""
 Clears all the cells from this block except the *n* most recent (lru policy).
     """
+#--------------------------------------------------------------------------------------------------
     assert isinstance(n,int) and n>=1
     return self.clear((lambda L: sorted((cell for cell in L if cell.size>0),key=(lambda cell: cell.tstamp),reverse=True)[n:]),dry_run)
 
+#--------------------------------------------------------------------------------------------------
   def clear(self,f:Callable[[Sequence[Cell]],Sequence[Cell]]=(lambda L:L),dry_run:bool=False):
     r"""Deletes cells from this instance."""
+#--------------------------------------------------------------------------------------------------
     with self.db.session_maker() as session:
       L = f(self.getblock(session).cells)
       if dry_run: return L
@@ -192,11 +195,13 @@ Clears all the cells from this block except the *n* most recent (lru policy).
     self.db.storage.remove(L_)
     return n
 
+#--------------------------------------------------------------------------------------------------
   def info(self):
     r"""
 Returns information about this block. Available attributes:
 :attr:`hits`, :attr:`ncell`, :attr:`ncell_error`, :attr:`ncell_pending`
     """
+#--------------------------------------------------------------------------------------------------
     hits = n = n_error = n_pending = 0
     with self.db.session_maker() as session:
       for cell in self.getblock(session).cells:
@@ -269,14 +274,14 @@ The result can be an exception (stored on miss and reused on hits), in which cas
     if tail is None: return repr_html(self)
     if session is None: session = self.db.session_maker()
     with session:
-      L = sorted([cell for cell, in islice(session.execute(select(Cell).where(Cell.block_oid==self.oid)),self._html_limit)],key=(lambda cell: cell.tstamp),reverse=True)
-      n = session.execute(select(func.count(Cell.oid)).where(Cell.block_oid==self.oid)).scalar()-self._html_limit
-      closing = f'{n} more' if n>0 else None
+      n_max = self._html_limit
+      L = [cell for cell, in session.execute(select(Cell).where(Cell.block_oid==self.oid).order_by(Cell.tstamp.desc()).limit(n_max))]
+      n = session.execute(select(func.count(Cell.oid)).where(Cell.block_oid==self.oid)).scalar()-n_max
       return html_table(
-        [(str(cell.oid),self.functor.html(cell.ckey,tail=tail),str(cell.tstamp),str(cell.hits),size_fmt(cell.size),time_fmt(cell.duration)) for cell in L],
+        ((str(cell.oid),self.functor.html(cell.ckey,tail=tail),str(cell.tstamp),str(cell.hits),size_fmt(cell.size),time_fmt(cell.duration)) for cell in L),
         hdrs=('ckey','tstamp','hits','size','duration'),
-        opening=repr(self),
-        closing=closing
+        opening=(repr(self),),
+        closing=((f'{n} more',) if n>0 else ()),
       )
 
   def __repr__(self): return f'{self.__class__.__name__}<{self.functor!r}>'
@@ -285,8 +290,6 @@ The result can be an exception (stored on miss and reused on hits), in which cas
 class Functor (AbstractFunctor):
   r"""
 An instance of this class defines a functor attached to a python top-level versioned function. The functor is entirely defined by the name of the function, that of its module, its version and its signature (without annotations). These components are saved on pickling and restored on unpickling, even if the function has disappeared or changed. This is not checked on unpickling, but method :meth:`getval` is disabled.
-
-.. automethod:: __new__
   """
 #===================================================================================================
 
@@ -297,6 +300,7 @@ An instance of this class defines a functor attached to a python top-level versi
   sig:inspect.Signature
   r"""signature of this functor"""
 
+#--------------------------------------------------------------------------------------------------
   def __new__(cls,func:Callable,sig:inspect.Signature|None=None)->Functor:
     r"""
 :param func: a versioned function, defined at the top-level of its module (hence pickable)
@@ -304,6 +308,7 @@ An instance of this class defines a functor attached to a python top-level versi
 
 Generates a functor associated with the function *func*.
     """
+#--------------------------------------------------------------------------------------------------
     if sig is None:
       shadow = Shadow(func)
       sig = inspect.Signature([inspect.Parameter(p.name,p.kind,default=p.default) for p in inspect.signature(func).parameters.values()]) # just removes annotations
@@ -344,13 +349,6 @@ Argument *arg* must be a pair of a list of positional arguments and a dict of ke
     return self.func(*a,**ka)
 
 #--------------------------------------------------------------------------------------------------
-  def html(self,ckey:bytes,tail):
-#--------------------------------------------------------------------------------------------------
-    from .html import html_parlist
-    a,ka = self._fpickle.loads(ckey)
-    return html_parlist((),((k,tail(v)) for k,v in self.sig.bind(*a,**dict(ka)).arguments.items()))
-
-#--------------------------------------------------------------------------------------------------
   def normalise(self,arg:tuple[Iterable[Any],Mapping[str,Any]]):
 #--------------------------------------------------------------------------------------------------
     a,ka = arg
@@ -366,60 +364,72 @@ Returns whether this functor is obsolete. This concerns only unpickled functors,
 #--------------------------------------------------------------------------------------------------
     return self.shadow.obsolete(tol) if self.func is self.shadow else False
 
+#--------------------------------------------------------------------------------------------------
+  def html(self,ckey:bytes,tail):
+#--------------------------------------------------------------------------------------------------
+    from .html import html_parlist
+    a,ka = self._fpickle.loads(ckey)
+    return html_parlist((),((k,tail(v)) for k,v in self.sig.bind(*a,**dict(ka)).arguments.items()))
+
 #==================================================================================================
 class FileStorage (AbstractStorage):
   r"""
 Instances of this class manage the persistent storage of cached values using a filesystem directory.
-
-:param path: the directory to store cached values
-
-The storage for a cell consists of a content file which contains the value of the cell in pickled format and a cross process mechanism to synchronise access to the content file between writer and possibly multiple readers. The path of the content file as well as that of the file underlying the synch lock are built from the cell id, so as to be unique to that cell. They inherit the access rights of the :attr:`path` directory.
   """
 #==================================================================================================
 
   path:Path
   r"""directory where values are stored"""
-  gate: Mapping
-  r"""dictionary of threading events"""
-  from watchdog.events import FileSystemEventHandler
-  class GatingEventHandler(FileSystemEventHandler):
-    r"""Watchdog event for new value files."""
-    def __init__(self):
-      gate = {}
-      lock = threading.Lock()
-      def notify(p): # here p.exists() in wait(p) must be true so gate[p] can be deleted
-        with lock:
-          if (ev:=gate.get(p)) is not None: ev.set(); del gate[p]
-      self.notify = notify
-      def wait(p):
-        with lock:
-          if p.exists(): return
-          if (ev:=gate.get(p)) is None: ev = gate[p] = threading.Event()
-        ev.wait()
-      self.wait = wait
-      def remove(L):
-        with lock:
-          for p in L:
-            if gate.get(p) is not None: del gate[p]
-      self.remove = remove
-      super().__init__()
-    def on_moved(self,event):
-      r""""""
-      p = Path(event.dest_path)
-      if p.suffix == '.pck': self.notify(p)
-  del FileSystemEventHandler
+#--------------------------------------------------------------------------------------------------
   def __init__(self,path:Path):
-    from watchdog.observers import Observer
+    r"""
+:param path: the directory to store cached values
+
+The storage for a cell consists of a content file which contains the value of the cell in pickled format and a cross process mechanism to synchronise access to the content file between a writer and possibly multiple readers.
+    """
+#--------------------------------------------------------------------------------------------------
     self.path = path
-    self.monitor = monitor = self.GatingEventHandler()
+    self.monitor = self.monitor_factory(path)
+
+#--------------------------------------------------------------------------------------------------
+  @staticmethod
+  def monitor_factory(path:Path):
+    r"""
+:param path: a directory used by an instance of :class:`FileStorage` in this or other thread or process
+
+Returns a monitor of the activity within directory *path*. The target events are any creation (obtained by mv) of a file with extension ``.pck``. A monitor must have method :meth:`ask`, to wait until a target event occurs for a given file, and method :meth:`tell`, to stop monitoring events for a given list of files. The monitor must be thread safe. This implementation uses module :mod:`watchdog`.
+    """
+#--------------------------------------------------------------------------------------------------
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
+    class GatingEventHandler(FileSystemEventHandler):
+      def __init__(self):
+        gate = {}
+        lock = threading.Lock()
+        def ask(p):
+          with lock:
+            if p.exists(): return
+            if (ev:=gate.get(p)) is None: ev = gate[p] = threading.Event()
+          ev.wait()
+        self.ask = ask
+        def tell(*L):
+          with lock:
+            for ev in (ev for p in L if (ev:=gate.pop(p,None)) is not None): ev.set()
+        self.tell = tell
+        super().__init__()
+      def on_moved(self,event):
+        p = Path(event.dest_path)
+        if p.suffix == '.pck': self.tell(p)
+    monitor = GatingEventHandler()
     observer = Observer()
     observer.schedule(monitor,path,recursive=True)
     observer.start()
+    return monitor
 
 #--------------------------------------------------------------------------------------------------
   def setval(self,oid:int,val:Any)->int:
     r"""
-Dumps (pickle) *val* into some temporary file and renames it to the content path for *oid*. Renaming will trigger a :mod:`watchdog` event in other processes.
+Dumps (pickle) *val* into some temporary file and renames it to the content path for *oid*. Renaming will trigger a monitored event in :class:`Filestorage` instances in this and other threads/processes (if any).
     """
 #--------------------------------------------------------------------------------------------------
     vpath = self.getpath(oid)
@@ -433,17 +443,17 @@ Dumps (pickle) *val* into some temporary file and renames it to the content path
 #--------------------------------------------------------------------------------------------------
   def getval(self,oid:int,wait:bool)->Any:
     r"""
-If *wait*, waits for the content file for *oid* to appear. Then loads (pickle) from that file and return the value.
+If *wait* is :const:`True`, asks the monitor to wait until the content file for *oid* is available. Then loads (unpickle) from that file and returns the unpickled value.
     """
 #--------------------------------------------------------------------------------------------------
     vpath = self.getpath(oid)
-    if wait: self.monitor.wait(vpath)
+    if wait: self.monitor.ask(vpath)
     with vpath.open('rb') as u: return pickle.load(u)
 
 #--------------------------------------------------------------------------------------------------
   def remove(self,L:Iterable[int]):
     r"""
-Removes the content file path for oids in L.
+Removes the content file path for oids in *L* and tell the monitor to stop monitoring them.
     """
 #--------------------------------------------------------------------------------------------------
     def rm_vpath(oid):
@@ -451,23 +461,12 @@ Removes the content file path for oids in L.
       try: vpath.unlink()
       except FileNotFoundError: logger.warning('%s unable to remove content file for oid: %s at path: %s',self,oid,vpath)
       return vpath
-    self.monitor.remove([rm_vpath(oid) for oid in L])
-
-#--------------------------------------------------------------------------------------------------
-  def clear(self):
-    r"""
-Clears all storage.
-    """
-#--------------------------------------------------------------------------------------------------
-    from shutil import rmtree
-    for f in self.path.iterdir():
-      if f.is_dir(): rmtree(f)
-      else: f.unlink()
+    self.monitor.tell(*(rm_vpath(oid) for oid in L))
 
 #--------------------------------------------------------------------------------------------------
   def getpath(self,oid:int,masks=tuple((n,31<<n) for n in range(20,-5,-5))):
     r"""
-Returns the content file path (as a :class:`pathlib.Path` instance) associated to *oid* (of type :class:`int`). It is composed of two parts (a directory name and a file name), joined to the main :attr:`path` attribute. The directory is created if it does not already exist. The concatenation of the directory name (without its prefix ``X``) and the file name (without its suffix ``.pck``) is the representation of *oid* in base 32 (digits are 0-9A-V). This mapping of oids to paths ensures that no sub-directory holds more than 1024 oids. It assumes that oids are created sequentially (which is what AUTOINCREMENT in databases does), so the number of sub-directories grows slowly.
+Returns the content file path (as an absolute :class:`pathlib.Path` instance) associated to *oid* (of type :class:`int`). It is composed of two parts (a directory name and a file name), joined to the main :attr:`path` attribute. The directory is created if it does not already exist. This implementation ensures that no directory holds more than 1024 oids. If oids are created sequentially (which is what AUTOINCREMENT in databases does), the number of directories grows slowly.
     """
 #--------------------------------------------------------------------------------------------------
     s = ''.join('0123456789ABCDEFGHIJKLMNOPQRSTUV'[(oid&m)>>n] for n,m in masks)
@@ -479,13 +478,15 @@ Returns the content file path (as a :class:`pathlib.Path` instance) associated t
 
 #==================================================================================================
 class DefaultStorage (FileStorage):
-  r"""
-:param path: path to an existing directory, which must be either empty or contain a sqlite file `index.db` conforming to :mod:`cache_v1`
+#==================================================================================================
+#--------------------------------------------------------------------------------------------------
+  def __init__(self,path:Path):
+    r"""
+:param path: path to an existing directory, which must be either empty or contain a sqlite file `index.db` created by class :class:`CacheDB` on its first connection
 
 The default storage class for a cache repository. Stores the index as a sqlite3 database in the same directory as the values, with name ``index.db``.
-  """
-#==================================================================================================
-  def __init__(self,path:Path):
+    """
+#--------------------------------------------------------------------------------------------------
     super().__init__(path)
     dbpath = path/'index.db'
     if not dbpath.exists() and any(path.iterdir()): raise Exception('Cannot create new index in non empty directory')
@@ -546,17 +547,18 @@ Instances of this class are defined from versioned functions (ie. functions defi
       module,name,version = self.config
       try:
         o = getattr(import_module(module),name)
-        if not inspect.isfunction(o) or o.__module__!=module or o.__name__!=name or not hasattr(o,'version'): raise Exception(f'Failed to import matching function.')
-        if o.version!=version: raise Shadow.VersionMismatchException(o.version,version)
+        if inspect.isfunction(o) and o.__module__==module and o.__name__==name and (v:=getattr(o,'version',o)) is not o:
+          if v!=version: raise Shadow.VersionMismatchException(v,version)
+        else: raise Exception(f'Failed to import matching function.')
       except Exception as exc: o = exc
       self._origin = o
     return o
 
   def obsolete(self,tol:int)->bool:
     r"""
-:param tol: must be :const:`0` or :const:`1` (the latter indicates that a version mismatch does not yield obsolescence)
+:param tol: indicates the degree of tolerance (this implementation accepts only :const:`0` or :const:`1`)
 
-Returns :const:`True` if attribute :attr:`origin` is an exception, i.e. the originally shadowed function could not be reconstructed, and *tol* is null or the exception is not a version mismatch. Otherwise, returns :const:`False`.
+Returns :const:`True` if attribute :attr:`origin` is a non tolerated exception and :const:`False` otherwise. When *tol* is :const:`0` no exception is tolerated, otherwise version mismatch exceptions are tolerated.
     """
     assert isinstance(tol,int) and tol in (0,1)
     match self.origin:

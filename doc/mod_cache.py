@@ -6,7 +6,7 @@
 import time,sys
 
 DEMOS = {
-  'simplefunc': ('(1,2)', '(1,y=2)',),
+  'simplefunc': ('(1,)','(1,3)','(1,y=3)',),
   'longfunc': ('(42,6)', '(None,4)',),
   'vfunc': ('(3)',),
   'proc': (f"{a}['abc']" for a in ("()", "(rabc='abc2')", "(rbc='bc2')",)),
@@ -14,7 +14,7 @@ DEMOS = {
 
 if __name__ == '__main__':
   # Master process. For each entry in DEMOS,
-  #   * execute it in 2 separate processes launched at 2 sec interval and
+  #   * execute it in 2 separate processes launched at 1 sec interval and
   #   * wait for them both to complete
   from PYTOOLS.cache import CacheDB
   import subprocess
@@ -26,12 +26,11 @@ logging.basicConfig(level=logging.{loglevel},stream=sys.stdout,format="[{runid}@
 from PYTOOLS import import_module_from_file
 import_module_from_file({modname!r},{source!r},{config!r}){demo}'''
     return subprocess.Popen([sys.executable,'-c',instr])
-  source,dbpath = str(RUN.source),str(RUN.path('.dir'))
-  CacheDB(dbpath).storage.clear()
+  source,dbpath = str(RUN.source),str(RUN.path('.dir',rm=True))
   modname = 'example' # __name__ of module loaded in spawned processes (must be the same for all for cacheing to work)
   for key in (None,*DEMOS.keys()):
     print(80*'-',flush=True)
-    wA = spawn(key,'A'); time.sleep(2); wB = spawn(key,'B')
+    wA = spawn(key,'A'); time.sleep(1); wB = spawn(key,'B')
     assert not any(rc:=(wA.wait(),wB.wait())), f'rc:{rc}'
 else:
   # Spawned process. The cache is shared (persistent) across all spawned processes

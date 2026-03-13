@@ -88,10 +88,10 @@ The returned value when *tail* is not :const:`None` must be the base HTML repres
   #toplevel > tfoot > tr > td { background-color: #f0f0f0; color: navy; }
 ''').bind
 def html_table(
-    irows:Iterable[tuple[str,lxml.html.Element,...]],hdrs:tuple[str,...],
-    opening:Iterable[lxml.html.Element]=(),closing:Iterable[lxml.html.Element]=(),
-    encoding:type|str=None
-  )->str|lxml.html.HtmlElement:
+  irows:Iterable[tuple[str,lxml.html.Element,...]],hdrs:tuple[str,...],
+  opening:Iterable[lxml.html.Element]=(),closing:Iterable[lxml.html.Element]=(),
+  encoding:type|str=None
+)->str|lxml.html.HtmlElement:
   r"""
 :param irows: a generator of pairs of an object (key) and a tuple of objects (value)
 :param hdrs: a tuple of strings matching the length of the value tuples
@@ -103,11 +103,11 @@ Returns an HTML table object (as understood by :mod:`lxml`) with one row for eac
   """
 #==================================================================================================
   n = str(1+len(hdrs))
-  thead = () if opening is None else (E.tr(E.td(opening,colspan=n)),)
-  thead = *thead,E.tr(E.td(),*(E.th(hdr) for hdr in hdrs))
-  tbody = (E.tr(E.th(ind),*(E.td(v) for v in row)) for ind,*row in irows)
-  tfoot = () if closing is None else (E.tr(E.td(),E.td(closing)),)
-  t = html_table.style(E.table(E.thead(*thead),E.tbody(*tbody),E.tfoot(*tfoot)))
+  if opening: opening = (E.tr(E.th(*opening,colspan=n)),)
+  thead = (*opening,E.tr(E.td(),*(E.th(hdr) for hdr in hdrs)))
+  tbody = [E.tr(E.th(ind),*(E.td(v) for v in row)) for ind,*row in irows]
+  if closing: closing = (E.tfoot(E.tr(E.td(*closing,colspan=n))),)
+  t = html_table.style(E.table(E.thead(*thead),E.tbody(*tbody),*closing))
   return t if encoding is None else tostring(t,encoding=encoding)
 
 #==================================================================================================

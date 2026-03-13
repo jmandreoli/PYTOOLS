@@ -38,11 +38,11 @@ class Cell (Base):
   tstamp:Mapped[datetime]     = mapped_column(DateTime(),nullable=False,index=True)
   r"""time stamp of creation or last hit of the cell"""
   hits:Mapped[int]            = mapped_column(Integer(),default=0)
-  r"""total number of hits the cell"""
+  r"""total number of hits on the cell (creation is not counted as a hit)"""
   size:Mapped[int]            = mapped_column(Integer(),default=0)
   r"""size of the cell value, negative if error, and null if still pending"""
   duration:Mapped[float|None] = mapped_column(Float())
-  r"""duration of the interval between the invocation which created the cell and the completion of its value"""
+  r"""duration of the computation of the cell value (:const:`None` if still pending)"""
   # relations, constraints
   block:Mapped[Block]         = relationship('Block',back_populates='cells')
   r"""parent block"""

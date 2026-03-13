@@ -5,6 +5,8 @@
 # Purpose:              Utilities for ipywidgets
 #
 
+from __future__ import annotations
+if False: import pandas, sqlalchemy.engine # trick for the type checker
 import logging; logger = logging.getLogger(__name__)
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
@@ -12,7 +14,6 @@ import traitlets
 from contextlib import contextmanager
 from pathlib import Path
 from ipywidgets import Widget, Label, IntSlider, FloatSlider, Text, IntText, FloatText, BoundedIntText, BoundedFloatText, Password, HTML, Checkbox, Dropdown, Select, SelectMultiple, Button, Output, Tab, Stack, VBox, HBox, Layout, Valid, Play, jslink, AppLayout
-if False: import pandas, sqlalchemy.engine
 
 __all__ = 'app', 'seq_browser', 'file_browser', 'db_browser', 'hastrait_editor', 'TrackPlay', 'SelectMultipleOrdered', 'DblClickButton', 'RoundRobinButton', 'simple_button', 'setdefault_layout', 'setdefault_children_layout', 'AutoWidthStyle',
 
@@ -22,18 +23,26 @@ AutoWidthStyle = {'description_width':'auto'}
 class app (AppLayout):
   r"""
 An instance of this class is an app based on module :mod:`ipywidgets`, consisting of a toolbar, a console and additional child widgets.
-
-:param toolbar: widgets added at the end of the toolbar (in addition to the default toolbar widgets)
-:param children: additional children widgets appended to the main widget
   """
 #==================================================================================================
 
   toolbar: HBox
-  r"""The toolbar widget (first child of :attr:`main`)"""
+  r"""The toolbar widget (first child of the header)"""
   console: Output
-  r"""A console terminal (just below :attr:`toolbar`)"""
+  r"""A console terminal (second child of the header): disappears when empty"""
 
+#--------------------------------------------------------------------------------------------------
   def __init__(self,toolbar:Sequence[Widget]=(),children:Sequence[Widget]=(),**ka):
+    r"""
+:param toolbar: widgets added after the default toolbar widgets
+:param children: widgets forming the :attr:`center` widget
+:param ka: passed on to the super-class constructor
+
+Super-class attributes :attr:`footer`,:attr:`left_sidebar`,:attr:`right_sidebar` are directly derived from *ka*.
+Super-class attribute :attr:`header` is set to a :class:`VBox` instance containing the toolbar and a console.
+Super-class attribute :attr:`center` is set to a :class:`VBox` instance.
+    """
+#--------------------------------------------------------------------------------------------------
     w_closeb = simple_button(icon='close',tooltip='Close app')
     self.console = console = Output()
     w_clearb = simple_button(callback=console.clear_output,icon='trash',tooltip='Clear console')
@@ -47,10 +56,12 @@ An instance of this class is an app based on module :mod:`ipywidgets`, consistin
     self.on_close = _close_callbacks.append
     w_closeb.on_click(lambda b: [f() for f in _close_callbacks])
 
+#--------------------------------------------------------------------------------------------------
   def mpl_figure(self,*a,**ka):
     r"""
 Adds a :mod:`matplotlib` figure to this app.
     """
+#--------------------------------------------------------------------------------------------------
     from matplotlib.pyplot import close
     fig,w = mpl_figure(*a,asapp=False,**ka)
     self.center.children += (w,)
@@ -61,14 +72,17 @@ Adds a :mod:`matplotlib` figure to this app.
 class seq_browser (app):
   r"""
 An instance of this class is an app to display a (long) sequence object in pagination mode.
-
+  """
+#==================================================================================================
+#--------------------------------------------------------------------------------------------------
+  def __init__(self,D:Sequence,start:int=1,pgsize:int=10):
+    r"""
 :param D: a sequence object
 :param start: the index of the initial page
 :param pgsize: the size of the pages
 :param ka: dictionary of layout values for the main widget
-  """
-#==================================================================================================
-  def __init__(self,D:Sequence,start:int=1,pgsize:int=10):
+    """
+#--------------------------------------------------------------------------------------------------
     from IPython.display import display, clear_output
     # content initialisation
     P = (len(D)-1)//pgsize + 1
@@ -93,16 +107,21 @@ An instance of this class is an app to display a (long) sequence object in pagin
 #==================================================================================================
 class file_browser (app):
   r"""
-An instance of this class is an app to browse the file at *path*, possibly while it expands. If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
-
+An instance of this class is an app to browse a file, possibly while it expands.
+  """
+#==================================================================================================
+#--------------------------------------------------------------------------------------------------
+  def __init__(self,path:str|Path,start:int|float|None=None,step:int=50,track:bool=True,context:tuple[int,int]=(10,5)):
+    r"""
 :param path: a path to an existing file
 :param start: index of start pointed
 :param step: step size in bytes
 :param track: whether to track changes in the file
 :param context: pair of number of lines before and after to display around current position
-  """
-#==================================================================================================
-  def __init__(self,path:str|Path,start:int|float|None=None,step:int=50,track:bool=True,context:tuple[int,int]=(10,5)):
+
+If *start* is :const:`None`, the start position is end-of-file. If *start* is of type :class:`int`, it denotes the exact start position in bytes. If *start* is of type :class:`float`, it must be between :const:`0.` and :const:`1.`, and the start position is set (approximatively) at that position relative to the whole file.
+    """
+#--------------------------------------------------------------------------------------------------
     # content initialisation
     path = Path(path).absolute()
     file = path.open('rb')
@@ -186,13 +205,17 @@ An instance of this class is an app to browse the file at *path*, possibly while
 #==================================================================================================
 class db_browser (app):
   r"""
-An instance of this class is an app to explore a database specified by *spec*. If a metadata structure is specified, it must be bound to an existing engine and reflected.
-
-:param spec: an sqlalchemy url or engine or metadata structure, defining the database to explore
+An instance of this class is an app to explore a database through module :mod:`sqlalchemy`.
   """
 #==================================================================================================
   style = 'background-color:gray; color:white; font-weight:bold; padding:.2cm'
-  def __init__(self,spec:str|sqlalchemy.engine.Engine):
+#--------------------------------------------------------------------------------------------------
+  def __init__(self,spec:str|sqlalchemy.engine.Engine,**ka):
+    r"""
+:param spec: an :mod:`sqlalchemy` url or engine, defining the database to explore
+:param ka: passed on to the super-class
+    """
+#--------------------------------------------------------------------------------------------------
     from pandas import read_sql_query
     from sqlalchemy import select, func, MetaData, create_engine
     from sqlalchemy.engine import Engine
@@ -208,7 +231,7 @@ An instance of this class is an app to explore a database specified by *spec*. I
     config_header = db_browser_table.header()
     # widget creation
     w_title = HTML(f'<div style="{self.style}">{engine}</div>')
-    w_table = activable(Select(options=sorted(meta.tables.items()),rows=min(len(meta.tables),10),layout={'width':'10cm'}))
+    w_table = Select(options=sorted(meta.tables.items()),rows=min(len(meta.tables),10),layout={'width':'10cm'}); w_table.active = True
     w_schema = VBox([config_header,*(cfg.widget for cfg in config.values())])
     w_scol = SelectMultipleOrdered(layout={'width':'6cm'})
     w_ordr = SelectMultipleOrdered(layout={'width':'6cm'})
@@ -220,7 +243,7 @@ An instance of this class is an app to explore a database specified by *spec*. I
     w_size = Text('',disabled=True,tooltip='Number of rows',layout={'width':'4cm'},style=AutoWidthStyle)
     w_offset = IntSlider(description='offset',min=0,step=1,layout={'width':'10cm'},readout=False,style=AutoWidthStyle)
     w_out = Output()
-    super().__init__(toolbar=[w_title],children=[HBox([w_table,w_detailb]),w_detail,HBox([w_nsample,Label('/',style=AutoWidthStyle),w_size,w_offset,w_reloadb]),w_out])
+    super().__init__(toolbar=[w_title],children=[HBox([w_table,w_detailb]),w_detail,HBox([w_nsample,Label('/',style=AutoWidthStyle),w_size,w_offset,w_reloadb]),w_out],**ka)
     # event handling
     def size(table): # returns the size of a table
       try: return read_sql_query(select(func.count()).select_from(table),engine).to_numpy().item()
@@ -278,7 +301,7 @@ An instance of this class is an app to explore a database specified by *spec*. I
 
 #==================================================================================================
 class db_browser_table:
-  """An instance of this data class holds the configuration and widget of a table."""
+  """An instance of this data class holds the configuration and widget of a DB table."""
 #==================================================================================================
   style = 'background-color: navy; color: white; font-size: x-small; border: thin solid; text-align: center;'
   schema = ( # this is the schema of schemas!
@@ -319,19 +342,18 @@ class db_browser_table:
 class hastrait_editor (app):
 #==================================================================================================
   r"""
-An instance of this class is an app to edit a traitlets structure. The construction of the widget is directed by metadata which must be associated to each editable trait in *target* under the key ``widget``. This is either a callable, which produces a widget for that trait, or a :class:`dict`, passed as keyword arguments to a widget guesser. Guessing is based on the trait class. Each property in *default_trait_layout* is applied to all the trait widget layouts which assign a :const:`None` value to that property. The overall editor widget can be further customised using the following attributes:
-
-.. attribute:: header,footer
-
-   They can be modified freely. The :attr:`header` and :attr:`footer` widgets (:class:`VBox` instances) appear immediately before and after, respectively, the trait widgets. A reset buttons is present in the toolbar by default.
-
-.. attribute:: label_layout
-
-   A shared :class:`Layout` instance formatting the label of all the traits. Modifications of this layout therefore applies to all trait labels.
-
-:param target: a structure with traits
+An instance of this class is an app to edit a traitlets structure.
   """
-  def __init__(self,target:traitlets.HasTraits,default_widget_layout=None,label_layout=None):
+#--------------------------------------------------------------------------------------------------
+  def __init__(self,target:traitlets.HasTraits,default_widget_layout:dict[str,str]|None=None,label_layout:dict[str,str]|None=None):
+    r"""
+:param target: a structure with traits
+:param default_widget_layout: default layout for the trait values
+:param label_layout: layout for the trait names
+
+The construction of the widget is directed by metadata which must be associated to each editable trait in *target* under the key ``widget``. This is either a callable which produces a widget for that trait, or a :class:`dict` instance, passed as keyword arguments to a widget guesser. Guessing is based on the trait class. Each property in *default_trait_layout* is applied to all the trait widget layouts which assign a :const:`None` value to that property.
+    """
+#--------------------------------------------------------------------------------------------------
     # content initialisation
     initial = {}
     # widget creation
@@ -358,7 +380,6 @@ An instance of this class is an app to edit a traitlets structure. The construct
 
 #==================================================================================================
 class hastrait_editor_trait:
-  """An instance of this data class holds the configuration and widget of a trait."""
 #==================================================================================================
   default_label_layout = {'width':'2cm','padding':'0 0 0 .2cm','align_self':'flex-start'}
   default_widget_layout = {'width':'15cm'}
@@ -399,7 +420,7 @@ class hastrait_editor_trait:
         case traitlets.Enum(): w = g_selector(t,ws)
         case traitlets.List(_trait=traitlets.Enum()): w = g_mselector(t,ws)
         case _: raise Exception('Cannot guess widget')
-    setdefault_layout(w,**dict(self.default_widget_layout,**(default_widget_layout or {})))
+    setdefault_layout(w,**(self.default_widget_layout|(default_widget_layout or {})))
     self.interact = w
     label = HTML(f'<span title="{t.help}">{name}</span>',layout=dict(self.default_label_layout,**(label_layout or {})))
     self.resetb = resetb = simple_button(icon='undo',tooltip='Reset to default')
@@ -408,26 +429,31 @@ class hastrait_editor_trait:
 #==================================================================================================
 class TrackPlay (HBox):
   r"""
-Widgets of this class are similar to :class:`Play` widgets, with more functionality to navigate its value domain (interval of whole numbers). The domain is split into a sequence of contiguous intervals called tracks. Parameter *track* is a function which returns, for each number in the domain, the bounds of its track interval (closed on the left, open on the right), and :const:`None` outside the domain.
-
-* If *track* is an :class:`int` instance, the intervals are of constant length *track*
-* If *track* is a sequence of :class:`int` instances, possibly ended by the ellipsis `...`, it gives the length of the intervals (and repeat if ellipsis)
-* Otherwise, *track* must be a function of one :class:`int` input returning two :class:`int` outputs
-
-The current position in the domain is reported on a clock, showing the value of the position divided by a constant rate.
-
-:param track_spec: track function specification
-:param rate: position to clock-time ratio (default: clock-time ~ real time in sec)
-:param value: initial clock-time (same as in :class:`Play` widgets, divided by *rate*)
-:param playing: whether the widget is initially playing (same as in :class:`Play` widgets)
-:param ka: passed to the :class:`Play` constructor
+Widgets of this class are similar to :class:`Play` widgets, with more functionality to navigate its value domain (interval of whole numbers), split into a sequence of contiguous intervals called tracks.
   """
 #==================================================================================================
   value = traitlets.Float(min=0.)
   r"""Current clock-time (always rounded to an integer multiple of *rate*)"""
   playing = traitlets.Bool()
   r"""Whether the widget is currently playing"""
+#--------------------------------------------------------------------------------------------------
   def __init__(self,track_spec:int|Sequence[int]|Callable[[int],tuple[int,int]],rate:float|None=None,value:float=0.,playing:bool=False,**ka):
+    r"""
+:param track_spec: specification of the track function (see below)
+:param rate: position to clock-time ratio (default: clock-time ~ real time in sec)
+:param value: initial clock-time (same as in :class:`Play` widgets, divided by *rate*)
+:param playing: whether the widget is initially playing (same as in :class:`Play` widgets)
+:param ka: passed on to the underlying :class:`Play` constructor
+
+The track function returns, for each number in the domain, the bounds of its track interval (closed on the left, open on the right), and :const:`None` outside the domain. Parameter *track_spec* can be
+
+* an :class:`int` instance: the intervals are of constant length *track*
+* a sequence of :class:`int` instances, possibly ended by the ellipsis `...`: it gives the length of the intervals (and repeat if ellipsis)
+* a function of one :class:`int` input returning two :class:`int` outputs
+
+The current position in the domain is reported on a clock, showing the value of the position divided by *rate*.
+    """
+#--------------------------------------------------------------------------------------------------
     def track_func_()->Callable[[int],tuple[int, int]]:
       if callable(track_spec):
         n = 0
@@ -549,13 +575,18 @@ Essentially like :class:`SelectMultiple` but preserves order of selection.
 #==================================================================================================
 class Stable (Stack):
   r"""
-Essentially a wrapper around widget *main* allowing it to be safely interacted with even when it is updated concurrently. Widget *main* should not have callbacks bound to its value, nor should have its value updated externally: binding callbacks to or modifying the value should be done on the wrapper. Widget *main* is then used only to edit a frozen value of the wrapper, which becomes its current value when submitted. Note: unfortunately, there is no way in ipywidget to cancel an edition once it has started (e.g. using the escape key).
-
-:param main: the widget to wrap
-:param fmt: a callable which returns a :class:`str` representation of any value of *main*
+Essentially a wrapper around a target widget allowing it to be safely interacted with even when it is updated concurrently.
   """
 #==================================================================================================
+#--------------------------------------------------------------------------------------------------
   def __init__(self,main:Widget,fmt:Callable[[Any],str]|str,**ka):
+    r"""
+:param main: the target widget
+:param fmt: a callable which returns a :class:`str` representation of any value of *main*
+
+Widget *main* should not have callbacks bound to its value, nor should have its value updated externally: binding callbacks to or modifying the value should be done on the wrapper. Widget *main* is then used only to edit a frozen value of the wrapper, which becomes its current value when submitted. Note: unfortunately, there is no way in :mod:`ipywidget` to cancel an edition once it has started (e.g. using the escape key).
+    """
+#--------------------------------------------------------------------------------------------------
     self.add_traits(value=type(main).value)
     self.active = True
     fmt_ = fmt.format if isinstance(fmt,str) else fmt
@@ -575,15 +606,17 @@ Essentially a wrapper around widget *main* allowing it to be safely interacted w
 class DblClickButton (Button):
   r"""
 Helper class to define buttons with double-click behaviour.
-
-:param delay: duration (in sec between .05 and 1.) between two clicks to produce a double-click (default: .2)
-:param a: passed to the super class constructor
-:param ka: passed to the super class constructor
   """
 #==================================================================================================
   double_clicked: bool
   r"""State of the button (whether it has been double-clicked)"""
+#--------------------------------------------------------------------------------------------------
   def __init__(self,delay:float|None=None,**ka):
+    r"""
+:param delay: duration (in sec between .05 and 1.) between two clicks to produce a double-click (default: .2)
+:param ka: passed to the super-class constructor
+    """
+#--------------------------------------------------------------------------------------------------
     from threading import Thread, Condition
     def loop():
       with cond:
@@ -609,14 +642,18 @@ Helper class to define buttons with double-click behaviour.
 class RoundRobinButton (Button):
   r"""
 An instance of this class is a button with states which form a cycle. Each click of the button advances to the next state and triggers the action associated with that state.
-
-:param colours: an assignment of a colour to each state
-:param size: the width and height of the button in mm, either as a pair of :class:`int` or a :class:`str`, e.g. (5,2) or '5x2'
   """
 #==================================================================================================
   on_click_: Callable[[str|int,Callable[[],None]],None]
   r"""Assigns a callback to a state (specified by its colour or index)"""
-  def __init__(self,*colours:Sequence[str],layout:Mapping[str,str]={},shape:tuple[int,int]|str=(5,2),**ka):
+#--------------------------------------------------------------------------------------------------
+  def __init__(self,*colours:Sequence[str],layout:dict[str,str]|None=None,shape:tuple[int,int]|str=(5,2),**ka):
+    r"""
+:param colours: an assignment of a colour to each state
+:param size: the width and height of the button in mm, either as a pair of :class:`int` or a :class:`str`, e.g. (5,2) or '5x2'
+:param ka: passed on to the super-class constructor
+    """
+#--------------------------------------------------------------------------------------------------
     def step(b):
       nonlocal state
       state += 1; state %= N
@@ -624,7 +661,7 @@ An instance of this class is a button with states which form a cycle. Each click
       for callback in callbacks[state]: callback()
     if isinstance(shape,str): w,h = (2,5) if shape=='T' else map(int,shape.split('x',1))
     else: assert all(isinstance(x,int) for x in shape); w,h = shape
-    layout = {'width':f'{w}mm','height':f'{h}mm','padding':'0','border':'0'}|layout
+    layout = {'width':f'{w}mm','height':f'{h}mm','padding':'0','border':'0'}|(layout or {})
     self.on_click_ = lambda colour,callback: callbacks[colour_[colour] if isinstance(colour,str) else colour].append(callback)
     self.style.button_color = colours[-1]
     state:int = -1; N = len(colours)
@@ -634,16 +671,12 @@ An instance of this class is a button with states which form a cycle. Each click
     self.on_click(step)
 
 #==================================================================================================
-def activable(w:Widget,ini=True):
-  r"""
-A helper to add an attribute :attr:`active` to a :class:`Widget` instance *w*. Call function :func:`deactivate` to enter a context where :attr:`active` is :const:`False` for *w*. Then other widgets can condition their callbacks on whether *w* is active.
-  """
-#==================================================================================================
-  assert isinstance(w,Widget)
-  w.active = ini
-  return w
 @contextmanager
 def deactivate(w):
+  r"""
+A helper to enter a context where attribute :attr:`active` is :const:`False` for *w*. Restores the previous value of the attribute on exit. Then other widgets can condition their callbacks on whether *w* is active.
+  """
+#==================================================================================================
   a = w.active
   w.active = False
   try: yield

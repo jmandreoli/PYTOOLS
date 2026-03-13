@@ -5,8 +5,9 @@
 # Purpose:              Some utilities in Python
 #
 
+from __future__ import annotations
 import logging; logger = logging.getLogger(__name__)
-from typing import Any, Callable, Iterable, Mapping, Iterator
+from typing import Any, Callable, Iterable, Sequence, Mapping, Iterator
 
 import re, collections
 
@@ -164,7 +165,9 @@ Retrieves a (possibly empty) stream of attribute-secret pair(s) for each of a li
     for attr in attr_list: yield ((item.get_attributes(),item.get_secret()) for item in coll.search_items(attr))
   finally: conn.close()
 
+#==================================================================================================
 class SymbolicOperator:
+#==================================================================================================
   __slots__ = 'name','op','covariant','mark'
   @staticmethod
   def lookup(n:str,pat=re.compile(r'Same as a (\S+) b')):
@@ -190,7 +193,13 @@ class SymbolicOperator:
 class Symbolic:
   r"""
 Instances of this class implement closed symbolic expressions. Upon invocation of specific triggers, the value of the expression is computed and stored, and the instance subsequently behaves as a proxy to that value. The proxy is not saved on pickling, hence lost on unpickling, but can of course be restored using any of the triggers. Thus, when unpickling a foreign :class:`Symbolic` instance, a process can decide whether it wants to access its value or only inspect its expression. If recomputing the value is costly, one can use a persistent cache (see module :mod:`.cache`).
+  """
+#==================================================================================================
 
+  __slots__ = '__ref__',
+
+  def __init__(self,func,*a,**ka):
+    r"""
 :param func: the function of the symbolic expression
 :param a: list of positional arguments of the symbolic expression
 :param ka: dictionary of keyword arguments of the symbolic expression
@@ -202,12 +211,7 @@ The triple *func*, *a*, *ka* forms the configuration of the :class:`Symbolic` in
 * ``x.__ref__.check()`` indicates whether the value of symbolic expression *x* has already been computed by a trigger (this is not a trigger).
 
 Caveat: the configuration should be deterministically picklable and hashable (in particular: no dicts nor lists are allowed in the components). Hence, any :class:`Symbolic` instance is itself deterministically picklable and hashable, and can thus be used as argument in the configuration of another :class:`Symbolic` instance.
-  """
-#==================================================================================================
-
-  __slots__ = '__ref__',
-
-  def __init__(self,func,*a,**ka):
+    """
     assert callable(func)
     from inspect import signature
     signature(func).bind(*a,**ka) # just ensures the signature matches
@@ -271,6 +275,8 @@ Note that standard operators, like ``|`` above, are directly interpreted as symb
 
 #==================================================================================================
 class _Symbolic:
+# Kept separate from class Symbolic only to avoid attribute name conflicts between the instance itself and its value:
+# a Symbolic instance has no non-special attributes, so, when incarnated, behaves exactly as its value (except for special attributes)
 #==================================================================================================
   __slots__ = 'config', '_value'
 
@@ -431,6 +437,119 @@ Adds configurations to the environment. It is applied to the proxy each time it 
     def run_init(v:float): self.run = run; reset(v)
     self.run = run_init
   def __getattr__(self,name:str): return getattr(self._wrapped,name)
+
+#==================================================================================================
+class BoardDisplayer:
+  r"""
+An instance of this class is a callable which takes as input a board, prepares it for display, and returns a callable which, given a frame, paints it on the board. The board (here an instance of class :class:`Figure`) is divided into panes (here instances of class :class:`Axes`). Each pane can be assigned a list of named pane displayers, corresponding to different views of the displayed phenomenon. The name of each view can be used to configure the view using parameter *view_cfg* in method :meth:`__call__` (invocation of this displayer).
+  """
+#==================================================================================================
+  setup:Sequence[Callable[[Any],None]]
+  r"""Invoked before invoking the pane displayers on a frame"""
+  displayers:dict[tuple[int,int],list[tuple[str,Callable[[Any],Callable[[Any],None]]]]]
+  env:ResettableSimpyEnvironment|None = None
+#--------------------------------------------------------------------------------------------------
+  def __init__(self):
+    r"""
+:param pos: the position of the pane on the board
+:param ka: the keys are view names and the values are pane displayers
+    """
+#--------------------------------------------------------------------------------------------------
+    self.displayers = collections.defaultdict(list)
+    self.setup = []
+  
+#--------------------------------------------------------------------------------------------------
+  def add_displayer(self,pos:tuple[int,int]|None=None,**ka:Callable[[Any],Callable[[Any],None]]):
+    r"""
+Adds a pane displayer to this board displayer. A pane displayer is a callable which takes as input a pane, prepares it for display, and returns a callable which, given a frame, paints it on the pane according to the view name.
+    """
+#--------------------------------------------------------------------------------------------------
+    if pos is None: pos = (0,0)
+    self.displayers[pos].extend((view,D) for view,D in ka.items())
+    return self # so other method invocations can be chained
+#--------------------------------------------------------------------------------------------------
+  def add_setup(self,setup:Callable[[Any],None]):
+    r"""
+Adds a setup callable to this board displayer.
+    """
+#--------------------------------------------------------------------------------------------------
+    self.setup.append(setup)
+    return self # so other method invocations can be chained
+#--------------------------------------------------------------------------------------------------
+  def add_simpy_setup(self,*C:Callable[[ResettableSimpyEnvironment],None]):
+    r"""
+:param C: config added to the environment held by attribute :attr:`simpy_env`
+
+Activates (if needed) and configures the environment held by attribute :attr:`simpy_env`.
+    """
+#--------------------------------------------------------------------------------------------------
+    if (env:=self.env) is None:
+      env = self.env = ResettableSimpyEnvironment(0.)
+      self.add_setup(lambda v: env.run(v))
+    env.add_config(*C)
+    return self # so other method invocations can be chained
+#--------------------------------------------------------------------------------------------------
+  call_defaults = {'aspect':'equal'}
+  def __call__(self,fig,nrows:int=1,ncols:int=1,sharex:str|bool=False,sharey:str|bool=False,gridspec_kw:Mapping|None=None,view_cfg:Mapping[str,dict]|None=None,gridlines:bool=True,**ka)->Callable[[Any],None]:
+    r"""
+Prepares the board for display, and returns a callable which takes as input a frame and actually displays it on the board.
+
+:param fig: the board
+:param nrows: the number of rows
+:param ncols: the number of columns
+:param sharex: sharing specification for the x-axis
+:param sharey: sharing specification for the y-axis
+:param gridspec_kw: a grid specification for the board
+:param view_cfg: a dictionary of view configurations (each configuration is a :class:`dict`)
+:param gridlines: whether to display gridlines on the axes
+:param ka: passed on as subplot keywords to construct the axes
+    """
+#--------------------------------------------------------------------------------------------------
+    from numpy import array
+    from matplotlib.figure import Figure, SubFigure
+    from matplotlib.axes import Axes
+    assert isinstance(fig,(Figure,SubFigure))
+    axes = array(nrows*[ncols*[None]],dtype=object)
+    share:dict[str|bool,Callable[[int,int],Axes|None]] = {
+      'all': (lambda row,col: None if row==col==0 else axes[0,0]),
+      True:  (lambda row,col: None if row==col==0 else axes[0,0]),   # alias
+      'row': (lambda row,col: None if row==0 else axes[row,0]),
+      'col': (lambda row,col: None if col==0 else axes[0,col]),
+      'none':(lambda row,col: None),
+      False: (lambda row,col: None), # alias
+    }
+    share_ = tuple((dim,share[s]) for dim,s in (('sharex',sharex),('sharey',sharey)))
+    gridspec = fig.add_gridspec(nrows=nrows,ncols=ncols,**(gridspec_kw or {}))
+    ka = self.call_defaults|ka
+    def _get(row,col):
+      ax = axes[row,col]
+      if ax is None:
+        ax = axes[row,col] = fig.add_subplot(gridspec[row,col],**dict((dim,s(row,col)) for dim,s in share_),**ka)
+        ax.grid(gridlines)
+      return ax
+    get_view_cfg:Callable[[str],dict] = (lambda view: {}) if view_cfg is None else view_cfg.get
+    display_list = [*self.setup,*(D(_get(*pos),**kw) for pos,L in self.displayers.items() for view,D in L if (kw:=get_view_cfg(view)) is not None)]
+    def display(frm):
+      for f in display_list: f(frm)
+    return display
+
+#--------------------------------------------------------------------------------------------------
+  play_defaults = {'interval':40}
+  r"""The default arguments passed to method :meth:`play`"""
+  def play(self,displayer_kw=None,**ka):
+    r"""
+Returns an animation based on this displayer.
+
+:param displayer_kw: a dictionary of keyword arguments passed when invoking this displayer
+:param ka: passed to the animation constructor
+    """
+#--------------------------------------------------------------------------------------------------
+    from functools import partial
+    from matplotlib import get_backend
+    from matplotlib.animation import Animation
+    ka = self.play_defaults|ka
+    factory:Callable[[str],Callable[[BoardDisplayer],Animation] = ka.pop('factory')
+    return factory(get_backend())((self if displayer_kw is None else partial(self,**displayer_kw)),**ka)
 
 #==================================================================================================
 class basic_stats:

@@ -548,7 +548,7 @@ Returns an animation based on this displayer.
     from matplotlib import get_backend
     from matplotlib.animation import Animation
     ka = self.play_defaults|ka
-    factory:Callable[[str],Callable[[BoardDisplayer],Animation] = ka.pop('factory')
+    factory:Callable[[str],Callable[[BoardDisplayer],Animation]] = ka.pop('factory')
     return factory(get_backend())((self if displayer_kw is None else partial(self,**displayer_kw)),**ka)
 
 #==================================================================================================
